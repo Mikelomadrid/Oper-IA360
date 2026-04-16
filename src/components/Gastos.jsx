@@ -13,7 +13,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Search, MoreHorizontal, Edit, Trash2, Loader2, X, ScanLine, UploadCloud, Sparkles, PlusCircle, User, MapPin, Phone, Mail } from 'lucide-react';
+import { Plus, Search, MoreHorizontal, Edit, Trash2, Loader2, X, ScanLine, UploadCloud, Sparkles, PlusCircle, User, MapPin, Phone, Mail, Eye, Download, FileText } from 'lucide-react';
 import { format } from 'date-fns';
 import { useDropzone } from 'react-dropzone';
 import { ProviderSelect } from '@/components/ProviderSelect';
@@ -40,6 +40,68 @@ const formatDate = (dateString) => {
     if (!dateString) return '-';
     const date = new Date(dateString.replace(/-/g, '/').replace(/T.+/, ''));
     return format(date, 'dd/MM/yyyy');
+};
+const isPreviewableImage = (url = '', fileName = '') => /\.(jpg|jpeg|png|webp|gif)$/i.test(url || fileName);
+const isPdfFile = (url = '', fileName = '') => /\.pdf$/i.test(url || fileName);
+const getAttachmentUrl = (gasto) => gasto?.adjunto_factura?.url_almacenamiento || null;
+const getAttachmentName = (gasto) => gasto?.adjunto_factura?.nombre_archivo || 'factura';
+
+const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
+    const fileUrl = getAttachmentUrl(gasto);
+    const fileName = getAttachmentName(gasto);
+
+    if (!gasto) return null;
+
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="max-w-4xl">
+                <DialogHeader>
+                    <DialogTitle>Factura adjunta</DialogTitle>
+                    <DialogDescription>
+                        {gasto.numero_factura || 'Sin número'} · {gasto.proveedor?.nombre || 'Proveedor sin asignar'}
+                    </DialogDescription>
+                </DialogHeader>
+
+                {!fileUrl ? (
+                    <div className="rounded-lg border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
+                        Este gasto no tiene archivo adjunto.
+                    </div>
+                ) : (
+                    <div className="space-y-4">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div className="text-sm text-muted-foreground truncate">{fileName}</div>
+                            <div className="flex gap-2">
+                                <Button asChild variant="outline" size="sm">
+                                    <a href={fileUrl} target="_blank" rel="noreferrer">Abrir</a>
+                                </Button>
+                                <Button asChild size="sm">
+                                    <a href={fileUrl} download={fileName} target="_blank" rel="noreferrer">
+                                        <Download className="w-4 h-4 mr-2" />Descargar
+                                    </a>
+                                </Button>
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border bg-muted/10 min-h-[500px] overflow-hidden flex items-center justify-center">
+                            {isPreviewableImage(fileUrl, fileName) ? (
+                                <img src={fileUrl} alt={fileName} className="max-h-[70vh] w-full object-contain" />
+                            ) : isPdfFile(fileUrl, fileName) ? (
+                                <iframe title={fileName} src={fileUrl} className="w-full h-[70vh]" />
+                            ) : (
+                                <div className="text-center text-sm text-muted-foreground p-8 space-y-3">
+                                    <FileText className="w-10 h-10 mx-auto opacity-60" />
+                                    <div>No hay vista previa integrada para este tipo de archivo.</div>
+                                    <Button asChild variant="outline" size="sm">
+                                        <a href={fileUrl} target="_blank" rel="noreferrer">Abrir archivo</a>
+                                    </Button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </DialogContent>
+        </Dialog>
+    );
 };
 
 // --- QUICK ADD PROVIDER MODAL ---
@@ -431,6 +493,7 @@ const Gastos = ({ projectId, navigate }) => {
     const [gastoToEdit, setGastoToEdit] = useState(null);
     const [ocrData, setOcrData] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
+    const [previewGasto, setPreviewGasto] = useState(null);
     const { sessionRole } = useAuth();
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
@@ -452,8 +515,8 @@ const Gastos = ({ projectId, navigate }) => {
             .single();
 
         const selectString = search
-            ? 'id, proyecto_id, proveedor:proveedores!inner(id, nombre), numero_factura, numero_referencia, concepto, fecha_emision, estado_pago, monto_bruto, iva, total_con_iva, gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)), facturas_gastos!left(gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)))'
-            : 'id, proyecto_id, proveedor:proveedores(id, nombre), numero_factura, numero_referencia, concepto, fecha_emision, estado_pago, monto_bruto, iva, total_con_iva, gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)), facturas_gastos!left(gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)))';
+            ? 'id, proyecto_id, proveedor:proveedores!inner(id, nombre), numero_factura, numero_referencia, concepto, fecha_emision, estado_pago, monto_bruto, iva, total_con_iva, adjunto_factura:adjuntos!left(id, nombre_archivo, url_almacenamiento), gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)), facturas_gastos!left(gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)))'
+            : 'id, proyecto_id, proveedor:proveedores(id, nombre), numero_factura, numero_referencia, concepto, fecha_emision, estado_pago, monto_bruto, iva, total_con_iva, adjunto_factura:adjuntos!left(id, nombre_archivo, url_almacenamiento), gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)), facturas_gastos!left(gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)))';
 
         let gastosQuery = supabase
             .from('gastos')
@@ -502,8 +565,13 @@ const Gastos = ({ projectId, navigate }) => {
                     }
                 });
 
+                const adjuntoFactura = Array.isArray(g.adjunto_factura)
+                    ? g.adjunto_factura.find((item) => item?.url_almacenamiento) || null
+                    : g.adjunto_factura || null;
+
                 return {
                     ...g,
+                    adjunto_factura: adjuntoFactura,
                     etiquetas: uniqueLabels
                 };
             });
@@ -619,8 +687,9 @@ const Gastos = ({ projectId, navigate }) => {
                                     <TableHead className="hidden md:table-cell">Proveedor</TableHead>
                                     <TableHead>Etiquetas</TableHead>
                                     <TableHead>Estado</TableHead>
+                                    <TableHead>Archivo</TableHead>
                                     <TableHead className="text-right">Total</TableHead>
-                                    {canManageGastos && <TableHead className="w-[100px] text-right">Acciones</TableHead>}
+                                    {canManageGastos && <TableHead className="w-[140px] text-right">Acciones</TableHead>}
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -651,6 +720,22 @@ const Gastos = ({ projectId, navigate }) => {
                                             </div>
                                         </TableCell>
                                         <TableCell><span className={`px-2 py-1 rounded-full text-xs font-medium bg-opacity-20 ${g.estado_pago === 'pagada' ? 'bg-green-500 text-green-800 dark:text-green-300' : (g.estado_pago === 'parcialmente_pagada' ? 'bg-blue-500 text-blue-800 dark:text-blue-300' : 'bg-yellow-500 text-yellow-800 dark:text-yellow-300')}`}>{PAGO_STATUS_LABELS[g.estado_pago] || g.estado_pago}</span></TableCell>
+                                        <TableCell>
+                                            {g.adjunto_factura?.url_almacenamiento ? (
+                                                <div className="flex items-center gap-2">
+                                                    <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setPreviewGasto(g)} title="Ver factura">
+                                                        <Eye className="h-4 w-4" />
+                                                    </Button>
+                                                    <Button asChild variant="ghost" size="icon" className="h-8 w-8" title="Descargar factura">
+                                                        <a href={g.adjunto_factura.url_almacenamiento} download={g.adjunto_factura.nombre_archivo || `factura-${g.id}`} target="_blank" rel="noreferrer">
+                                                            <Download className="h-4 w-4" />
+                                                        </a>
+                                                    </Button>
+                                                </div>
+                                            ) : (
+                                                <span className="text-xs text-muted-foreground">Sin archivo</span>
+                                            )}
+                                        </TableCell>
                                         <TableCell className="text-right font-semibold">{formatCurrency(g.total_con_iva)}</TableCell>
                                         {canManageGastos && (
                                             <TableCell className="text-right">
@@ -685,7 +770,7 @@ const Gastos = ({ projectId, navigate }) => {
                                         )}
                                     </TableRow>
                                 )) : (
-                                    <TableRow><TableCell colSpan={canManageGastos ? 7 : 6} className="text-center h-24">No hay facturas registradas en esta obra.</TableCell></TableRow>
+                                    <TableRow><TableCell colSpan={canManageGastos ? 8 : 7} className="text-center h-24">No hay facturas registradas en esta obra.</TableCell></TableRow>
                                 )}
                             </TableBody>
                         </Table>
@@ -709,6 +794,14 @@ const Gastos = ({ projectId, navigate }) => {
                     />
                 </DialogContent>
             </Dialog>
+
+            <FacturaPreviewDialog
+                gasto={previewGasto}
+                open={!!previewGasto}
+                onOpenChange={(open) => {
+                    if (!open) setPreviewGasto(null);
+                }}
+            />
 
             <OcrUploadModal
                 isOpen={isOcrModalOpen}
