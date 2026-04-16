@@ -202,7 +202,12 @@ const Login = ({ navigate }) => {
 
 
     return (
-        <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-950 via-purple-950 to-slate-900">
+        <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-950 via-purple-950 to-slate-900 relative">
+             {/* Sombra radial oscura en el fondo para destacar el modal */}
+             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                 <div className="w-[800px] h-[800px] bg-black/60 rounded-full blur-[150px]"></div>
+             </div>
+             
              <ForgotPasswordModal 
                 isOpen={isForgotPasswordModalOpen} 
                 onOpenChange={setForgotPasswordModalOpen}
@@ -212,10 +217,10 @@ const Login = ({ navigate }) => {
                 initial={{ opacity: 0, y: -50, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{ duration: 0.5, ease: "easeOut" }}
-                className="w-full max-w-md p-8 space-y-8 glass-effect rounded-2xl shadow-2xl shadow-purple-500/10 border border-white/10"
+                className="w-full max-w-md p-8 space-y-8 glass-effect rounded-2xl shadow-2xl shadow-purple-500/10 border border-white/10 relative z-10"
             >
                 <div className="text-center">
-                    <h1 className="text-4xl font-bold gradient-text">
+                    <h1 className="text-4xl font-bold text-white">
                         Bienvenido
                     </h1>
                     <p className="mt-2 text-gray-400">Accede a tu panel de control.</p>

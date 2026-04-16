@@ -3,7 +3,7 @@
  * 
  * FILTER PERSISTENCE PATTERN:
  * This component uses URL Query Parameters (via useSearchParams) as the single source of truth 
- * for all list filters (status, category, search, tab, etc.).
+ * for all list filters (status, category, search, tab, partida, etc.).
  * 
  * - State is derived directly from searchParams on render.
  * - User interactions (filtering) update the URL using setSearchParams.
@@ -15,7 +15,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   Plus, Search, ArrowUpDown, Edit, Trash2, MapPin,
-  BarChart3, ChevronDown, ChevronUp, X, Users, Archive, Tag
+  BarChart3, ChevronDown, ChevronUp, X, Users, Archive, Tag, Wrench
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -70,6 +70,7 @@ const Leads = ({ navigate }) => {
   const statusFilter = searchParams.get('status') || 'all';
   const selectedCategoryKey = searchParams.get('category') || null;
   const conversionFilter = searchParams.get('conversion') || null;
+  const partidaFilter = searchParams.get('partida') || 'all'; // NUEVO: Filtro por partida
   const activeTab = searchParams.get('tab') || 'activos';
   const urlSearchTerm = searchParams.get('q') || '';
   const filterParam = searchParams.get('filter') || null;
@@ -79,6 +80,7 @@ const Leads = ({ navigate }) => {
 
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [partidas, setPartidas] = useState([]); // NUEVO: Lista de partidas para el filtro
 
   // Modal states
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -111,8 +113,6 @@ const Leads = ({ navigate }) => {
       } else {
         newParams.set(key, value);
       }
-      // If changing tab, maybe we want to reset page or other filters? 
-      // For now, we keep them independent except for conversion logic logic below.
       return newParams;
     });
   };
@@ -140,6 +140,22 @@ const Leads = ({ navigate }) => {
       localStorage.setItem('leads_show_stats', showStats);
     }
   }, [showStats, canViewStats]);
+
+  // NUEVO: Fetch partidas para el filtro
+  const fetchPartidas = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('partidas_catalogo')
+        .select('key, label')
+        .eq('activo', true)
+        .order('label');
+      
+      if (error) throw error;
+      setPartidas(data || []);
+    } catch (error) {
+      console.error('Error fetching partidas:', error);
+    }
+  };
 
   const fetchLeads = async () => {
     if (!sessionRole) return;
@@ -208,6 +224,7 @@ const Leads = ({ navigate }) => {
 
   useEffect(() => {
     fetchLeads();
+    fetchPartidas(); // NUEVO: Cargar partidas al inicio
   }, [sessionRole, canViewStats]);
 
   // Realtime subscription
@@ -256,13 +273,16 @@ const Leads = ({ navigate }) => {
         if (group !== conversionFilter) return false;
       }
 
+      // NUEVO: Filtro por partida
+      if (partidaFilter !== 'all' && l.partida !== partidaFilter) return false;
+
       if (filterParam === 'assigned') {
         if (l.empleado_asignado_id !== sessionRole?.empleadoId) return false;
       }
 
       return true;
     });
-  }, [baseLeads, statusFilter, selectedCategoryKey, conversionFilter, filterParam, sessionRole]);
+  }, [baseLeads, statusFilter, selectedCategoryKey, conversionFilter, partidaFilter, filterParam, sessionRole]);
 
   const tableLeads = useMemo(() => {
     return statsLeads.filter(l => l.archivado === false);
@@ -299,6 +319,11 @@ const Leads = ({ navigate }) => {
     }
   };
 
+  // NUEVO: Handler para el filtro de partida
+  const handlePartidaChange = (value) => {
+    updateFilter('partida', value);
+  };
+
   const clearAllFilters = () => {
     setSearchParams(new URLSearchParams()); // Clears everything
     setLocalSearchTerm('');
@@ -308,7 +333,8 @@ const Leads = ({ navigate }) => {
     });
   };
 
-  const hasActiveFilters = statusFilter !== 'all' || selectedCategoryKey !== null || conversionFilter !== null || urlSearchTerm !== '';
+  // ACTUALIZADO: Incluir partidaFilter en la verificación
+  const hasActiveFilters = statusFilter !== 'all' || selectedCategoryKey !== null || conversionFilter !== null || partidaFilter !== 'all' || urlSearchTerm !== '';
 
   const handleEdit = (id) => {
     setSelectedLeadId(id);
@@ -360,6 +386,12 @@ const Leads = ({ navigate }) => {
       return <span className="font-bold text-slate-900 leading-tight">{lead.nombre_empresa}</span>;
     }
     return <span className="font-bold text-slate-900 leading-tight">{lead.nombre_contacto || 'Sin nombre'}</span>;
+  };
+
+  // NUEVO: Obtener label de partida para mostrar
+  const getPartidaLabel = (key) => {
+    const found = partidas.find(p => p.key === key);
+    return found ? found.label : key || '-';
   };
 
   return (
@@ -477,7 +509,7 @@ const Leads = ({ navigate }) => {
                     handleStatusClick(val);
                   }}
                 >
-                  <SelectTrigger className="w-full md:w-[200px] border-0 bg-transparent focus:ring-0">
+                  <SelectTrigger className="w-full md:w-[180px] border-0 bg-transparent focus:ring-0">
                     <SelectValue placeholder="Estado" />
                   </SelectTrigger>
                   <SelectContent>
@@ -485,6 +517,28 @@ const Leads = ({ navigate }) => {
                     {FORM_STATUS_OPTIONS.map((status) => (
                       <SelectItem key={status.value} value={status.value || "unknown"}>
                         {status.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                {/* NUEVO: Filtro por Partida */}
+                <div className="h-8 w-px bg-slate-200 hidden md:block" />
+                <Select
+                  value={partidaFilter}
+                  onValueChange={handlePartidaChange}
+                >
+                  <SelectTrigger className="w-full md:w-[180px] border-0 bg-transparent focus:ring-0">
+                    <div className="flex items-center gap-2">
+                      <Wrench className="w-4 h-4 text-muted-foreground" />
+                      <SelectValue placeholder="Partida" />
+                    </div>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas las partidas</SelectItem>
+                    {partidas.map((p) => (
+                      <SelectItem key={p.key} value={p.key}>
+                        {p.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -546,7 +600,7 @@ const Leads = ({ navigate }) => {
 
                         <TableCell className="hidden md:table-cell align-top py-4">
                           <span className="capitalize text-sm text-slate-700">
-                            {lead.partida || '-'}
+                            {getPartidaLabel(lead.partida)}
                           </span>
                         </TableCell>
 

@@ -218,29 +218,46 @@ const LeadsStatistics = ({
       };
     }).sort((a, b) => b.value - a.value);
 
+    // Contadores para el funnel
     let converted = 0;
     let lost = 0;
     let inProgress = 0;
-    let funnelTotal = 0;
 
     activeDataset.forEach(l => {
       const s = l.estado;
       if (['aprobado', 'convertido'].includes(s)) return;
-      
-      funnelTotal++;
 
       if (['aceptado'].includes(s)) converted++;
       else if (['rechazado', 'cancelado', 'anulado'].includes(s)) lost++;
       else inProgress++;
     });
 
-    const conversionData = [
-      { name: 'Ganado', value: converted, color: COLORS_CONVERSION['Ganado'], percent: funnelTotal > 0 ? converted/funnelTotal : 0 },
-      { name: 'En Progreso', value: inProgress, color: COLORS_CONVERSION['En Progreso'], percent: funnelTotal > 0 ? inProgress/funnelTotal : 0 },
-      { name: 'Perdido', value: lost, color: COLORS_CONVERSION['Perdido'], percent: funnelTotal > 0 ? lost/funnelTotal : 0 }
-    ].filter(d => d.value > 0);
+    // --- LÓGICA MODIFICADA PARA EL FUNNEL ---
+    // Si hay una categoría seleccionada, mostrar solo Ganado vs Perdido (leads cerrados)
+    // para reflejar el % de éxito real sin incluir los que están en progreso
+    let conversionData;
+    let contextConversionRate;
 
-    const contextConversionRate = funnelTotal > 0 ? ((converted / funnelTotal) * 100).toFixed(1) : 0;
+    if (currentCategoryKey) {
+      // Vista filtrada por categoría: solo leads cerrados (Ganado + Perdido)
+      const closedTotal = converted + lost;
+      contextConversionRate = closedTotal > 0 ? ((converted / closedTotal) * 100).toFixed(1) : 0;
+      
+      conversionData = [
+        { name: 'Ganado', value: converted, color: COLORS_CONVERSION['Ganado'], percent: closedTotal > 0 ? converted / closedTotal : 0 },
+        { name: 'Perdido', value: lost, color: COLORS_CONVERSION['Perdido'], percent: closedTotal > 0 ? lost / closedTotal : 0 }
+      ].filter(d => d.value > 0);
+    } else {
+      // Vista general: incluir todos (Ganado + En Progreso + Perdido)
+      const funnelTotal = converted + inProgress + lost;
+      contextConversionRate = funnelTotal > 0 ? ((converted / funnelTotal) * 100).toFixed(1) : 0;
+      
+      conversionData = [
+        { name: 'Ganado', value: converted, color: COLORS_CONVERSION['Ganado'], percent: funnelTotal > 0 ? converted / funnelTotal : 0 },
+        { name: 'En Progreso', value: inProgress, color: COLORS_CONVERSION['En Progreso'], percent: funnelTotal > 0 ? inProgress / funnelTotal : 0 },
+        { name: 'Perdido', value: lost, color: COLORS_CONVERSION['Perdido'], percent: funnelTotal > 0 ? lost / funnelTotal : 0 }
+      ].filter(d => d.value > 0);
+    }
 
     return {
       statusData,
@@ -248,7 +265,7 @@ const LeadsStatistics = ({
       contextTotal: validTotal, 
       contextConversionRate
     };
-  }, [activeDataset]);
+  }, [activeDataset, currentCategoryKey]);
 
 
   if (!categoryChartData || categoryChartData.length === 0) return (

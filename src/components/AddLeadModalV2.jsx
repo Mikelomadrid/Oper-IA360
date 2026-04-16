@@ -74,7 +74,7 @@ const AddLeadModalV2 = ({ isOpen, onClose, onLeadAdded }) => {
             if (isAdminOrEncargado) {
                 const { data: emps } = await supabase
                     .from('empleados')
-                    .select('id, nombre, apellidos, rol')
+                    .select('id, auth_user_id, nombre, apellidos, rol')
                     .eq('activo', true)
                     .order('nombre');
                 setTechnicians(emps || []);
@@ -87,17 +87,19 @@ const AddLeadModalV2 = ({ isOpen, onClose, onLeadAdded }) => {
                 .eq('activo', true)
                 .order('label');
 
-            // Define mandatory options
+            // Define mandatory options - AÑADIDO: Aire Acondicionado e Impermeabilizaciones
             const mandatoryOptions = [
+                { key: 'aire_acondicionado', label: 'Aire Acondicionado' },
                 { key: 'albanileria', label: 'Albañilería' },
                 { key: 'electricidad', label: 'Electricidad' },
-                { key: 'pladur', label: 'Pladur' },
                 { key: 'fontaneria', label: 'Fontanería' },
-                { key: 'proyecto_licencia', label: 'Proyecto/Licencia' },
+                { key: 'impermeabilizaciones', label: 'Impermeabilizaciones' },
                 { key: 'pintura', label: 'Pintura' },
-                { key: 'reforma_integral', label: 'Reforma Integral' },
+                { key: 'pladur', label: 'Pladur' },
+                { key: 'proyecto_licencia', label: 'Proyecto/Licencia' },
                 { key: 'reforma_bano', label: 'Reforma Baño' },
                 { key: 'reforma_cocina', label: 'Reforma Cocina' },
+                { key: 'reforma_integral', label: 'Reforma Integral' },
                 { key: 'otros', label: 'Otros' }
             ];
 
@@ -229,6 +231,41 @@ const AddLeadModalV2 = ({ isOpen, onClose, onLeadAdded }) => {
         await Promise.all(uploadPromises);
     };
 
+    // Función para crear la asignación en leads_asignaciones
+    const createLeadAssignment = async (leadId, empleadoId) => {
+        try {
+            // Buscar el auth_user_id del empleado seleccionado
+            const selectedTech = technicians.find(t => t.id === empleadoId);
+            if (!selectedTech || !selectedTech.auth_user_id) {
+                console.warn('No se encontró auth_user_id para el empleado:', empleadoId);
+                return;
+            }
+
+            const { error } = await supabase
+                .from('leads_asignaciones')
+                .insert({
+                    lead_id: leadId,
+                    usuario_id: selectedTech.auth_user_id,
+                    asignado_por: user?.id || null
+                });
+
+            if (error) {
+                // Si es error de duplicado, ignorar (ya estaba asignado)
+                if (error.code === '23505') {
+                    console.log('Asignación ya existente, ignorando duplicado');
+                    return;
+                }
+                throw error;
+            }
+
+            console.log('[ASSIGNMENT] Creada asignación en leads_asignaciones para lead:', leadId, 'usuario:', selectedTech.auth_user_id);
+        } catch (error) {
+            console.error('Error creando asignación:', error);
+            // No lanzamos el error para no interrumpir la creación del lead
+            // La asignación se puede hacer manualmente después
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
@@ -247,8 +284,11 @@ const AddLeadModalV2 = ({ isOpen, onClose, onLeadAdded }) => {
             // Find selected category ID based on code from the fetched categories list
             const selectedCat = categories.find(c => c.codigo === formData.categoria);
 
+            // Determinar si hay técnico asignado
+            const hasAssignedTech = isAdminOrEncargado && formData.empleado_asignado_id !== 'unassigned';
+
             // [NOTIFICATION DEBUG] Log for Task 1, 2, 3
-            if (isAdminOrEncargado && formData.empleado_asignado_id !== 'unassigned') {
+            if (hasAssignedTech) {
                 console.log('[NOTIFICATION DEBUG] Creating notification from: [AddLeadModalV2.jsx].[handleSubmit]', {
                     action: 'insert leads (with initial assignment)',
                     assignee: formData.empleado_asignado_id,
@@ -268,7 +308,7 @@ const AddLeadModalV2 = ({ isOpen, onClose, onLeadAdded }) => {
                 estado: formData.estado,
                 partida: formData.partida || null,
                 comentario: formData.comentario,
-                empleado_asignado_id: isAdminOrEncargado && formData.empleado_asignado_id !== 'unassigned' ? formData.empleado_asignado_id : null,
+                empleado_asignado_id: hasAssignedTech ? formData.empleado_asignado_id : null,
                 created_by: sessionRole?.empleadoId, // Stores Employee ID
                 owner_user_id: user?.id,             // Stores Auth ID
                 categoria: formData.categoria || null, // Stores Code
@@ -283,6 +323,11 @@ const AddLeadModalV2 = ({ isOpen, onClose, onLeadAdded }) => {
                 .single();
 
             if (error) throw error;
+
+            // NUEVO: Si hay técnico asignado, crear también el registro en leads_asignaciones
+            if (data && hasAssignedTech) {
+                await createLeadAssignment(data.id, formData.empleado_asignado_id);
+            }
 
             if (selectedFiles.length > 0 && data) {
                 await uploadImages(data.id);

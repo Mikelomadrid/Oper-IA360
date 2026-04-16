@@ -30,7 +30,7 @@ const AuthCallback = React.lazy(() => import('@/components/AuthCallback'));
 const MyProfile = React.lazy(() => import('@/components/MyProfile'));
 const ControlHorasView = React.lazy(() => import('@/components/HorasExtras2View'));
 const HorasExtras2View = React.lazy(() => import('@/components/HorasExtras2View'));
-
+const ContabilidadView = React.lazy(() => import('@/views/ContabilidadView'));
 const LeadDetail = React.lazy(() => import('@/components/LeadDetail'));
 const SharedProjectSettlementTab = React.lazy(() => import('@/components/SharedProjectSettlementTab'));
 const GlobalGanttView = React.lazy(() => import('@/components/GlobalGanttView'));
@@ -227,6 +227,7 @@ const getActiveModule = (path, user) => {
     '/gestion/partes/nuevo': 'gestion/partes/nuevo',
     '/gestion/actas-finalizacion': 'gestion/actas-finalizacion',
     '/gestion/acta-finalizacion': 'gestion/acta-finalizacion',
+    '/contabilidad': 'contabilidad',
 
     '/inventario/pedidos': 'inventario/pedidos',
 
@@ -452,7 +453,7 @@ const AppContent = () => {
                         case 'login': return <Login navigate={navigate} />;
                         case 'reset-password': return <ResetPassword navigate={navigate} />;
                         case 'auth-callback': return <AuthCallback navigate={navigate} />;
-
+                        
                         case 'crm/leads': return <Leads navigate={navigate} />;
                         case 'crm/leads/detail': return <LeadDetail leadId={activeModule.id} navigate={navigate} />;
                         case 'crm/clientes': return <Clients navigate={navigate} />;
@@ -515,6 +516,7 @@ const AppContent = () => {
 
                         case 'administracion/documentacion': return <AdminDocumentacion />;
                         case 'administracion/gastos': return <GastosView navigate={navigate} />;
+                        case 'contabilidad': return <ContabilidadView navigate={navigate} />;
                         case 'administracion/gastos/scanner': return <GastosScanner navigate={navigate} />;
 
                         case 'mediciones': return <MedicionesPage />;

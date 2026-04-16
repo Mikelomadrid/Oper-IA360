@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { toast } from "@/components/ui/use-toast";
 import { FileText, Download, Eye, Loader2, ServerCrash, FolderSearch, Folder, FileImage as FileIcon, FileImage, AlertCircle } from 'lucide-react';
+import EmployeeFolders from '@/components/EmployeeFolders';
 import {
   Dialog,
   DialogContent,
@@ -312,9 +313,24 @@ const PersonalDocuments = () => {
                 <h1 className="text-3xl font-bold tracking-tight">Mis Documentos</h1>
                 <p className="text-muted-foreground">Aquí puedes ver y descargar tus documentos personales como nóminas, contratos, etc.</p>
             </motion.div>
-            <motion.div className="mt-6" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
-                {renderContent()}
-            </motion.div>
+            <motion.div className="mt-6 space-y-8" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
+    <div>
+        {renderContent()}
+    </div>
+
+    {sessionRole?.empleadoId && (
+        <div className="space-y-3">
+            <div>
+                <h2 className="text-xl font-semibold tracking-tight">Documentos NUEVO</h2>
+                <p className="text-sm text-muted-foreground">
+                    Nueva estructura de carpetas. Los documentos antiguos siguen arriba y no se borran.
+                </p>
+            </div>
+
+            <EmployeeFolders empleadoId={sessionRole.empleadoId} />
+        </div>
+    )}
+</motion.div>
 
             {/* Document Preview Modal */}
             <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>

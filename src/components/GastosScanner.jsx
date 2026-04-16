@@ -78,6 +78,7 @@ const GastosScanner = ({ navigate }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [proveedores, setProveedores] = useState([]);
+  const [providerSelectKey, setProviderSelectKey] = useState(0);
   const [proyectos, setProyectos] = useState([]);
   const [loadingData, setLoadingData] = useState(true);
   const [currentEmpleadoId, setCurrentEmpleadoId] = useState(null);
@@ -160,7 +161,18 @@ const GastosScanner = ({ navigate }) => {
       console.log('[OCR] CIF detectado:', result.proveedor_cif);
       console.log('[OCR] CIF normalizado:', normalizarCIF(result.proveedor_cif));
       console.log('[OCR] Proveedores con CIF:', proveedores.filter(p => p.cif).map(p => ({ nombre: p.nombre, cif: p.cif, normalizado: normalizarCIF(p.cif) })));
-
+           
+      const normalizarNombreProveedor = (nombre) =>
+        nombre
+          ? nombre
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .replace(/\bsl\b/gi, 's.l.')
+              .replace(/\bsa\b/gi, 's.a.')
+              .replace(/[^a-zA-Z0-9]/g, '')
+              .toLowerCase()
+          : '';
+   
       let foundProvider = null;
       if (result.proveedor_cif) {
         const cifBuscado = normalizarCIF(result.proveedor_cif);
@@ -168,6 +180,13 @@ const GastosScanner = ({ navigate }) => {
           p.cif && normalizarCIF(p.cif) === cifBuscado
         );
       }
+            if (!foundProvider && result.proveedor_nombre) {
+        const nombreBuscado = normalizarNombreProveedor(result.proveedor_nombre);
+        foundProvider = proveedores.find(p =>
+          normalizarNombreProveedor(p.nombre) === nombreBuscado
+        );
+      }
+
       console.log('[OCR] Proveedor encontrado:', foundProvider);
 
       setFormData(prev => ({
@@ -237,8 +256,13 @@ const GastosScanner = ({ navigate }) => {
       if (error) throw error;
 
       // Añadir a la lista local y seleccionarlo
-      setProveedores(prev => [...prev, data]);
-      setFormData(prev => ({ ...prev, proveedor_id: data.id }));
+            setProveedores(prev => [...prev, data]);
+      setFormData(prev => ({
+        ...prev,
+        proveedor_id: data.id,
+        proveedor_nombre_ocr: data.nombre,
+      }));
+      setProviderSelectKey(prev => prev + 1);
       setShowCrearProveedor(false);
       setNuevoProveedor(null);
       toast({ title: `Proveedor "${data.nombre}" creado`, description: 'Seleccionado automáticamente.' });
@@ -439,11 +463,13 @@ const GastosScanner = ({ navigate }) => {
               <div>
                 <Label className="text-xs">Proveedor *</Label>
                 <ProviderSelect
+                  key={providerSelectKey}
                   value={formData.proveedor_id}
                   onValueChange={(val) => setFormData(p => ({ ...p, proveedor_id: val }))}
-                  placeholder={formData.proveedor_nombre_ocr ? `Detectado: ${formData.proveedor_nombre_ocr}` : "Buscar proveedor..."}
+                  placeholder={formData.proveedor_nombre_ocr ? `Detectado / creado: ${formData.proveedor_nombre_ocr}` : "Buscar proveedor..."}
                   className="mt-1"
                 />
+
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>

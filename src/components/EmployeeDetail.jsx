@@ -33,6 +33,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import EmployeeHabilidadesTab from '@/components/EmployeeHabilidadesTab';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import FileManager from '@/components/FileManager';
+import EmployeeFolders from '@/components/EmployeeFolders';
 import EmployeeAnticiposTab from '@/components/EmployeeAnticiposTab';
 import EmployeeEmbargosTab from '@/components/EmployeeEmbargosTab';
 import EmployeeHistoryTab from '@/components/EmployeeHistoryTab';
@@ -478,6 +479,7 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                     <TabsTrigger value="datos">Datos</TabsTrigger>
                                     <TabsTrigger value="herramientas">Herramientas</TabsTrigger>
                                     <TabsTrigger value="documentacion">Documentación</TabsTrigger>
+                                    <TabsTrigger value="documentos_v2">📁 Documentos NUEVO</TabsTrigger>
                                     <TabsTrigger value="historial">Ausencias</TabsTrigger>
                                     <TabsTrigger value="extras">Horas Extras</TabsTrigger>
                                     <TabsTrigger value="habilidades">Habilidades</TabsTrigger>
@@ -602,6 +604,10 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
 
                             <TabsContent value="documentacion" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                 <FileManager bucketName="empleados_docs" prefix={employee.id} canEdit={isAdminOrEncargado} />
+                            </TabsContent>
+
+                            <TabsContent value="documentos_v2" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                <EmployeeFolders empleadoId={employee.id} />
                             </TabsContent>
 
                             <TabsContent value="historial" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">

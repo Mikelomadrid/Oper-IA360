@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
-import { Pencil, Trash2, CheckCircle, Camera, MessageCircle as MessageCircleWarning, UserCheck } from 'lucide-react';
+import { Pencil, Trash2, CheckCircle, Camera, MessageCircle as MessageCircleWarning, UserCheck, Lock } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -10,8 +10,19 @@ import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { supabase } from '@/lib/customSupabaseClient';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { cn } from '@/lib/utils';
 
-const TaskCard = ({ task, canManage, currentEmployeeId, onCardClick, onEdit, onDelete, onRevisar, onShowEvidences }) => {
+const TaskCard = ({ 
+  task, 
+  canManage, 
+  currentEmployeeId, 
+  isAccessible = true, // ✅ NUEVO PROP
+  onCardClick, 
+  onEdit, 
+  onDelete, 
+  onRevisar, 
+  onShowEvidences 
+}) => {
   const { subtareas, ultima_revision, subtareas_completadas, total_subtareas } = task;
   const [thumbnails, setThumbnails] = useState([]);
   const [selectedImage, setSelectedImage] = useState(null);
@@ -29,7 +40,9 @@ const TaskCard = ({ task, canManage, currentEmployeeId, onCardClick, onEdit, onD
   const isAssignedToMe = currentEmployeeId &&
     (task.empleado_asignado_id === currentEmployeeId ||
       (task.asignados && task.asignados.some(a => a.empleado_id === currentEmployeeId)));
-  const isClickable = !canManage || isAssignedToMe;
+  
+  // ✅ MODIFICADO: Solo es clickable si es accesible
+  const isClickable = isAccessible && (!canManage || isAssignedToMe);
 
   // Fetch thumbnails if evidences exist
   useEffect(() => {
@@ -107,17 +120,36 @@ const TaskCard = ({ task, canManage, currentEmployeeId, onCardClick, onEdit, onD
       className="h-full"
     >
       <Card
-        className={`
-            overflow-hidden transition-all flex flex-col h-full 
-            ${isTaskInReviewOrCompleted ? 'bg-muted/30' : 'bg-card'} 
-            ${isClickable ? 'cursor-pointer hover:border-primary/50' : ''}
-          `}
-        onClick={isClickable ? onCardClick : undefined}
+        className={cn(
+          "overflow-hidden transition-all flex flex-col h-full relative",
+          isTaskInReviewOrCompleted ? 'bg-muted/30' : 'bg-card',
+          isClickable ? 'cursor-pointer hover:border-primary/50' : '',
+          // ✅ NUEVO: Estilos para tarjeta bloqueada
+          !isAccessible && !canManage && 'grayscale opacity-60 cursor-not-allowed'
+        )}
+        onClick={isClickable ? onCardClick : (!isAccessible ? onCardClick : undefined)}
       >
+        {/* ✅ NUEVO: Overlay de bloqueo */}
+        {!isAccessible && !canManage && (
+          <div className="absolute inset-0 bg-slate-900/5 dark:bg-slate-900/20 z-10 flex items-center justify-center pointer-events-none">
+            <div className="bg-white/90 dark:bg-slate-800/90 px-3 py-1.5 rounded-full flex items-center gap-2 shadow-sm border">
+              <Lock className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                {!task.fecha_inicio_real ? 'No iniciada' : 'Otra obra'}
+              </span>
+            </div>
+          </div>
+        )}
+
         <CardHeader className="pb-3">
           <div className="flex justify-between items-start">
             <div className="space-y-1">
-              <CardTitle className="text-lg leading-snug">{task.titulo}</CardTitle>
+              <CardTitle className={cn(
+                "text-lg leading-snug",
+                !isAccessible && !canManage && "text-muted-foreground"
+              )}>
+                {task.titulo}
+              </CardTitle>
               <p className="text-xs text-muted-foreground line-clamp-1 font-medium">{task.nombre_proyecto}</p>
               {isAssignedToMe && canManage && (
                 <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200 mt-1 w-fit flex items-center gap-1 text-[10px] px-1.5 h-5">

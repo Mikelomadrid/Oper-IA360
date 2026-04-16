@@ -560,7 +560,12 @@ export default function LeadDetail({ leadId, navigate }) {
                   </CardContent>
                 </Card>
 
-                <Card><CardHeader><CardTitle className="text-lg flex items-center gap-2"><MessageSquare className="w-5 h-5" /> Historial de Actividad y Comentarios</CardTitle></CardHeader>
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <MessageSquare className="w-5 h-5" /> Historial de Actividad y Comentarios
+                    </CardTitle>
+                  </CardHeader>
                   <CardContent className="flex flex-col">
                     <div className="space-y-6">
                       {comments.length === 0 ? (
@@ -575,12 +580,23 @@ export default function LeadDetail({ leadId, navigate }) {
                         ))
                       )}
                     </div>
-                    <div className="flex gap-2 items-end shrink-0 mt-6">
-                      <Textarea placeholder="Escribe un nuevo comentario..." value={newComment} onChange={(e) => setNewComment(e.target.value)} rows={1} className="min-h-[40px] flex-1 resize-none focus:min-h-[80px] transition-all" disabled={saving} />
-                      <Button onClick={handleAddComment} disabled={!newComment.trim() || saving}>
-                        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlusCircle className="h-4 w-4" />}
-                        <span className="sr-only">Añadir Comentario</span>
-                      </Button>
+                    
+                    {/* MODIFICADO: Textarea más grande y mejor distribuido */}
+                    <div className="flex flex-col gap-3 shrink-0 mt-6 pt-4 border-t">
+                      <Textarea 
+                        placeholder="Escribe un nuevo comentario..." 
+                        value={newComment} 
+                        onChange={(e) => setNewComment(e.target.value)} 
+                        rows={3} 
+                        className="min-h-[80px] flex-1 resize-y focus:min-h-[180px] focus:ring-2 focus:ring-primary/20 transition-all duration-300" 
+                        disabled={saving} 
+                      />
+                      <div className="flex justify-end">
+                        <Button onClick={handleAddComment} disabled={!newComment.trim() || saving} className="min-w-[160px]">
+                          {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <PlusCircle className="h-4 w-4 mr-2" />}
+                          Añadir Comentario
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
