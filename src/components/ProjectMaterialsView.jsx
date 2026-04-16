@@ -26,7 +26,7 @@ const formatCurrency = (amount) => {
 
 const isPreviewableImage = (url = '', fileName = '') => /\.(jpg|jpeg|png|webp|gif)$/i.test(url || fileName);
 const isPdfFile = (url = '', fileName = '') => /\.pdf$/i.test(url || fileName);
-const getAttachmentUrl = (gasto) => gasto?.adjunto_factura?.url_almacenamiento || null;
+const getAttachmentUrl = (gasto) => gasto?.adjunto_factura?.preview_url || gasto?.adjunto_factura?.url_almacenamiento || null;
 const getAttachmentName = (gasto) => gasto?.adjunto_factura?.nombre_archivo || 'factura';
 
 const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
@@ -142,10 +142,22 @@ const ProjectMaterialsView = ({ projectId }) => {
                 }
             });
 
-            return gastosBase.map((gasto) => ({
-                ...gasto,
-                adjunto_factura: adjuntosMap.get(gasto.id) || null,
-            }));
+            return gastosBase.map((gasto) => {
+                const adjunto = adjuntosMap.get(gasto.id) || null;
+                let previewUrl = adjunto?.url_almacenamiento || null;
+
+                if (previewUrl && previewUrl.includes('/storage/v1/object/public/facturas_ocr/')) {
+                    previewUrl = previewUrl;
+                }
+
+                return {
+                    ...gasto,
+                    adjunto_factura: adjunto ? {
+                        ...adjunto,
+                        preview_url: previewUrl,
+                    } : null,
+                };
+            });
         },
         enabled: !!projectId
     });
