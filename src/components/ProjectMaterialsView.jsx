@@ -148,7 +148,8 @@ const ProjectMaterialsView = ({ projectId }) => {
 
                 if (previewUrl && !previewUrl.startsWith('http')) {
                     const cleanPath = previewUrl.replace(/^facturas_ocr\//, '');
-                    const { data: publicUrlData } = supabase.storage.from('facturas_ocr').getPublicUrl(cleanPath);
+                    const normalizedPath = cleanPath.includes('/') ? cleanPath : `gastos/${cleanPath}`;
+                    const { data: publicUrlData } = supabase.storage.from('facturas_ocr').getPublicUrl(normalizedPath);
                     previewUrl = publicUrlData?.publicUrl || previewUrl;
                 }
 
