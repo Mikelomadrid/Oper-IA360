@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/customSupabaseClient';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Loader2, Plus, Search } from 'lucide-react';
+import { Loader2, Plus, Search, Download, FileText } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import MaterialExpenseModal from '@/components/MaterialExpenseModal';
@@ -24,12 +24,80 @@ const formatCurrency = (amount) => {
     return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(amount || 0);
 };
 
+const isPreviewableImage = (url = '', fileName = '') => /\.(jpg|jpeg|png|webp|gif)$/i.test(url || fileName);
+const isPdfFile = (url = '', fileName = '') => /\.pdf$/i.test(url || fileName);
+const getAttachmentUrl = (gasto) => gasto?.adjunto_factura?.url_almacenamiento || null;
+const getAttachmentName = (gasto) => gasto?.adjunto_factura?.nombre_archivo || 'factura';
+
+const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
+    const fileUrl = getAttachmentUrl(gasto);
+    const fileName = getAttachmentName(gasto);
+
+    if (!gasto) return null;
+
+    return (
+        <AlertDialog open={open} onOpenChange={onOpenChange}>
+            <AlertDialogContent className="max-w-4xl">
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Factura adjunta</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        {gasto.numero_factura || 'Sin número'} · {gasto.proveedor?.nombre || 'Proveedor sin asignar'}
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+
+                {!fileUrl ? (
+                    <div className="rounded-lg border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
+                        Este gasto no tiene archivo adjunto.
+                    </div>
+                ) : (
+                    <div className="space-y-4">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div className="text-sm text-muted-foreground truncate">{fileName}</div>
+                            <div className="flex gap-2">
+                                <Button asChild variant="outline" size="sm">
+                                    <a href={fileUrl} target="_blank" rel="noreferrer">Abrir</a>
+                                </Button>
+                                <Button asChild size="sm">
+                                    <a href={fileUrl} download={fileName} target="_blank" rel="noreferrer">
+                                        <Download className="w-4 h-4 mr-2" />Descargar
+                                    </a>
+                                </Button>
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border bg-muted/10 min-h-[500px] overflow-hidden flex items-center justify-center">
+                            {isPreviewableImage(fileUrl, fileName) ? (
+                                <img src={fileUrl} alt={fileName} className="max-h-[70vh] w-full object-contain" />
+                            ) : isPdfFile(fileUrl, fileName) ? (
+                                <iframe title={fileName} src={fileUrl} className="w-full h-[70vh]" />
+                            ) : (
+                                <div className="text-center text-sm text-muted-foreground p-8 space-y-3">
+                                    <FileText className="w-10 h-10 mx-auto opacity-60" />
+                                    <div>No hay vista previa integrada para este tipo de archivo.</div>
+                                    <Button asChild variant="outline" size="sm">
+                                        <a href={fileUrl} target="_blank" rel="noreferrer">Abrir archivo</a>
+                                    </Button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cerrar</AlertDialogCancel>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+    );
+};
+
 const ProjectMaterialsView = ({ projectId }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [expenseToEdit, setExpenseToEdit] = useState(null);
     const [expenseToDelete, setExpenseToDelete] = useState(null);
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+    const [previewGasto, setPreviewGasto] = useState(null);
 
     // Fetch Expenses
     const { data: gastos, isLoading, error, refetch } = useQuery({
@@ -48,13 +116,19 @@ const ProjectMaterialsView = ({ projectId }) => {
                     iva,
                     total_con_iva,
                     proveedor_id,
-                    proveedor:proveedores(nombre)
+                    proveedor:proveedores(nombre),
+                    adjunto_factura:adjuntos(id, nombre_archivo, url_almacenamiento)
                 `)
                 .eq('proyecto_id', projectId)
                 .order('fecha_emision', { ascending: false });
             
             if (error) throw error;
-            return data || [];
+            return (data || []).map((gasto) => ({
+                ...gasto,
+                adjunto_factura: Array.isArray(gasto.adjunto_factura)
+                    ? gasto.adjunto_factura.find((item) => item?.url_almacenamiento) || null
+                    : gasto.adjunto_factura || null,
+            }));
         },
         enabled: !!projectId
     });
@@ -186,7 +260,8 @@ const ProjectMaterialsView = ({ projectId }) => {
                     <MaterialesExpenseTable 
                         gastos={filteredGastos} 
                         onEdit={handleEdit} 
-                        onDelete={handleDeleteClick} 
+                        onDelete={handleDeleteClick}
+                        onPreview={setPreviewGasto}
                     />
                 </CardContent>
             </Card>
@@ -197,6 +272,14 @@ const ProjectMaterialsView = ({ projectId }) => {
                 projectId={projectId}
                 expenseToEdit={expenseToEdit}
                 onSuccess={handleModalSuccess}
+            />
+
+            <FacturaPreviewDialog
+                gasto={previewGasto}
+                open={!!previewGasto}
+                onOpenChange={(open) => {
+                    if (!open) setPreviewGasto(null);
+                }}
             />
 
             <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

@@ -8,7 +8,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Edit, Trash2, FileText, PackageX } from "lucide-react";
+import { Edit, Trash2, FileText, PackageX, Eye, Download } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 // Helper for currency format
@@ -26,7 +26,7 @@ const formatDate = (dateString) => {
     });
 };
 
-const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete }) => {
+const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onPreview }) => {
   if (!gastos || gastos.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-muted-foreground bg-muted/5 rounded-xl border border-dashed">
@@ -47,8 +47,9 @@ const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete }) => {
             <TableHead className="hidden md:table-cell">Concepto</TableHead>
             <TableHead className="text-right">Base</TableHead>
             <TableHead className="text-right w-[80px]">IVA</TableHead>
+            <TableHead>Archivo</TableHead>
             <TableHead className="text-right font-bold">Total</TableHead>
-            <TableHead className="w-[100px] text-center">Acciones</TableHead>
+            <TableHead className="w-[140px] text-center">Acciones</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -73,6 +74,28 @@ const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete }) => {
               </TableCell>
               <TableCell className="text-right text-muted-foreground text-xs tabular-nums">
                 {gasto.iva ? `${(gasto.iva * 100).toFixed(0)}%` : '0%'}
+              </TableCell>
+              <TableCell>
+                {gasto.adjunto_factura?.url_almacenamiento ? (
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                      onClick={() => onPreview && onPreview(gasto)}
+                      title="Ver factura"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                    <Button asChild variant="ghost" size="icon" className="h-8 w-8 text-slate-600 hover:text-slate-900 hover:bg-slate-100" title="Descargar factura">
+                      <a href={gasto.adjunto_factura.url_almacenamiento} download={gasto.adjunto_factura.nombre_archivo || `factura-${gasto.id}`} target="_blank" rel="noreferrer">
+                        <Download className="h-4 w-4" />
+                      </a>
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="text-xs text-muted-foreground">Sin archivo</span>
+                )}
               </TableCell>
               <TableCell className="text-right font-bold text-sm tabular-nums text-foreground">
                 {formatCurrency(gasto.total_con_iva)}
