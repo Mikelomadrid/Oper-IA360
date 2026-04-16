@@ -116,18 +116,35 @@ const ProjectMaterialsView = ({ projectId }) => {
                     iva,
                     total_con_iva,
                     proveedor_id,
-                    proveedor:proveedores(nombre),
-                    adjunto_factura:adjuntos(id, nombre_archivo, url_almacenamiento)
+                    proveedor:proveedores(nombre)
                 `)
                 .eq('proyecto_id', projectId)
                 .order('fecha_emision', { ascending: false });
             
             if (error) throw error;
-            return (data || []).map((gasto) => ({
+
+            const gastosBase = data || [];
+            if (gastosBase.length === 0) return [];
+
+            const gastoIds = gastosBase.map((gasto) => gasto.id);
+            const { data: adjuntosData, error: adjuntosError } = await supabase
+                .from('adjuntos')
+                .select('id, entidad_id, nombre_archivo, url_almacenamiento')
+                .eq('tipo_entidad', 'gasto')
+                .in('entidad_id', gastoIds);
+
+            if (adjuntosError) throw adjuntosError;
+
+            const adjuntosMap = new Map();
+            (adjuntosData || []).forEach((adjunto) => {
+                if (adjunto?.entidad_id && adjunto?.url_almacenamiento && !adjuntosMap.has(adjunto.entidad_id)) {
+                    adjuntosMap.set(adjunto.entidad_id, adjunto);
+                }
+            });
+
+            return gastosBase.map((gasto) => ({
                 ...gasto,
-                adjunto_factura: Array.isArray(gasto.adjunto_factura)
-                    ? gasto.adjunto_factura.find((item) => item?.url_almacenamiento) || null
-                    : gasto.adjunto_factura || null,
+                adjunto_factura: adjuntosMap.get(gasto.id) || null,
             }));
         },
         enabled: !!projectId
