@@ -146,8 +146,9 @@ const ProjectMaterialsView = ({ projectId }) => {
                 const adjunto = adjuntosMap.get(gasto.id) || null;
                 let previewUrl = adjunto?.url_almacenamiento || null;
 
-                if (previewUrl && previewUrl.includes('/storage/v1/object/public/facturas_ocr/')) {
-                    previewUrl = previewUrl;
+                if (previewUrl && !previewUrl.startsWith('http')) {
+                    const { data: publicUrlData } = supabase.storage.from('facturas_ocr').getPublicUrl(previewUrl);
+                    previewUrl = publicUrlData?.publicUrl || previewUrl;
                 }
 
                 return {

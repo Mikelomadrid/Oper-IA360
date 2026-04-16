@@ -368,17 +368,14 @@ const GastosScanner = ({ navigate }) => {
         const filePath = `gastos/${gastoData.id}.${fileExt}`;
         const { error: uploadError } = await supabase.storage.from('facturas_ocr').upload(filePath, file);
         if (!uploadError) {
-          const { data: urlData } = supabase.storage.from('facturas_ocr').getPublicUrl(filePath);
-          if (urlData?.publicUrl) {
-            await supabase.from('adjuntos').insert({
-              entidad_id: gastoData.id,
-              tipo_entidad: 'gasto',
-              nombre_archivo: file.name,
-              url_almacenamiento: urlData.publicUrl,
-              fecha_subida: new Date().toISOString(),
-              subido_por_empleado_id: currentEmpleadoId
-            });
-          }
+          await supabase.from('adjuntos').insert({
+            entidad_id: gastoData.id,
+            tipo_entidad: 'gasto',
+            nombre_archivo: file.name,
+            url_almacenamiento: filePath,
+            fecha_subida: new Date().toISOString(),
+            subido_por_empleado_id: currentEmpleadoId
+          });
         }
       }
 
