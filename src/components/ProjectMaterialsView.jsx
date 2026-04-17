@@ -108,10 +108,22 @@ const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
                                 <Button asChild variant="outline" size="sm">
                                     <a href={resolvedUrl} target="_blank" rel="noreferrer">Abrir</a>
                                 </Button>
-                                <Button asChild size="sm">
-                                    <a href={resolvedUrl} download={fileName} rel="noreferrer">
-                                        <Download className="w-4 h-4 mr-2" />Descargar
-                                    </a>
+                                <Button
+                                    size="sm"
+                                    onClick={async () => {
+                                        try {
+                                            await triggerBrowserDownload(resolvedUrl, fileName);
+                                        } catch (err) {
+                                            console.error(err);
+                                            toast({
+                                                variant: 'destructive',
+                                                title: 'Error',
+                                                description: 'No se pudo descargar la factura.',
+                                            });
+                                        }
+                                    }}
+                                >
+                                    <Download className="w-4 h-4 mr-2" />Descargar
                                 </Button>
                             </div>
                         </div>
