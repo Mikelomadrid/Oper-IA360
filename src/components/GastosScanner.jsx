@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import jsPDF from 'jspdf';
-import JScanify from 'jscanify';
 import { useDropzone } from 'react-dropzone';
 import {
   Loader2, Save, Scan, ArrowLeft, UploadCloud, Camera,
@@ -112,31 +111,7 @@ const normalizeScannedCanvas = (sourceCanvas) => {
 };
 
 const scanDocumentFile = async (file) => {
-  const image = await imageFileToImageElement(file);
-  const scanner = new JScanify();
-
-  const scannedCanvas = await new Promise((resolve) => {
-    scanner.loadOpenCV(() => {
-      try {
-        const aspectRatio = image.height / image.width;
-        const resultWidth = 1400;
-        const resultHeight = Math.round(resultWidth * aspectRatio);
-        const extracted = scanner.extractPaper(image, resultWidth, resultHeight);
-        resolve(extracted || null);
-      } catch (error) {
-        console.error('No se pudo extraer el papel automáticamente:', error);
-        resolve(null);
-      }
-    });
-  });
-
-  if (!scannedCanvas) return { scannedFile: file, previewUrl: URL.createObjectURL(file) };
-
-  const normalizedCanvas = normalizeScannedCanvas(scannedCanvas);
-  const scannedBlob = await canvasToBlob(normalizedCanvas, 'image/jpeg', 0.95);
-  const scannedFile = new File([scannedBlob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' });
-  const previewUrl = URL.createObjectURL(scannedBlob);
-  return { scannedFile, previewUrl };
+  return { scannedFile: file, previewUrl: URL.createObjectURL(file) };
 };
 
 const imageFileToPdfBlob = async (file) => {
