@@ -35,6 +35,7 @@ const isPdfFile = (url = '', fileName = '') => {
 };
 const getAttachmentUrl = (gasto) => gasto?.adjunto_factura?.signed_url || gasto?.adjunto_factura?.preview_url || gasto?.adjunto_factura?.url_almacenamiento || null;
 const getAttachmentName = (gasto) => gasto?.adjunto_factura?.nombre_archivo || 'factura';
+const isPdfAttachment = (gasto) => isPdfFile(getAttachmentUrl(gasto), getAttachmentName(gasto));
 const normalizeStoragePath = (rawPath = '') => {
     if (!rawPath) return null;
     if (rawPath.startsWith('http')) {
@@ -331,6 +332,36 @@ const ProjectMaterialsView = ({ projectId }) => {
         setDeleteDialogOpen(true);
     };
 
+    const handlePreview = async (gasto) => {
+        if (!gasto?.adjunto_factura) return;
+
+        if (isPdfAttachment(gasto)) {
+            try {
+                const storagePath = gasto.adjunto_factura.storage_path;
+                if (!storagePath) throw new Error('No hay ruta de archivo');
+
+                const { data, error } = await supabase.storage
+                    .from('facturas_ocr')
+                    .createSignedUrl(storagePath, 3600);
+
+                if (error || !data?.signedUrl) throw error || new Error('No se pudo generar la URL del PDF');
+
+                window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+                gasto.adjunto_factura.signed_url = data.signedUrl;
+            } catch (err) {
+                console.error(err);
+                toast({
+                    variant: 'destructive',
+                    title: 'Error',
+                    description: 'No se pudo abrir la factura.',
+                });
+            }
+            return;
+        }
+
+        setPreviewGasto(gasto);
+    };
+
     const confirmDelete = async () => {
         if (!expenseToDelete) return;
         
@@ -432,7 +463,7 @@ const ProjectMaterialsView = ({ projectId }) => {
                         gastos={filteredGastos} 
                         onEdit={handleEdit} 
                         onDelete={handleDeleteClick}
-                        onPreview={setPreviewGasto}
+                        onPreview={handlePreview}
                         onDownload={async (gasto) => {
                             try {
                                 const storagePath = gasto?.adjunto_factura?.storage_path;
