@@ -132,7 +132,15 @@ const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
                             {isPreviewableImage(resolvedUrl, fileName) ? (
                                 <img src={resolvedUrl} alt={fileName} className="max-h-[70vh] w-full object-contain" />
                             ) : isPdfFile(resolvedUrl, fileName) ? (
-                                <iframe title={fileName} src={`${resolvedUrl}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`} className="w-full h-[70vh]" />
+                                <object data={resolvedUrl} type="application/pdf" className="w-full h-[70vh]">
+                                    <div className="text-center text-sm text-muted-foreground p-8 space-y-3">
+                                        <FileText className="w-10 h-10 mx-auto opacity-60" />
+                                        <div>No se ha podido incrustar el PDF en este navegador.</div>
+                                        <Button asChild variant="outline" size="sm">
+                                            <a href={resolvedUrl} target="_blank" rel="noreferrer">Abrir PDF</a>
+                                        </Button>
+                                    </div>
+                                </object>
                             ) : (
                                 <div className="text-center text-sm text-muted-foreground p-8 space-y-3">
                                     <FileText className="w-10 h-10 mx-auto opacity-60" />
