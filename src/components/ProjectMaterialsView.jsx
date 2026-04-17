@@ -61,7 +61,10 @@ const PdfCanvasPreview = ({ url }) => {
             setPdfError(null);
 
             try {
-                const loadingTask = pdfjsLib.getDocument(url);
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`No se pudo cargar el PDF (${response.status})`);
+                const pdfBytes = await response.arrayBuffer();
+                const loadingTask = pdfjsLib.getDocument({ data: pdfBytes });
                 const pdf = await loadingTask.promise;
                 const page = await pdf.getPage(1);
                 const viewport = page.getViewport({ scale: 1.4 });
