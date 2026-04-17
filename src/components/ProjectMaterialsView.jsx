@@ -24,8 +24,14 @@ const formatCurrency = (amount) => {
     return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(amount || 0);
 };
 
-const isPreviewableImage = (url = '', fileName = '') => /\.(jpg|jpeg|png|webp|gif)$/i.test(url || fileName);
-const isPdfFile = (url = '', fileName = '') => /\.pdf$/i.test(url || fileName);
+const isPreviewableImage = (url = '', fileName = '') => {
+    const target = `${url || ''} ${fileName || ''}`.toLowerCase();
+    return /\.(jpg|jpeg|png|webp|gif)(\?|$|\s)/i.test(target);
+};
+const isPdfFile = (url = '', fileName = '') => {
+    const target = `${url || ''} ${fileName || ''}`.toLowerCase();
+    return /\.pdf(\?|$|\s)/i.test(target);
+};
 const getAttachmentUrl = (gasto) => gasto?.adjunto_factura?.preview_url || gasto?.adjunto_factura?.url_almacenamiento || null;
 const getAttachmentName = (gasto) => gasto?.adjunto_factura?.nombre_archivo || 'factura';
 const normalizeStoragePath = (rawPath = '') => {
