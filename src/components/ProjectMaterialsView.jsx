@@ -142,6 +142,25 @@ const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
     );
 };
 
+const triggerBrowserDownload = async (url, fileName) => {
+    if (!url) return;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`No se pudo descargar el archivo (${response.status})`);
+    }
+
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = fileName || 'factura';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(blobUrl);
+};
+
 const ProjectMaterialsView = ({ projectId }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -346,6 +365,27 @@ const ProjectMaterialsView = ({ projectId }) => {
                         onEdit={handleEdit} 
                         onDelete={handleDeleteClick}
                         onPreview={setPreviewGasto}
+                        onDownload={async (gasto) => {
+                            try {
+                                const storagePath = gasto?.adjunto_factura?.storage_path;
+                                if (!storagePath) throw new Error('No hay ruta de archivo');
+
+                                const { data, error } = await supabase.storage
+                                    .from('facturas_ocr')
+                                    .createSignedUrl(storagePath, 3600);
+
+                                if (error || !data?.signedUrl) throw error || new Error('No se pudo generar la URL de descarga');
+
+                                await triggerBrowserDownload(data.signedUrl, gasto?.adjunto_factura?.nombre_archivo || `factura-${gasto.id}`);
+                            } catch (err) {
+                                console.error(err);
+                                toast({
+                                    variant: 'destructive',
+                                    title: 'Error',
+                                    description: 'No se pudo descargar la factura.',
+                                });
+                            }
+                        }}
                     />
                 </CardContent>
             </Card>

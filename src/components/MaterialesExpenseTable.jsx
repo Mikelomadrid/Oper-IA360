@@ -26,7 +26,7 @@ const formatDate = (dateString) => {
     });
 };
 
-const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onPreview }) => {
+const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onPreview, onDownload }) => {
   if (!gastos || gastos.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-muted-foreground bg-muted/5 rounded-xl border border-dashed">
@@ -87,10 +87,14 @@ const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onPreview }) =>
                     >
                       <Eye className="h-4 w-4" />
                     </Button>
-                    <Button asChild variant="ghost" size="icon" className="h-8 w-8 text-slate-600 hover:text-slate-900 hover:bg-slate-100" title="Descargar factura">
-                      <a href={gasto.adjunto_factura.signed_url || gasto.adjunto_factura.preview_url || gasto.adjunto_factura.url_almacenamiento} download={gasto.adjunto_factura.nombre_archivo || `factura-${gasto.id}`} rel="noreferrer">
-                        <Download className="h-4 w-4" />
-                      </a>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                      title="Descargar factura"
+                      onClick={() => onDownload && onDownload(gasto)}
+                    >
+                      <Download className="h-4 w-4" />
                     </Button>
                   </div>
                 ) : (
