@@ -83,6 +83,16 @@ export async function analyzeDocumentWithAgent({ file, type, metadata = {} }) {
 
 export async function analyzeInvoiceWithDocumentAgent(file) {
   const result = await analyzeDocumentWithAgent({ file, type: 'invoice' });
+  const rawMetaText = (result?._meta?.rawText || '').replace(/\\"/g, '"');
+  const documentTypeMatch = rawMetaText.match(/"document_type"\s*:\s*"([^"]+)"/i);
+  const vehiclePlateMatch = rawMetaText.match(/"vehicle_plate"\s*:\s*"([^"]+)"/i);
+  const startTimeMatch = rawMetaText.match(/"start_time"\s*:\s*"([^"]+)"/i);
+  const endTimeMatch = rawMetaText.match(/"end_time"\s*:\s*"([^"]+)"/i);
+  const parkingZoneMatch = rawMetaText.match(/"parking_zone"\s*:\s*"([^"]+)"/i);
+  const parkingAreaMatch = rawMetaText.match(/"parking_area"\s*:\s*"([^"]+)"/i);
+  const rawTextMatch = rawMetaText.match(/"raw_text"\s*:\s*"([^"]*)"/i);
+
+  console.log('DOCUMENT_AGENT_RAW', result);
   return {
     proveedor_nombre: result.supplier_name,
     proveedor_cif: result.supplier_tax_id,
@@ -97,6 +107,15 @@ export async function analyzeInvoiceWithDocumentAgent(file) {
     moneda: result.currency,
     confidence: result.confidence,
     warnings: result.warnings,
+    tipo_documento: result.document_type || documentTypeMatch?.[1] || result.type,
+    matricula: result.vehicle_plate || result.plate || vehiclePlateMatch?.[1] || '',
+    hora_inicio: result.start_time || result.issue_time || startTimeMatch?.[1] || '',
+    hora_fin: result.end_time || result.expiry_time || endTimeMatch?.[1] || '',
+    zona: result.parking_zone || result.zone || parkingZoneMatch?.[1] || '',
+    barrio: result.parking_area || result.area || parkingAreaMatch?.[1] || '',
+    rawtext: result.raw_text || rawTextMatch?.[1] || result._meta?.rawText || '',
+
+
     _meta: result._meta,
     lineas: result.lines?.map((line) => ({
       referencia: line.reference,

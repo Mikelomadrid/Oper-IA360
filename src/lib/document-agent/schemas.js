@@ -15,69 +15,57 @@ export const DOCUMENT_AGENT_LABELS = {
 };
 
 export const DOCUMENT_AGENT_PROMPTS = {
-  invoice: `Analiza este documento como factura o ticket de proveedor en España. Responde SOLO JSON válido.
+  invoice: `Analiza este documento como factura, ticket o justificante de gasto en España. Responde SOLO JSON válido.
 Reglas obligatorias:
 - Detecta importes aunque vengan con coma decimal.
 - Convierte fechas a formato YYYY-MM-DD si puedes.
 - Si es ticket sin número de factura claro, deja invoice_number como cadena vacía.
+- En tickets de aparcamiento, start_time y end_time son obligatorios si aparecen en el documento.
+- vehicle_plate debe salir sin espacios raros, por ejemplo 5060HBP o 5060 HBP.
+- parking_zone debe recoger valores como verde, azul, SER, ORA, etc.
+- parking_area debe recoger barrio, distrito o código de zona si aparece.
+- raw_text debe incluir el texto OCR completo visible.
+
 - Si no ves líneas fiables, devuelve lines: [].
 - confidence debe ir de 0 a 100.
 - warnings debe explicar dudas reales: ticket borroso, CIF dudoso, total incoherente, etc.
-- category en líneas debe ser una de: electricidad, fontanería, pintura, albañilería, herramientas, materiales, otro.
+- category en líneas debe ser una de: electricidad, fontanería, pintura, albañilería, herramientas, materiales, parking, otro.
+- Si es un ticket de aparcamiento, SER, ORA o similar, rellena también vehicle_plate, start_time, end_time, parking_zone y parking_area si aparecen.
 {
-  "type": "invoice",
-  "supplier_name": "",
-  "supplier_tax_id": "",
-  "invoice_number": "",
-  "issue_date": "YYYY-MM-DD o null",
-  "due_date": "YYYY-MM-DD o null",
-  "currency": "EUR",
-  "subtotal": 0,
-  "tax_rate": 21,
-  "tax_amount": 0,
-  "total": 0,
-  "summary": "",
-  "lines": [
-    {
-      "reference": "",
-      "description": "",
-      "quantity": 1,
-      "unit": "ud",
-      "unit_price": 0,
-      "line_total": 0,
-      "category": "materiales"
-    }
-  ],
-  "confidence": 0,
-  "warnings": []
+ "type": "invoice",
+ "document_type": "invoice|parking_ticket|receipt|other",
+ "supplier_name": "",
+ "supplier_tax_id": "",
+ "invoice_number": "",
+ "issue_date": "YYYY-MM-DD o null",
+ "due_date": "YYYY-MM-DD o null",
+ "currency": "EUR",
+ "subtotal": 0,
+ "tax_rate": 21,
+ "tax_amount": 0,
+ "total": 0,
+ "summary": "",
+ "vehicle_plate": "",
+ "start_time": "",
+ "end_time": "",
+ "parking_zone": "",
+ "parking_area": "",
+ "raw_text": "",
+ "lines": [
+  {
+   "reference": "",
+   "description": "",
+   "quantity": 1,
+   "unit": "ud",
+   "unit_price": 0,
+   "line_total": 0,
+   "category": "materiales"
+  }
+ ],
+ "confidence": 0,
+ "warnings": []
 }`,
-  budget: `Analiza este documento como presupuesto de obra. Responde SOLO JSON válido.
-{
-  "type": "budget",
-  "title": "",
-  "customer_name": "",
-  "issue_date": "YYYY-MM-DD o null",
-  "currency": "EUR",
-  "total": 0,
-  "sections": [
-    {
-      "section": "",
-      "items": [
-        {
-          "code": "",
-          "description": "",
-          "work_type": "albanileria|fontaneria|electricidad|pintura|pladur|carpinteria|otro",
-          "quantity": 0,
-          "unit": "m²",
-          "unit_price": 0,
-          "line_total": 0
-        }
-      ]
-    }
-  ],
-  "confidence": 0,
-  "warnings": []
-}`,
+
   measurement: `Analiza este PDF o imagen como documento de mediciones. Responde SOLO JSON válido.
 {
   "type": "measurement",
