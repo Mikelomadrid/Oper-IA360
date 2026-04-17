@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/customSupabaseClient';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Loader2, Plus, Search, Download, FileText } from 'lucide-react';
+import * as pdfjsLib from 'pdfjs-dist';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import MaterialExpenseModal from '@/components/MaterialExpenseModal';
@@ -44,6 +45,56 @@ const normalizeStoragePath = (rawPath = '') => {
     }
     const withoutBucket = rawPath.replace(/^facturas_ocr\//, '');
     return withoutBucket.includes('/') ? withoutBucket : `gastos/${withoutBucket}`;
+};
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
+
+const PdfCanvasPreview = ({ url }) => {
+    const canvasRef = useRef(null);
+    const [pdfError, setPdfError] = useState(null);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const renderPdf = async () => {
+            if (!url || !canvasRef.current) return;
+            setPdfError(null);
+
+            try {
+                const loadingTask = pdfjsLib.getDocument(url);
+                const pdf = await loadingTask.promise;
+                const page = await pdf.getPage(1);
+                const viewport = page.getViewport({ scale: 1.4 });
+                const canvas = canvasRef.current;
+                const context = canvas.getContext('2d');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+
+                await page.render({ canvasContext: context, viewport }).promise;
+                if (cancelled) return;
+            } catch (error) {
+                console.error('Error renderizando PDF en canvas:', error);
+                if (!cancelled) setPdfError(error);
+            }
+        };
+
+        renderPdf();
+        return () => { cancelled = true; };
+    }, [url]);
+
+    if (pdfError) {
+        return (
+            <div className="text-center text-sm text-muted-foreground p-8 space-y-3">
+                <FileText className="w-10 h-10 mx-auto opacity-60" />
+                <div>No se ha podido renderizar el PDF dentro del modal.</div>
+                <Button asChild variant="outline" size="sm">
+                    <a href={url} target="_blank" rel="noreferrer">Abrir PDF</a>
+                </Button>
+            </div>
+        );
+    }
+
+    return <canvas ref={canvasRef} className="max-w-full h-auto mx-auto" />;
 };
 
 const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
@@ -132,15 +183,9 @@ const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
                             {isPreviewableImage(resolvedUrl, fileName) ? (
                                 <img src={resolvedUrl} alt={fileName} className="max-h-[70vh] w-full object-contain" />
                             ) : isPdfFile(resolvedUrl, fileName) ? (
-                                <object data={resolvedUrl} type="application/pdf" className="w-full h-[70vh]">
-                                    <div className="text-center text-sm text-muted-foreground p-8 space-y-3">
-                                        <FileText className="w-10 h-10 mx-auto opacity-60" />
-                                        <div>No se ha podido incrustar el PDF en este navegador.</div>
-                                        <Button asChild variant="outline" size="sm">
-                                            <a href={resolvedUrl} target="_blank" rel="noreferrer">Abrir PDF</a>
-                                        </Button>
-                                    </div>
-                                </object>
+                                <div className="w-full h-[70vh] overflow-auto p-4">
+                                    <PdfCanvasPreview url={resolvedUrl} />
+                                </div>
                             ) : (
                                 <div className="text-center text-sm text-muted-foreground p-8 space-y-3">
                                     <FileText className="w-10 h-10 mx-auto opacity-60" />
