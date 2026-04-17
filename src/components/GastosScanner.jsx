@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import jsPDF from 'jspdf';
 import { useDropzone } from 'react-dropzone';
 import {
   Loader2, Save, Scan, ArrowLeft, UploadCloud, Camera,
@@ -70,6 +71,29 @@ const LineaEditable = ({ linea, index, onChange, onDelete }) => {
       </div>
     </div>
   );
+};
+
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = reject;
+  reader.readAsDataURL(file);
+});
+
+const imageFileToPdfBlob = async (file) => {
+  const dataUrl = await fileToDataUrl(file);
+  const image = new Image();
+  image.src = dataUrl;
+
+  await new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = reject;
+  });
+
+  const orientation = image.width >= image.height ? 'l' : 'p';
+  const pdf = new jsPDF({ orientation, unit: 'pt', format: [image.width, image.height] });
+  pdf.addImage(dataUrl, 'JPEG', 0, 0, image.width, image.height);
+  return pdf.output('blob');
 };
 
 const GastosScanner = ({ navigate }) => {
@@ -362,17 +386,27 @@ const GastosScanner = ({ navigate }) => {
         }
       }
 
-      // 4. Subir imagen de la factura
+      // 4. Subir factura siempre en PDF
       if (file && gastoData) {
-        const fileExt = file.name.split('.').pop();
-        const filePath = `gastos/${gastoData.id}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage.from('facturas_ocr').upload(filePath, file);
+        const pdfPath = `gastos/${gastoData.id}.pdf`;
+        let pdfFile = file;
+
+        if (file.type !== 'application/pdf') {
+          const pdfBlob = await imageFileToPdfBlob(file);
+          pdfFile = new File([pdfBlob], `${gastoData.id}.pdf`, { type: 'application/pdf' });
+        }
+
+        const { error: uploadError } = await supabase.storage.from('facturas_ocr').upload(pdfPath, pdfFile, {
+          contentType: 'application/pdf',
+          upsert: true,
+        });
+
         if (!uploadError) {
           await supabase.from('adjuntos').insert({
             entidad_id: gastoData.id,
             tipo_entidad: 'gasto',
-            nombre_archivo: file.name,
-            url_almacenamiento: filePath,
+            nombre_archivo: `${gastoData.id}.pdf`,
+            url_almacenamiento: pdfPath,
             fecha_subida: new Date().toISOString(),
             subido_por_empleado_id: currentEmpleadoId
           });
