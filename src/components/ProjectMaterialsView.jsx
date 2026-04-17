@@ -97,19 +97,6 @@ const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
                 </AlertDialogHeader>
 
                 {!resolvedUrl ? (
-                     <div className="rounded-lg border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
-                         Este gasto no tiene archivo adjunto.
-                     </div>
-                 ) : (
-                     <div className="space-y-4">
-@@
--                        <div className="rounded-lg border bg-muted/10 min-h-[500px] overflow-hidden flex items-center justify-center">
-+                        <div className="rounded-lg border bg-muted/10 min-h-[500px] overflow-hidden flex items-center justify-center">
-                             {isPreviewableImage(resolvedUrl, fileName) ? (
-                                 <img src={resolvedUrl} alt={fileName} className="max-h-[70vh] w-full object-contain" />
-                             ) : isPdfFile(resolvedUrl, fileName) ? (
-                                 <iframe title={fileName} src={`${resolvedUrl}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`} className="w-full h-[70vh]" />
-                             ) : (
                     <div className="rounded-lg border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
                         Este gasto no tiene archivo adjunto.
                     </div>
