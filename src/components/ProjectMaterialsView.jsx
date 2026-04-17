@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/customSupabaseClient';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -28,10 +28,51 @@ const isPreviewableImage = (url = '', fileName = '') => /\.(jpg|jpeg|png|webp|gi
 const isPdfFile = (url = '', fileName = '') => /\.pdf$/i.test(url || fileName);
 const getAttachmentUrl = (gasto) => gasto?.adjunto_factura?.preview_url || gasto?.adjunto_factura?.url_almacenamiento || null;
 const getAttachmentName = (gasto) => gasto?.adjunto_factura?.nombre_archivo || 'factura';
+const normalizeStoragePath = (rawPath = '') => {
+    if (!rawPath) return null;
+    if (rawPath.startsWith('http')) {
+        const marker = '/storage/v1/object/public/facturas_ocr/';
+        const index = rawPath.indexOf(marker);
+        if (index >= 0) return rawPath.slice(index + marker.length);
+        return rawPath;
+    }
+    const withoutBucket = rawPath.replace(/^facturas_ocr\//, '');
+    return withoutBucket.includes('/') ? withoutBucket : `gastos/${withoutBucket}`;
+};
 
 const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
     const fileUrl = getAttachmentUrl(gasto);
     const fileName = getAttachmentName(gasto);
+    const [signedUrl, setSignedUrl] = useState(null);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const loadSignedUrl = async () => {
+            if (!open || !gasto?.adjunto_factura?.storage_path) {
+                setSignedUrl(null);
+                return;
+            }
+
+            const { data, error } = await supabase.storage
+                .from('facturas_ocr')
+                .createSignedUrl(gasto.adjunto_factura.storage_path, 3600);
+
+            if (!cancelled) {
+                if (error) {
+                    console.error('Error creando signed URL para factura:', error);
+                    setSignedUrl(null);
+                } else {
+                    setSignedUrl(data?.signedUrl || null);
+                }
+            }
+        };
+
+        loadSignedUrl();
+        return () => { cancelled = true; };
+    }, [open, gasto]);
+
+    const resolvedUrl = signedUrl || fileUrl;
 
     if (!gasto) return null;
 
@@ -45,7 +86,7 @@ const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
                     </AlertDialogDescription>
                 </AlertDialogHeader>
 
-                {!fileUrl ? (
+                {!resolvedUrl ? (
                     <div className="rounded-lg border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
                         Este gasto no tiene archivo adjunto.
                     </div>
@@ -55,10 +96,10 @@ const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
                             <div className="text-sm text-muted-foreground truncate">{fileName}</div>
                             <div className="flex gap-2">
                                 <Button asChild variant="outline" size="sm">
-                                    <a href={fileUrl} target="_blank" rel="noreferrer">Abrir</a>
+                                    <a href={resolvedUrl} target="_blank" rel="noreferrer">Abrir</a>
                                 </Button>
                                 <Button asChild size="sm">
-                                    <a href={fileUrl} download={fileName} target="_blank" rel="noreferrer">
+                                    <a href={resolvedUrl} download={fileName} target="_blank" rel="noreferrer">
                                         <Download className="w-4 h-4 mr-2" />Descargar
                                     </a>
                                 </Button>
@@ -66,16 +107,16 @@ const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
                         </div>
 
                         <div className="rounded-lg border bg-muted/10 min-h-[500px] overflow-hidden flex items-center justify-center">
-                            {isPreviewableImage(fileUrl, fileName) ? (
-                                <img src={fileUrl} alt={fileName} className="max-h-[70vh] w-full object-contain" />
-                            ) : isPdfFile(fileUrl, fileName) ? (
-                                <iframe title={fileName} src={fileUrl} className="w-full h-[70vh]" />
+                            {isPreviewableImage(resolvedUrl, fileName) ? (
+                                <img src={resolvedUrl} alt={fileName} className="max-h-[70vh] w-full object-contain" />
+                            ) : isPdfFile(resolvedUrl, fileName) ? (
+                                <iframe title={fileName} src={resolvedUrl} className="w-full h-[70vh]" />
                             ) : (
                                 <div className="text-center text-sm text-muted-foreground p-8 space-y-3">
                                     <FileText className="w-10 h-10 mx-auto opacity-60" />
                                     <div>No hay vista previa integrada para este tipo de archivo.</div>
                                     <Button asChild variant="outline" size="sm">
-                                        <a href={fileUrl} target="_blank" rel="noreferrer">Abrir archivo</a>
+                                        <a href={resolvedUrl} target="_blank" rel="noreferrer">Abrir archivo</a>
                                     </Button>
                                 </div>
                             )}
@@ -144,12 +185,11 @@ const ProjectMaterialsView = ({ projectId }) => {
 
             return gastosBase.map((gasto) => {
                 const adjunto = adjuntosMap.get(gasto.id) || null;
+                const storagePath = normalizeStoragePath(adjunto?.url_almacenamiento || '');
                 let previewUrl = adjunto?.url_almacenamiento || null;
 
-                if (previewUrl && !previewUrl.startsWith('http')) {
-                    const cleanPath = previewUrl.replace(/^facturas_ocr\//, '');
-                    const normalizedPath = cleanPath.includes('/') ? cleanPath : `gastos/${cleanPath}`;
-                    const { data: publicUrlData } = supabase.storage.from('facturas_ocr').getPublicUrl(normalizedPath);
+                if (storagePath) {
+                    const { data: publicUrlData } = supabase.storage.from('facturas_ocr').getPublicUrl(storagePath);
                     previewUrl = publicUrlData?.publicUrl || previewUrl;
                 }
 
@@ -157,6 +197,7 @@ const ProjectMaterialsView = ({ projectId }) => {
                     ...gasto,
                     adjunto_factura: adjunto ? {
                         ...adjunto,
+                        storage_path: storagePath,
                         preview_url: previewUrl,
                     } : null,
                 };
