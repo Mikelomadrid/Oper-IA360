@@ -32,7 +32,7 @@ const isPdfFile = (url = '', fileName = '') => {
     const target = `${url || ''} ${fileName || ''}`.toLowerCase();
     return /\.pdf(\?|$|\s)/i.test(target);
 };
-const getAttachmentUrl = (gasto) => gasto?.adjunto_factura?.preview_url || gasto?.adjunto_factura?.url_almacenamiento || null;
+const getAttachmentUrl = (gasto) => gasto?.adjunto_factura?.signed_url || gasto?.adjunto_factura?.preview_url || gasto?.adjunto_factura?.url_almacenamiento || null;
 const getAttachmentName = (gasto) => gasto?.adjunto_factura?.nombre_archivo || 'factura';
 const normalizeStoragePath = (rawPath = '') => {
     if (!rawPath) return null;
@@ -69,7 +69,11 @@ const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
                     console.error('Error creando signed URL para factura:', error);
                     setSignedUrl(null);
                 } else {
-                    setSignedUrl(data?.signedUrl || null);
+                    const nextSignedUrl = data?.signedUrl || null;
+                    setSignedUrl(nextSignedUrl);
+                    if (gasto?.adjunto_factura) {
+                        gasto.adjunto_factura.signed_url = nextSignedUrl;
+                    }
                 }
             }
         };
@@ -205,6 +209,7 @@ const ProjectMaterialsView = ({ projectId }) => {
                         ...adjunto,
                         storage_path: storagePath,
                         preview_url: previewUrl,
+                        signed_url: null,
                     } : null,
                 };
             });

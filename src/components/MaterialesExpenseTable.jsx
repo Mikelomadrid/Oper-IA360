@@ -88,7 +88,7 @@ const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onPreview }) =>
                       <Eye className="h-4 w-4" />
                     </Button>
                     <Button asChild variant="ghost" size="icon" className="h-8 w-8 text-slate-600 hover:text-slate-900 hover:bg-slate-100" title="Descargar factura">
-                      <a href={gasto.adjunto_factura.preview_url || gasto.adjunto_factura.url_almacenamiento} download={gasto.adjunto_factura.nombre_archivo || `factura-${gasto.id}`} rel="noreferrer">
+                      <a href={gasto.adjunto_factura.signed_url || gasto.adjunto_factura.preview_url || gasto.adjunto_factura.url_almacenamiento} download={gasto.adjunto_factura.nombre_archivo || `factura-${gasto.id}`} rel="noreferrer">
                         <Download className="h-4 w-4" />
                       </a>
                     </Button>
