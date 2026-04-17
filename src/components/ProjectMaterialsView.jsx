@@ -105,7 +105,7 @@ const FacturaPreviewDialog = ({ gasto, open, onOpenChange }) => {
                                     <a href={resolvedUrl} target="_blank" rel="noreferrer">Abrir</a>
                                 </Button>
                                 <Button asChild size="sm">
-                                    <a href={resolvedUrl} download={fileName} target="_blank" rel="noreferrer">
+                                    <a href={resolvedUrl} download={fileName} rel="noreferrer">
                                         <Download className="w-4 h-4 mr-2" />Descargar
                                     </a>
                                 </Button>
