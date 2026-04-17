@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import jsPDF from 'jspdf';
+import JScanify from 'jscanify';
 import { useDropzone } from 'react-dropzone';
 import {
   Loader2, Save, Scan, ArrowLeft, UploadCloud, Camera,
@@ -80,7 +81,14 @@ const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
-const imageFileToPdfBlob = async (file) => {
+const canvasToBlob = (canvas, type = 'image/jpeg', quality = 0.95) => new Promise((resolve, reject) => {
+  canvas.toBlob((blob) => {
+    if (blob) resolve(blob);
+    else reject(new Error('No se pudo convertir el canvas a blob'));
+  }, type, quality);
+});
+
+const imageFileToImageElement = async (file) => {
   const dataUrl = await fileToDataUrl(file);
   const image = new Image();
   image.src = dataUrl;
@@ -90,9 +98,52 @@ const imageFileToPdfBlob = async (file) => {
     image.onerror = reject;
   });
 
+  return image;
+};
+
+const normalizeScannedCanvas = (sourceCanvas) => {
+  const outputCanvas = document.createElement('canvas');
+  outputCanvas.width = sourceCanvas.width;
+  outputCanvas.height = sourceCanvas.height;
+  const ctx = outputCanvas.getContext('2d');
+  ctx.filter = 'grayscale(100%) contrast(135%) brightness(108%)';
+  ctx.drawImage(sourceCanvas, 0, 0);
+  return outputCanvas;
+};
+
+const scanDocumentFile = async (file) => {
+  const image = await imageFileToImageElement(file);
+  const scanner = new JScanify();
+
+  const scannedCanvas = await new Promise((resolve) => {
+    scanner.loadOpenCV(() => {
+      try {
+        const aspectRatio = image.height / image.width;
+        const resultWidth = 1400;
+        const resultHeight = Math.round(resultWidth * aspectRatio);
+        const extracted = scanner.extractPaper(image, resultWidth, resultHeight);
+        resolve(extracted || null);
+      } catch (error) {
+        console.error('No se pudo extraer el papel automáticamente:', error);
+        resolve(null);
+      }
+    });
+  });
+
+  if (!scannedCanvas) return { scannedFile: file, previewUrl: URL.createObjectURL(file) };
+
+  const normalizedCanvas = normalizeScannedCanvas(scannedCanvas);
+  const scannedBlob = await canvasToBlob(normalizedCanvas, 'image/jpeg', 0.95);
+  const scannedFile = new File([scannedBlob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' });
+  const previewUrl = URL.createObjectURL(scannedBlob);
+  return { scannedFile, previewUrl };
+};
+
+const imageFileToPdfBlob = async (file) => {
+  const image = await imageFileToImageElement(file);
   const orientation = image.width >= image.height ? 'l' : 'p';
   const pdf = new jsPDF({ orientation, unit: 'pt', format: [image.width, image.height] });
-  pdf.addImage(dataUrl, 'JPEG', 0, 0, image.width, image.height);
+  pdf.addImage(image, 'JPEG', 0, 0, image.width, image.height);
   return pdf.output('blob');
 };
 
@@ -150,13 +201,34 @@ const GastosScanner = ({ navigate }) => {
     fetchData();
   }, []);
 
-  const handleFileSelect = (selectedFile) => {
+  const handleFileSelect = async (selectedFile) => {
     if (selectedFile) {
-      setFile(selectedFile);
-      if (preview) URL.revokeObjectURL(preview);
-      setPreview(URL.createObjectURL(selectedFile));
-      setLineas([]);
-      setFormData(prev => ({ ...prev, numero_factura: '', fecha_emision: '', total_con_iva: '', iva: '', monto_bruto: '', concepto: '' }));
+      try {
+        let processedFile = selectedFile;
+        let processedPreviewUrl = URL.createObjectURL(selectedFile);
+
+        if (selectedFile.type.startsWith('image/')) {
+          const scanned = await scanDocumentFile(selectedFile);
+          processedFile = scanned.scannedFile;
+          processedPreviewUrl = scanned.previewUrl;
+        }
+
+        setFile(processedFile);
+        if (preview) URL.revokeObjectURL(preview);
+        setPreview(processedPreviewUrl);
+        setLineas([]);
+        setFormData(prev => ({ ...prev, numero_factura: '', fecha_emision: '', total_con_iva: '', iva: '', monto_bruto: '', concepto: '' }));
+      } catch (error) {
+        console.error(error);
+        setFile(selectedFile);
+        if (preview) URL.revokeObjectURL(preview);
+        setPreview(URL.createObjectURL(selectedFile));
+        toast({
+          variant: 'destructive',
+          title: 'Aviso',
+          description: 'No se pudo recortar automáticamente el documento. Se usará la imagen original.',
+        });
+      }
     }
   };
 
