@@ -17,6 +17,7 @@ import { ProviderSelect } from '@/components/ProviderSelect';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 
 const CATEGORIAS = ['electricidad', 'fontanería', 'pintura', 'albañilería', 'herramientas', 'materiales', 'otro'];
+const UNIDADES = ['ud', 'm', 'm2', 'm3', 'kg', 'l', 'h', 'caja', 'rollo', 'pack'];
 
 const LineaEditable = ({ linea, index, onChange, onDelete }) => {
   const [editing, setEditing] = useState(false);
@@ -34,7 +35,7 @@ const LineaEditable = ({ linea, index, onChange, onDelete }) => {
           {linea.categoria && <Badge variant="outline" className="text-[10px] h-4 px-1">{linea.categoria}</Badge>}
         </div>
         <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-          <span>{linea.cantidad} uds</span>
+          <span>{linea.cantidad} {linea.unidad || 'ud'}</span>
           <span>×</span>
           <span>{Number(linea.precio_unitario || 0).toFixed(2)} €/ud</span>
           <span className="font-semibold text-foreground">{Number(linea.total_linea || 0).toFixed(2)} €</span>
@@ -59,8 +60,14 @@ const LineaEditable = ({ linea, index, onChange, onDelete }) => {
         </div>
       </div>
       <div><Label className="text-xs">Nombre / Descripción</Label><Input value={local.nombre || ''} onChange={e => setLocal(p => ({ ...p, nombre: e.target.value }))} className="h-7 text-xs" /></div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <div><Label className="text-xs">Cantidad</Label><Input type="number" value={local.cantidad || ''} onChange={e => setLocal(p => ({ ...p, cantidad: e.target.value, total_linea: (e.target.value * (p.precio_unitario || 0)).toFixed(2) }))} className="h-7 text-xs" /></div>
+        <div><Label className="text-xs">Unidad</Label>
+          <Select value={local.unidad || 'ud'} onValueChange={v => setLocal(p => ({ ...p, unidad: v }))}>
+            <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>{UNIDADES.map(u => <SelectItem key={u} value={u} className="text-xs">{u}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
         <div><Label className="text-xs">Precio/ud (€)</Label><Input type="number" value={local.precio_unitario || ''} onChange={e => setLocal(p => ({ ...p, precio_unitario: e.target.value, total_linea: ((p.cantidad || 1) * e.target.value).toFixed(2) }))} className="h-7 text-xs" /></div>
         <div><Label className="text-xs">Total (€)</Label><Input type="number" value={local.total_linea || ''} onChange={e => setLocal(p => ({ ...p, total_linea: e.target.value }))} className="h-7 text-xs" /></div>
       </div>
@@ -82,6 +89,7 @@ const GastosScanner = ({ navigate }) => {
   const [loadingData, setLoadingData] = useState(true);
   const [currentEmpleadoId, setCurrentEmpleadoId] = useState(null);
   const [lineas, setLineas] = useState([]);
+  const [ocrResult, setOcrResult] = useState(null);
   const { toast } = useToast();
 
   // Modal de crear proveedor nuevo
@@ -93,6 +101,7 @@ const GastosScanner = ({ navigate }) => {
   const [formData, setFormData] = useState({
     proveedor_id: '',
     proveedor_nombre_ocr: '',
+    proveedor_cif_ocr: '',
     numero_factura: '',
     fecha_emision: '',
     monto_bruto: '',
@@ -131,6 +140,7 @@ const GastosScanner = ({ navigate }) => {
       if (preview) URL.revokeObjectURL(preview);
       setPreview(URL.createObjectURL(selectedFile));
       setLineas([]);
+      setOcrResult(null);
       setFormData(prev => ({ ...prev, numero_factura: '', fecha_emision: '', total_con_iva: '', iva: '', monto_bruto: '', concepto: '' }));
     }
   };
@@ -152,6 +162,7 @@ const GastosScanner = ({ navigate }) => {
     setIsAnalyzing(true);
     try {
       const result = await analyzeInvoice(file);
+      setOcrResult(result);
 
       // Intentar match de proveedor
       // Buscar SIEMPRE por CIF primero — normalizar eliminando todo excepto letras y números
@@ -180,6 +191,7 @@ const GastosScanner = ({ navigate }) => {
         monto_bruto: result.subtotal || (result.total && result.iva_importe ? (result.total - result.iva_importe).toFixed(2) : ''),
         proveedor_id: foundProvider ? foundProvider.id : '',
         proveedor_nombre_ocr: result.proveedor_nombre || '',
+        proveedor_cif_ocr: result.proveedor_cif || '',
         concepto: result.proveedor_nombre || '',
       }));
 
@@ -204,6 +216,7 @@ const GastosScanner = ({ navigate }) => {
           nombre: l.nombre || '',
           categoria: l.categoria || 'materiales',
           cantidad: l.cantidad || 1,
+          unidad: l.unidad || 'ud',
           precio_unitario: l.precio_unitario || 0,
           total_linea: l.total_linea || 0,
         })));
@@ -258,7 +271,7 @@ const GastosScanner = ({ navigate }) => {
   };
 
   const handleAddLinea = () => {
-    setLineas(prev => [...prev, { referencia: '', nombre: '', categoria: 'materiales', cantidad: 1, precio_unitario: 0, total_linea: 0 }]);
+    setLineas(prev => [...prev, { referencia: '', nombre: '', categoria: 'materiales', cantidad: 1, unidad: 'ud', precio_unitario: 0, total_linea: 0 }]);
   };
 
   const handleSave = async () => {
@@ -270,102 +283,147 @@ const GastosScanner = ({ navigate }) => {
       toast({ variant: "destructive", title: "Proveedor requerido", description: "Selecciona un proveedor." });
       return;
     }
+    if (!currentEmpleadoId) {
+      toast({ variant: "destructive", title: "Usuario no identificado", description: "No se ha podido relacionar tu sesión con un empleado." });
+      return;
+    }
+    if (!file) {
+      toast({ variant: "destructive", title: "Documento requerido", description: "Adjunta la foto o PDF de la factura." });
+      return;
+    }
+    if (formData.proyecto_id === 'general') {
+      toast({ variant: "destructive", title: "Obra requerida", description: "Las facturas de materiales deben asignarse a una obra." });
+      return;
+    }
+    if (lineas.length === 0) {
+      toast({ variant: "destructive", title: "Sin materiales", description: "Revisa el OCR y añade al menos una línea de material." });
+      return;
+    }
+
+    const lineaIncompleta = lineas.find(l => (
+      !l.referencia?.trim()
+      || !l.nombre?.trim()
+      || !l.unidad
+      || Number(l.cantidad) <= 0
+      || Number(l.precio_unitario) < 0
+    ));
+
+    if (lineaIncompleta) {
+      toast({
+        variant: "destructive",
+        title: "Línea pendiente de revisar",
+        description: "Cada material necesita referencia, descripción, unidad, cantidad y precio.",
+      });
+      return;
+    }
+
+    const baseImponible = Number(formData.monto_bruto);
+    const totalFactura = Number(formData.total_con_iva);
+    const ivaImporte = Number(formData.iva_importe || (totalFactura - baseImponible));
+
+    if (!Number.isFinite(baseImponible) || baseImponible <= 0 || !Number.isFinite(totalFactura) || totalFactura <= 0) {
+      toast({ variant: "destructive", title: "Importes incorrectos", description: "Revisa la base imponible y el total." });
+      return;
+    }
+
+    if (Math.abs((baseImponible + ivaImporte) - totalFactura) > 0.02) {
+      toast({ variant: "destructive", title: "La factura no cuadra", description: "La base imponible más el IVA debe coincidir con el total." });
+      return;
+    }
 
     setIsSaving(true);
+    let uploadedPath = null;
     try {
-      // 1. Guardar cabecera en gastos
-      const { data: gastoData, error: gastoError } = await supabase.from('gastos').insert({
-        proveedor_id: formData.proveedor_id,
-        numero_factura: formData.numero_factura,
-        fecha_emision: formData.fecha_emision,
-        fecha_vencimiento: formData.fecha_emision || null,
-        monto_bruto: parseFloat(formData.monto_bruto) || 0,
-        iva: parseFloat(formData.iva) || 0.21, // porcentaje decimal: 0.21 = 21%
-        concepto: formData.concepto,
-        estado_pago: 'pendiente_pago',
-        proyecto_id: formData.proyecto_id === 'general' ? null : formData.proyecto_id,
-        gasto_nave_taller: formData.proyecto_id === 'general',
-      }).select().single();
-
-      if (gastoError) throw gastoError;
-
-      // 2. Guardar líneas de factura
-      if (lineas.length > 0) {
-        const lineasInsert = lineas.filter(l => l.nombre).map(l => ({
-          gasto_id: gastoData.id,
-          proveedor_id: formData.proveedor_id,
-          referencia: l.referencia || null,
-          nombre: l.nombre,
-          categoria: l.categoria || null,
-          cantidad: parseFloat(l.cantidad) || 1,
-          precio_unitario: parseFloat(l.precio_unitario) || 0,
-          total_linea: parseFloat(l.total_linea) || 0,
-        }));
-
-        const { error: lineasError } = await supabase.from('factura_lineas').insert(lineasInsert);
-        if (lineasError) console.error('Error guardando líneas:', lineasError);
-
-        // 3. Actualizar catálogo del proveedor
-        for (const l of lineas.filter(l => l.nombre)) {
-          const { data: existente } = await supabase
-            .from('catalogo_proveedor_productos')
-            .select('id, veces_comprado')
-            .eq('proveedor_id', formData.proveedor_id)
-            .eq('referencia', l.referencia || '')
-            .maybeSingle();
-
-          if (existente) {
-            await supabase.from('catalogo_proveedor_productos').update({
-              nombre: l.nombre,
-              categoria: l.categoria || null,
-              ultimo_precio: parseFloat(l.precio_unitario) || 0,
-              ultima_compra: formData.fecha_emision || new Date().toISOString().split('T')[0],
-              veces_comprado: (existente.veces_comprado || 0) + 1,
-              updated_at: new Date().toISOString(),
-            }).eq('id', existente.id);
-          } else {
-            await supabase.from('catalogo_proveedor_productos').insert({
-              proveedor_id: formData.proveedor_id,
-              referencia: l.referencia || null,
-              nombre: l.nombre,
-              categoria: l.categoria || null,
-              ultimo_precio: parseFloat(l.precio_unitario) || 0,
-              ultima_compra: formData.fecha_emision || new Date().toISOString().split('T')[0],
-              veces_comprado: 1,
-              updated_at: new Date().toISOString(),
-            });
-          }
-        }
+      const { data: duplicateCheck, error: duplicateError } = await supabase.rpc('flopy_verificar_factura_duplicada', {
+        p_proveedor_nif: formData.proveedor_cif_ocr || null,
+        p_numero_factura: formData.numero_factura,
+        p_total: totalFactura,
+      });
+      if (duplicateError) throw duplicateError;
+      if (duplicateCheck?.duplicada) {
+        toast({
+          variant: "destructive",
+          title: "Factura ya registrada",
+          description: `La factura ${formData.numero_factura} ya existe y no se ha vuelto a guardar.`,
+        });
+        return;
       }
 
-      // 4. Subir imagen de la factura
-      if (file && gastoData) {
-        const fileExt = file.name.split('.').pop();
-        const filePath = `gastos/${gastoData.id}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage.from('facturas_ocr').upload(filePath, file);
-        if (!uploadError) {
-          const { data: urlData } = supabase.storage.from('facturas_ocr').getPublicUrl(filePath);
-          if (urlData?.publicUrl) {
-            await supabase.from('adjuntos').insert({
-              entidad_id: gastoData.id,
-              tipo_entidad: 'gasto',
-              nombre_archivo: file.name,
-              url_almacenamiento: urlData.publicUrl,
-              fecha_subida: new Date().toISOString(),
-              subido_por_empleado_id: currentEmpleadoId
-            });
-          }
+      const rawExtension = file.name.split('.').pop()?.toLowerCase() || 'bin';
+      const fileExtension = /^[a-z0-9]+$/.test(rawExtension) ? rawExtension : 'bin';
+      uploadedPath = `materiales/${currentEmpleadoId}/${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('facturas_ocr')
+        .upload(uploadedPath, file, { contentType: file.type, upsert: false });
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage.from('facturas_ocr').getPublicUrl(uploadedPath);
+      if (!urlData?.publicUrl) throw new Error('No se pudo obtener la URL del documento.');
+
+      const lineasOcr = lineas.map((l, index) => {
+        const cantidad = Number(l.cantidad);
+        const precioUnitario = Number(l.precio_unitario);
+        const baseLinea = Number(l.total_linea || (cantidad * precioUnitario));
+        return {
+          numero_linea: index + 1,
+          referencia: l.referencia.trim(),
+          descripcion: l.nombre.trim(),
+          categoria: l.categoria || 'materiales',
+          cantidad,
+          unidad: l.unidad || 'ud',
+          precio_unitario: precioUnitario,
+          base_linea: baseLinea,
+          total_linea: baseLinea,
+          es_material: true,
+        };
+      });
+
+      const { data: intakeResult, error: intakeError } = await supabase.rpc('ia360_registrar_factura_materiales_desde_ocr', {
+        p_subido_por: currentEmpleadoId,
+        p_obra_id: formData.proyecto_id,
+        p_proveedor_id: formData.proveedor_id,
+        p_imagen_url: urlData.publicUrl,
+        p_proveedor_nombre: formData.proveedor_nombre_ocr || proveedores.find(p => p.id === formData.proveedor_id)?.nombre || null,
+        p_proveedor_nif: formData.proveedor_cif_ocr || proveedores.find(p => p.id === formData.proveedor_id)?.cif || null,
+        p_numero_factura: formData.numero_factura,
+        p_fecha_factura: formData.fecha_emision,
+        p_base_imponible: baseImponible,
+        p_iva_importe: ivaImporte,
+        p_total: totalFactura,
+        p_json_ocr: ocrResult || {},
+        p_lineas: lineasOcr,
+        p_confianza_ocr: Number(ocrResult?.confianza_ocr || ocrResult?.confianza) || null,
+        p_motor_ocr: 'openai_vision',
+      });
+      if (intakeError) throw intakeError;
+
+      if (!intakeResult?.ok) {
+        if (uploadedPath) {
+          await supabase.storage.from('facturas_ocr').remove([uploadedPath]);
+          uploadedPath = null;
         }
+        if (intakeResult?.duplicada) {
+          toast({ variant: "destructive", title: "Factura duplicada", description: "La factura ya estaba registrada y no se ha creado otra copia." });
+          return;
+        }
+        throw new Error(intakeResult?.error || 'No se pudo registrar la factura.');
       }
 
-      toast({ title: "Factura guardada", description: `${lineas.length} líneas guardadas en el catálogo del proveedor.` });
+      toast({
+        title: "Factura de materiales contabilizada",
+        description: `${intakeResult.lineas_validadas || lineas.length} líneas asignadas a la obra, auditadas y preparadas para Contasimple.`,
+      });
 
       // Reset
-      setFile(null); setPreview(null); setLineas([]);
-      setFormData({ proveedor_id: '', proveedor_nombre_ocr: '', numero_factura: '', fecha_emision: '', monto_bruto: '', iva: 0.21, iva_importe: '', total_con_iva: '', concepto: '', proyecto_id: 'general' });
+      setFile(null); setPreview(null); setLineas([]); setOcrResult(null);
+      setFormData({ proveedor_id: '', proveedor_nombre_ocr: '', proveedor_cif_ocr: '', numero_factura: '', fecha_emision: '', monto_bruto: '', iva: 0.21, iva_importe: '', total_con_iva: '', concepto: '', proyecto_id: 'general' });
 
     } catch (err) {
       console.error(err);
+      if (uploadedPath) {
+        await supabase.storage.from('facturas_ocr').remove([uploadedPath]);
+      }
       toast({ variant: "destructive", title: "Error al guardar", description: err.message });
     } finally {
       setIsSaving(false);
@@ -379,7 +437,7 @@ const GastosScanner = ({ navigate }) => {
         <Button variant="ghost" size="icon" onClick={() => navigate && navigate(-1)}><ArrowLeft className="w-5 h-5" /></Button>
         <div>
           <h1 className="text-2xl font-bold">Escáner de Facturas</h1>
-          <p className="text-sm text-muted-foreground">Sube una foto, ticket o PDF — Claude extraerá todos los datos automáticamente</p>
+          <p className="text-sm text-muted-foreground">Sube una foto, ticket o PDF — la IA extraerá proveedor, referencias, unidades e importes</p>
         </div>
       </div>
 
@@ -418,9 +476,9 @@ const GastosScanner = ({ navigate }) => {
                   </div>
                   <div className="flex gap-2">
                     <Button className="flex-1" onClick={handleAnalyze} disabled={isAnalyzing}>
-                      {isAnalyzing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Analizando...</> : <><Scan className="w-4 h-4 mr-2" />Analizar con Claude</>}
+                      {isAnalyzing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Analizando...</> : <><Scan className="w-4 h-4 mr-2" />Analizar con IA</>}
                     </Button>
-                    <Button variant="outline" size="icon" onClick={() => { setFile(null); setPreview(null); setLineas([]); }}><Trash2 className="w-4 h-4" /></Button>
+                    <Button variant="outline" size="icon" onClick={() => { setFile(null); setPreview(null); setLineas([]); setOcrResult(null); }}><Trash2 className="w-4 h-4" /></Button>
                   </div>
                 </div>
               )}
@@ -478,7 +536,7 @@ const GastosScanner = ({ navigate }) => {
                 <Select value={formData.proyecto_id} onValueChange={v => setFormData(p => ({ ...p, proyecto_id: v }))}>
                   <SelectTrigger className="h-8 text-sm mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="general">General / Nave</SelectItem>
+                    <SelectItem value="general">Selecciona una obra</SelectItem>
                     {proyectos.map(p => <SelectItem key={p.id} value={p.id}>{p.nombre_proyecto}</SelectItem>)}
                   </SelectContent>
                 </Select>
@@ -496,7 +554,7 @@ const GastosScanner = ({ navigate }) => {
                     Líneas de producto
                     {lineas.length > 0 && <Badge variant="secondary" className="text-xs">{lineas.length}</Badge>}
                   </CardTitle>
-                  <CardDescription className="text-xs">Se guardarán en el catálogo del proveedor</CardDescription>
+                  <CardDescription className="text-xs">Referencia y unidad son obligatorias para comparar con el presupuesto</CardDescription>
                 </div>
                 <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleAddLinea}>
                   <Plus className="w-3 h-3 mr-1" />Añadir
@@ -519,7 +577,7 @@ const GastosScanner = ({ navigate }) => {
 
           {/* Botón guardar */}
           <Button className="w-full" size="lg" onClick={handleSave} disabled={isSaving || !formData.numero_factura || !formData.total_con_iva}>
-            {isSaving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Guardando...</> : <><Save className="w-4 h-4 mr-2" />Guardar factura y catálogo</>}
+            {isSaving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Contabilizando...</> : <><Save className="w-4 h-4 mr-2" />Guardar, auditar y asignar a obra</>}
           </Button>
         </div>
       </div>
@@ -535,7 +593,7 @@ const GastosScanner = ({ navigate }) => {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <p className="text-sm text-muted-foreground">
-              Claude ha detectado este proveedor en la factura pero no existe en tu base de datos. Revisa los datos y confirma para crearlo.
+              La IA ha detectado este proveedor en la factura pero no existe en tu base de datos. Revisa los datos y confirma para crearlo.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
