@@ -1,5 +1,6 @@
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': 'http://127.0.0.1:3000',
+  'Access-Control-Allow-Credentials': 'true',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
@@ -31,14 +32,47 @@ function getOutputText(payload: Record<string, unknown>) {
   return null;
 }
 
+async function authenticateRequest(req: Request) {
+  const authorization = req.headers.get('Authorization');
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY');
+
+  if (!authorization) {
+    return { ok: false, response: json({ error: 'unauthorized' }, 401) };
+  }
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return { ok: false, response: json({ error: 'Configuración de autenticación incompleta.' }, 500) };
+  }
+
+  const authResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      Authorization: authorization,
+      apikey: supabaseAnonKey,
+    },
+  });
+
+  if (!authResponse.ok) {
+    return { ok: false, response: json({ error: 'unauthorized' }, 401) };
+  }
+
+  return { ok: true as const };
+}
+
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', {
+      headers: {
+        ...corsHeaders,
+        'Access-Control-Allow-Headers':
+          req.headers.get('Access-Control-Request-Headers') || corsHeaders['Access-Control-Allow-Headers'],
+      },
+    });
+  }
   if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
 
   try {
-    if (!req.headers.get('Authorization')) {
-      return json({ error: 'unauthorized' }, 401);
-    }
+    const authentication = await authenticateRequest(req);
+    if (!authentication.ok) return authentication.response;
 
     const openaiApiKey = Deno.env.get('OPENAI_API_KEY');
     if (!openaiApiKey) {
