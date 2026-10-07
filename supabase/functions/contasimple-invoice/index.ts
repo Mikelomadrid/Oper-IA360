@@ -88,13 +88,18 @@ function safeFilename(sourceUrl: string, contentType: string) {
   return `factura.${extensionByType[contentType] || 'bin'}`;
 }
 
-function validateDocumentUrl(sourceUrl: string, supabaseUrl: string) {
+function getDocumentStoragePath(sourceUrl: string, supabaseUrl: string) {
   const source = new URL(sourceUrl);
   const project = new URL(supabaseUrl);
   const expectedPrefix = '/storage/v1/object/public/facturas_ocr/';
   if (source.origin !== project.origin || !source.pathname.startsWith(expectedPrefix)) {
     throw new Error('La factura no apunta al almacén autorizado facturas_ocr.');
   }
+  const storagePath = decodeURIComponent(source.pathname.slice(expectedPrefix.length));
+  if (!storagePath || storagePath.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new Error('La ruta del documento no es válida.');
+  }
+  return storagePath;
 }
 
 async function getContasimpleToken(apiKey: string) {
@@ -300,16 +305,19 @@ Deno.serve(async (request) => {
       }, 409);
     }
 
-    validateDocumentUrl(invoice.imagen_url, supabaseUrl);
-    const documentResponse = await fetch(invoice.imagen_url, { redirect: 'error' });
-    if (!documentResponse.ok) throw new Error(`No se pudo descargar el documento original (${documentResponse.status}).`);
-    const contentLength = Number(documentResponse.headers.get('content-length') || 0);
-    if (contentLength > MAX_DOCUMENT_BYTES) throw new Error('El documento supera el máximo de 20 MB.');
-    const documentBytes = new Uint8Array(await documentResponse.arrayBuffer());
+    const documentPath = getDocumentStoragePath(invoice.imagen_url, supabaseUrl);
+    const { data: documentBlob, error: documentError } = await adminClient.storage
+      .from('facturas_ocr')
+      .download(documentPath);
+    if (documentError || !documentBlob) {
+      throw new Error(`No se pudo descargar el documento original${documentError?.message ? `: ${documentError.message}` : '.'}`);
+    }
+    if (documentBlob.size > MAX_DOCUMENT_BYTES) throw new Error('El documento supera el máximo de 20 MB.');
+    const documentBytes = new Uint8Array(await documentBlob.arrayBuffer());
     if (documentBytes.byteLength === 0 || documentBytes.byteLength > MAX_DOCUMENT_BYTES) {
       throw new Error('El documento está vacío o supera el máximo de 20 MB.');
     }
-    const contentType = (documentResponse.headers.get('content-type') || '').split(';')[0].toLowerCase();
+    const contentType = (documentBlob.type || '').split(';')[0].toLowerCase();
     if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
       throw new Error(`Formato no permitido para OCR: ${contentType || 'desconocido'}.`);
     }
