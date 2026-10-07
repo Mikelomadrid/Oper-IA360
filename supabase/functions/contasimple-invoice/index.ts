@@ -334,7 +334,8 @@ Deno.serve(async (request) => {
     form.append('invoiceClass', '600');
     form.append('comments', `ERP IA360 · factura ${facturaId}`);
 
-    const uploadPayload = await callContasimple(token, '/ocr/receivedInvoice', {
+    const uploadQuery = new URLSearchParams({ period, invoiceClass: '600' });
+    const uploadPayload = await callContasimple(token, `/ocr/receivedInvoice?${uploadQuery.toString()}`, {
       method: 'POST',
       body: form,
     });
