@@ -14,7 +14,7 @@ import {
     Users, WalletCards as IdCard, Megaphone, UserPlus, Clock, FileText,
     AlertCircle, Settings, HardDrive, Bug, Home, Inbox, Calendar,
     ChevronDown, Building, Truck, Banknote, Receipt, Table2, Ruler, UserX,
-    Target, Folder, Loader2, BadgeCheck
+    Target, Folder, Loader2, BadgeCheck, BrainCircuit
 } from 'lucide-react';
 
 const icons = {
@@ -22,7 +22,7 @@ const icons = {
     ClipboardCheck, Image, Package, Grid, Layers, PackageOpen, Tool,
     ArrowLeftRight, Wrench, Handshake, Users, IdCard, Megaphone, UserPlus,
     Clock, FileText, AlertCircle, Settings, HardDrive, Bug, Home, Inbox, Calendar,
-    Building, Truck, Banknote, Receipt, Table2, Ruler, UserX, Target, Folder, BadgeCheck
+    Building, Truck, Banknote, Receipt, Table2, Ruler, UserX, Target, Folder, BadgeCheck, BrainCircuit
 };
 
 const SidebarSkeleton = () => (
@@ -36,21 +36,12 @@ const SidebarSkeleton = () => (
     </div>
 );
 
-/**
- * Task 5: Helper to auto-detect section from current route.
- * Looks for the deepest matching path in menu items and returns its parent key.
- */
 const detectSectionFromRoute = (pathname, items) => {
     if (!items || items.length === 0) return null;
-
-    // Sort items by path length descending so specific paths (/a/b) match before generic ones (/a)
     const sortedItems = [...items].sort((a, b) => (b.path?.length || 0) - (a.path?.length || 0));
-
     const activeItem = sortedItems.find(item =>
         item.path && (pathname === item.path || (item.path !== '/' && pathname.startsWith(item.path)))
     );
-
-    // Task 6: If active item is a root (no parent), we return null to close other sections
     return activeItem ? activeItem.parent : null;
 };
 
@@ -58,21 +49,14 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
     const { appShellData } = useAppShell();
     const [menuItems, setMenuItems] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
-
-    // Task 1: Refactored State Management
-    // Previous logic might have allowed multiple sections or relied on complex derivation.
-    // New Logic: Single source of truth 'expandedSectionKey' (string | null).
-    // - string: The key of the currently open section (e.g., 'gestion', 'personal').
-    // - null: All sections are collapsed.
-    // This strictly enforces the "at most one section open" rule (Task 3).
     const [expandedSectionKey, setExpandedSectionKey] = useState(null);
 
     const location = useLocation();
     const { user } = useAuth();
 
     const [activeLeadsCount, setActiveLeadsCount] = useState(0);
+    const [ausenciasPendientesCount, setAusenciasPendientesCount] = useState(0);
 
-    // --- 1. Fetch Technician Assigned Leads Count ---
     useEffect(() => {
         const fetchLeadsCount = async () => {
             if (sessionRole?.rol === 'tecnico') {
@@ -82,16 +66,10 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                         .select('*', { count: 'exact', head: true })
                         .eq('estado', 'nuevo')
                         .eq('archivado', false);
-
-                    if (!error) {
-                        setActiveLeadsCount(count || 0);
-                    }
-                } catch (err) {
-                    // Silent error handling
-                }
+                    if (!error) setActiveLeadsCount(count || 0);
+                } catch (err) {}
             }
         };
-
         if (user?.id) {
             fetchLeadsCount();
             const interval = setInterval(fetchLeadsCount, 60000);
@@ -99,7 +77,46 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
         }
     }, [sessionRole, user?.id]);
 
-    // --- 2. Menu Fetching Logic ---
+    // Contador ausencias pendientes (solo admin/encargado)
+    useEffect(() => {
+        if (!user?.id) return;
+        const isAdminOrEncargado = sessionRole?.rol === 'admin' || sessionRole?.rol === 'encargado';
+        if (!isAdminOrEncargado) return;
+
+        const fetchAusencias = async () => {
+            try {
+                const { count } = await supabase
+                    .from('vacaciones_solicitudes')
+                    .select('*', { count: 'exact', head: true })
+                    .eq('estado', 'pendiente');
+                setAusenciasPendientesCount(count || 0);
+            } catch (err) {}
+        };
+
+        fetchAusencias();
+        const interval = setInterval(fetchAusencias, 60000);
+
+        // Realtime
+        const channelName = 'sidebar-ausencias-pendientes';
+
+        // Si ya existe un canal con este nombre (doble montaje, remount rápido, etc.),
+        // lo quitamos primero para evitar "cannot add postgres_changes callbacks after subscribe()"
+        const existingChannel = supabase.getChannels().find(ch => ch.topic === `realtime:${channelName}`);
+        if (existingChannel) {
+            supabase.removeChannel(existingChannel);
+        }
+
+        const channel = supabase
+            .channel(channelName)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'vacaciones_solicitudes' }, fetchAusencias)
+            .subscribe();
+
+        return () => {
+            clearInterval(interval);
+            supabase.removeChannel(channel);
+        };
+    }, [user?.id, sessionRole]);
+
     useEffect(() => {
         if (!user?.id) {
             setMenuItems([]);
@@ -158,6 +175,42 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                         orden: 63,
                         icon: 'Clock'
                     });
+
+                    // ── NÓMINAS: solo visible para admin ──
+                    if (sessionRole?.rol === 'admin') {
+                        items = items.filter(item => item.key !== 'nominas');
+                        items.push({
+                            key: 'nominas',
+                            label: 'NÓMINAS',
+                            path: '/personal/nominas',
+                            parent: 'personal',
+                            orden: 70,
+                            icon: 'Banknote'
+                        });
+                    }
+                }
+
+                // ── MI FICHAJE: reutiliza la pantalla de fichaje de técnicos para el admin ──
+                if (sessionRole?.rol === 'admin' && !items.some(i => i.path === '/personal/fichajes')) {
+                    items.push({
+                        key: 'mi_fichaje',
+                        label: 'MI FICHAJE',
+                        path: '/personal/fichajes',
+                        parent: null,
+                        orden: 9,
+                        icon: 'Clock'
+                    });
+                }
+
+                if (['admin', 'encargado'].includes(sessionRole?.rol) && !items.some(i => i.key === 'control_ia')) {
+                    items.push({
+                        key: 'control_ia',
+                        label: 'CONTROL IA360',
+                        path: '/control-ia',
+                        parent: null,
+                        orden: 7,
+                        icon: 'BrainCircuit'
+                    });
                 }
 
                 items = items.map(item => {
@@ -175,7 +228,7 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                         label: 'CRONOGRAMA GLOBAL',
                         path: '/gestion/cronograma-global',
                         parent: 'gestion',
-                        orden: 25, // After Obras (usually 20)
+                        orden: 25,
                         icon: 'Calendar'
                     });
                 }
@@ -204,6 +257,22 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                 }
 
                 if (sessionRole?.rol === 'finca_admin') {
+                    items = items.map(item => {
+                        if (item.key === 'leads') return { ...item, parent: null, orden: 5 };
+                        return item;
+                    });
+
+                    if (!items.some(i => i.key === 'leads')) {
+                        items.push({
+                            key: 'leads',
+                            label: 'LEADS',
+                            path: '/crm/leads',
+                            parent: null,
+                            orden: 5,
+                            icon: 'Megaphone'
+                        });
+                    }
+
                     if (!items.some(i => i.key === 'carpetas')) {
                         items.push({
                             key: 'carpetas',
@@ -220,9 +289,7 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                 setMenuItems(items);
 
             } catch (err) {
-                if (err.name !== 'AbortError') {
-                    // Error handling
-                }
+                if (err.name !== 'AbortError') {}
             } finally {
                 setIsLoading(false);
             }
@@ -232,12 +299,9 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
         return () => controller.abort();
     }, [user?.id, sessionRole]);
 
-    // Hierarchical Data Organization
     const { roots, childrenByParent } = useMemo(() => {
         const sortedItems = [...menuItems].sort((a, b) => (a.orden || 9999) - (b.orden || 9999));
-
         const roots = sortedItems.filter(item => !item.parent && item.key !== 'dashboard');
-
         const childrenByParent = new Map();
         sortedItems.forEach(item => {
             if (item.parent) {
@@ -247,46 +311,30 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                 childrenByParent.get(item.parent).push(item);
             }
         });
-
         childrenByParent.forEach((children) => {
             children.sort((a, b) => (a.orden || 9999) - (b.orden || 9999));
         });
-
         return { roots, childrenByParent };
     }, [menuItems]);
 
-    // Task 2 & 3: Single Toggle Function
     const toggleSection = (key) => {
-        // If clicking same section -> Close it (null)
-        // If clicking new section -> Open it (key)
-        // This implicitly closes any other open section because state is a single string.
         setExpandedSectionKey(prev => prev === key ? null : key);
     };
 
-    // Task 5: Auto-expand based on route
-    // Replaces previous manual initialization logic.
-    // Runs on every route change to keep sidebar in sync.
     useEffect(() => {
         if (menuItems.length > 0) {
-            // Task 5: Detect parent section of current route
             const targetSection = detectSectionFromRoute(location.pathname, menuItems);
-
-            // Task 7: Only update state if it differs to avoid redundant renders, 
-            // effectively handling auto-close if route belongs to root item (targetSection = null)
-            // or auto-expand if route belongs to submenu (targetSection = 'parent_key').
             if (targetSection !== expandedSectionKey) {
                 setExpandedSectionKey(targetSection);
             }
         }
-        // Task 8: Dependency array ensures this runs on route change (navigation) or menu load.
-        // 'expandedSectionKey' is purposefully excluded to avoid cycles, but included in the if check.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [menuItems, location.pathname]);
 
-    // Helper to determine active status and badge
     const getItemProps = (item) => {
         const isInbox = item.key === 'bandeja-entrada';
         const isLeads = item.key === 'mis_leads';
+        const isAusencias = item.key === 'ausencias' || item.path === '/gestion/ausencias';
 
         const isActive = item.path && (
             location.pathname === item.path ||
@@ -302,6 +350,9 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
         } else if (isLeads) {
             badgeCount = activeLeadsCount;
             badgeVariant = 'secondary';
+        } else if (isAusencias) {
+            badgeCount = ausenciasPendientesCount;
+            badgeVariant = 'destructive';
         }
 
         return { isActive, badgeCount, badgeVariant };
@@ -323,21 +374,16 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
 
                         const children = childrenByParent.get(rootItem.key) || [];
                         const hasChildren = children.length > 0;
-
                         const isExpanded = expandedSectionKey === rootItem.key;
 
-                        // --- Case A - Root is a Link (no children) ---
-                        // Task 6: Clicking a top-level section with no submenu closes others.
                         if (rootItem.path && typeof rootItem.path === 'string' && !hasChildren) {
                             if (!rootItem.path) return null;
-
                             return (
                                 <div key={rootItem.key} className={containerClass}>
                                     <Link
                                         to={rootItem.path}
                                         onClick={() => {
                                             setActiveModule(rootItem.path);
-                                            // Task 6: Close any open accordion when clicking a root link
                                             setExpandedSectionKey(null);
                                         }}
                                         className={cn(
@@ -356,7 +402,6 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                             );
                         }
 
-                        // --- Case B - Root is a Section Header (Accordion) ---
                         return (
                             <div key={rootItem.key} className={cn("space-y-1", containerClass)}>
                                 <button
@@ -391,16 +436,11 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                                                 {children.map((childItem) => {
                                                     const SubIcon = icons[childItem.icon] || Target;
                                                     const childProps = getItemProps(childItem);
-
                                                     if (!childItem.path) return null;
-
                                                     return (
                                                         <Link
                                                             key={childItem.key}
                                                             to={childItem.path}
-                                                            // Task 4: Navigation inside subsection does NOT close parent
-                                                            // because setActiveModule doesn't touch expandedSectionKey state,
-                                                            // and detectSectionFromRoute will re-confirm the parent should be open.
                                                             onClick={() => setActiveModule(childItem.path)}
                                                             className={cn(
                                                                 "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all hover:bg-muted/50 hover:text-primary ml-4",

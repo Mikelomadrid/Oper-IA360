@@ -13,21 +13,30 @@ import { es } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import PhotoUploadModal from '@/components/PhotoUploadModal';
 
-const AsyncImage = ({ path, alt, className }) => {
+// Resuelve la ruta relativa dentro de un bucket dado. Antes solo se contemplaba
+// 'partes-data'; ahora una foto puede venir heredada de un lead y vivir en
+// 'lead_fotos' o 'lead_docs', así que hay que quitar el prefijo del bucket correcto.
+const cleanPathForBucket = (path, bucket) => {
+    if (!path) return path;
+    const marker = `${bucket}/`;
+    return path.includes(marker) ? path.split(marker)[1] : path;
+};
+
+const AsyncImage = ({ path, bucket = 'partes-data', alt, className }) => {
     const [src, setSrc] = useState(null);
     useEffect(() => {
         let mounted = true;
         const load = async () => {
             try {
                 if (!path) return;
-                let cleanPath = path.includes('partes-data/') ? path.split('partes-data/')[1] : path;
-                const { data } = await supabase.storage.from('partes-data').createSignedUrl(cleanPath, 3600);
+                const cleanPath = cleanPathForBucket(path, bucket);
+                const { data } = await supabase.storage.from(bucket).createSignedUrl(cleanPath, 3600);
                 if (mounted && data?.signedUrl) setSrc(data.signedUrl);
             } catch (e) {}
         };
         load();
         return () => { mounted = false; };
-    }, [path]);
+    }, [path, bucket]);
     if (!src) return <div className={cn("bg-muted animate-pulse", className)} />;
     return <img src={src} alt={alt} className={className} />;
 };
@@ -77,13 +86,27 @@ const PartePhotoGallery = ({ parteId }) => {
             const { error: upErr } = await supabase.storage.from('partes-data').upload(filePath, file);
             if (upErr) throw upErr;
 
-            await supabase.from('partes_archivos').insert({
+            const { error: dbErr } = await supabase.from('partes_archivos').insert({
                 parte_id: parteId,
                 archivo_url: filePath,
                 nombre_archivo: file.name,
                 tipo_archivo: file.type,
                 subido_por: empId
+                // bucket se deja en su DEFAULT ('partes-data'), que es correcto aquí.
             });
+
+            if (dbErr) {
+                // Evita dejar archivos huérfanos si falla el registro asociado.
+                const { error: cleanupErr } = await supabase.storage
+                    .from('partes-data')
+                    .remove([filePath]);
+
+                if (cleanupErr) {
+                    console.error('No se pudo limpiar el archivo tras fallar el registro:', cleanupErr);
+                }
+
+                throw dbErr;
+            }
             count++;
         }
         toast({ title: "Éxito", description: `${count} fotos subidas.` });
@@ -97,11 +120,17 @@ const PartePhotoGallery = ({ parteId }) => {
   const handleDelete = async () => {
     if (!photoToDelete) return;
     try {
-      let path = photoToDelete.archivo_url;
-      if (path.includes('partes-data/')) path = path.split('partes-data/')[1];
-      await supabase.storage.from('partes-data').remove([path]);
+      const bucket = photoToDelete.bucket || 'partes-data';
+      // Si la foto es propia del parte (bucket 'partes-data'), se borra también el
+      // archivo físico. Si es una foto/documento HEREDADO del lead (bucket
+      // 'lead_fotos' o 'lead_docs'), es solo una referencia: no se toca el archivo
+      // original del lead, solo se quita el vínculo de este parte.
+      if (bucket === 'partes-data') {
+        const path = cleanPathForBucket(photoToDelete.archivo_url, bucket);
+        await supabase.storage.from(bucket).remove([path]);
+      }
       await supabase.from('partes_archivos').delete().eq('id', photoToDelete.id);
-      toast({ title: "Eliminada" });
+      toast({ title: bucket === 'partes-data' ? "Eliminada" : "Quitada de este parte (el archivo original del lead no se ha borrado)" });
       setPhotos(prev => prev.filter(p => p.id !== photoToDelete.id));
     } catch (e) {
       toast({ variant: "destructive", title: "Error", description: "No se pudo eliminar." });
@@ -111,8 +140,9 @@ const PartePhotoGallery = ({ parteId }) => {
   };
 
   const openPreview = async (photo) => {
-    let path = photo.archivo_url.includes('partes-data/') ? photo.archivo_url.split('partes-data/')[1] : photo.archivo_url;
-    const { data } = await supabase.storage.from('partes-data').createSignedUrl(path, 3600);
+    const bucket = photo.bucket || 'partes-data';
+    const path = cleanPathForBucket(photo.archivo_url, bucket);
+    const { data } = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
     if (data?.signedUrl) {
         setSelectedPhoto({ ...photo, signedUrl: data.signedUrl });
         setPreviewOpen(true);
@@ -133,7 +163,12 @@ const PartePhotoGallery = ({ parteId }) => {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {photos.map(p => (
             <Card key={p.id} className="relative aspect-square overflow-hidden cursor-pointer group" onClick={() => openPreview(p)}>
-                <AsyncImage path={p.archivo_url} className="w-full h-full object-cover"/>
+                <AsyncImage path={p.archivo_url} bucket={p.bucket || 'partes-data'} className="w-full h-full object-cover"/>
+                {p.bucket && p.bucket !== 'partes-data' && (
+                    <Badge variant="secondary" className="absolute top-1 left-1 text-[9px] px-1.5 py-0 h-4 bg-indigo-100 text-indigo-700 border-indigo-200">
+                        Del lead
+                    </Badge>
+                )}
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition-opacity">
                     <Button variant="secondary" size="icon" className="rounded-full" onClick={(e) => {e.stopPropagation(); openPreview(p);}}><Maximize2 className="w-4 h-4"/></Button>
                     {canUpload && <Button variant="destructive" size="icon" className="rounded-full" onClick={(e) => {e.stopPropagation(); setPhotoToDelete(p); setDeleteDialogOpen(true);}}><Trash2 className="w-4 h-4"/></Button>}
@@ -145,7 +180,21 @@ const PartePhotoGallery = ({ parteId }) => {
 
       <PhotoUploadModal isOpen={isUploadModalOpen} onClose={() => setIsUploadModalOpen(false)} onPhotosSelected={handlePhotosSelected} />
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Eliminar foto</AlertDialogTitle></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={handleDelete} className="bg-destructive">Eliminar</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>
+                    {photoToDelete?.bucket && photoToDelete.bucket !== 'partes-data'
+                        ? 'Quitar foto heredada del lead'
+                        : 'Eliminar foto'}
+                </AlertDialogTitle>
+                {photoToDelete?.bucket && photoToDelete.bucket !== 'partes-data' && (
+                    <p className="text-sm text-muted-foreground">
+                        Esta foto viene del lead original. Se quitará de este parte, pero el archivo seguirá existiendo en el lead.
+                    </p>
+                )}
+            </AlertDialogHeader>
+            <AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={handleDelete} className="bg-destructive">Eliminar</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
       </AlertDialog>
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="max-w-5xl bg-black/95 border-none p-0 flex justify-center items-center h-[80vh]">

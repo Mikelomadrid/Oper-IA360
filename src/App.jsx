@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { AuthProvider, useAuth } from '@/contexts/SupabaseAuthContext';
 import { NetworkStatusProvider } from '@/contexts/NetworkStatusContext';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
-import { NotificationProvider } from '@/contexts/NotificationContext';
+import { NotificationProvider, useNotification } from '@/contexts/NotificationContext';
 import { AppShellProvider, useAppShell } from '@/contexts/AppShellContext';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import LogoOperIA360 from '@/components/LogoOperIA360';
@@ -30,7 +30,7 @@ const AuthCallback = React.lazy(() => import('@/components/AuthCallback'));
 const MyProfile = React.lazy(() => import('@/components/MyProfile'));
 const ControlHorasView = React.lazy(() => import('@/components/HorasExtras2View'));
 const HorasExtras2View = React.lazy(() => import('@/components/HorasExtras2View'));
-
+const ContabilidadView = React.lazy(() => import('@/views/ContabilidadView'));
 const LeadDetail = React.lazy(() => import('@/components/LeadDetail'));
 const SharedProjectSettlementTab = React.lazy(() => import('@/components/SharedProjectSettlementTab'));
 const GlobalGanttView = React.lazy(() => import('@/components/GlobalGanttView'));
@@ -65,6 +65,8 @@ const MaterialRequests = React.lazy(() => import('@/components/MaterialRequests'
 const SolicitudesHerramientasView = React.lazy(() => import('@/components/SolicitudesHerramientasView'));
 const RepairWorkshopView = React.lazy(() => import('@/views/RepairWorkshopView'));
 const MisHerramientas = React.lazy(() => import('@/components/MisHerramientas'));
+const EntregasEmpleado = React.lazy(() => import('@/components/EntregasEmpleado'));
+const FirmaEntregaEmpleado = React.lazy(() => import('@/components/FirmaEntregaEmpleado'));
 const ToolDetailView = React.lazy(() => import('@/components/ToolDetailView'));
 const ToolTransfersView = React.lazy(() => import('@/components/ToolTransfersView'));
 
@@ -90,6 +92,7 @@ const MedicionesPage = React.lazy(() => import('@/components/MedicionesPage'));
 const InicioView = React.lazy(() => import('@/components/private/InicioView'));
 const BandejaEntradaView = React.lazy(() => import('@/components/private/BandejaEntradaView'));
 const CalendarioPrivadoView = React.lazy(() => import('@/components/private/CalendarioPrivadoView'));
+const CentroControlIA = React.lazy(() => import('@/components/CentroControlIA'));
 
 // --- New Finca Admin Components ---
 const CarpetasPage = React.lazy(() => import('@/components/finca/CarpetasPage'));
@@ -97,15 +100,16 @@ const CarpetasPage = React.lazy(() => import('@/components/finca/CarpetasPage'))
 // --- TEMPORARY TEST SCREENS ---
 const TestControlHorarioExtras = React.lazy(() => import('@/components/TestControlHorarioExtras'));
 
+// ── NÓMINAS ──
+const NominasTab = React.lazy(() => import('@/components/NominasTab'));
+
 // --- LAYOUT COMPONENTS ---
 
 const AppHeader = ({ onMenuClick, navigate }) => {
   const { signOut } = useAuth();
   const { appShellData } = useAppShell();
+  const { unreadCount } = useNotification();
   const [openTheme, setOpenTheme] = useState(false);
-
-  // Use data from AppShellContext
-  const unreadCount = appShellData?.notificaciones?.total_no_leidas || 0;
 
   const handleLogout = async () => {
     toast({ title: 'Cerrando sesión...' });
@@ -130,7 +134,6 @@ const AppHeader = ({ onMenuClick, navigate }) => {
         </div>
         <div className="flex items-center gap-2 relative">
 
-          {/* Inbox Icon with Badge from Shell Data */}
           <Button variant="ghost" size="icon" onClick={() => navigate('/inbox')} className="relative">
             <NotificationBadge count={unreadCount} variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 text-[10px]">
               <Bell className="w-5 h-5" />
@@ -202,6 +205,7 @@ const getActiveModule = (path, user) => {
     { regex: /^\/gestion\/partes\/editar\/([a-fA-F0-9-]+)/, name: 'gestion/partes/editar' },
     { regex: /^\/gestion\/partes\/detail\/([a-fA-F0-9-]+)/, name: 'gestion/partes/detail' },
     { regex: /^\/inventario\/vehiculos\/([a-fA-F0-9-]+)/, name: 'inventario/vehiculos/detail' },
+    { regex: /^\/inventario\/mis-entregas\/([a-fA-F0-9-]+)/, name: 'inventario/mis-entregas/detail' },
     { regex: /^\/personal\/embargos\/([a-fA-F0-9-]+)/, name: 'personal/embargos/detail' },
     { regex: /^\/inventario\/herramientas\/([a-fA-F0-9-]+)/, name: 'inventario/herramientas/detail' },
     { regex: /^\/inventario\/materiales\/([a-fA-F0-9-]+)/, name: 'inventario/materiales/detail' },
@@ -215,6 +219,7 @@ const getActiveModule = (path, user) => {
 
   const staticRoutes = {
     '/inicio': 'inicio',
+    '/dashboard/tecnico': 'personal/fichajes',
     '/crm/leads': 'crm/leads',
     '/gestion/leads': 'crm/leads',
     '/crm/clientes': 'crm/clientes',
@@ -227,6 +232,7 @@ const getActiveModule = (path, user) => {
     '/gestion/partes/nuevo': 'gestion/partes/nuevo',
     '/gestion/actas-finalizacion': 'gestion/actas-finalizacion',
     '/gestion/acta-finalizacion': 'gestion/acta-finalizacion',
+    '/contabilidad': 'contabilidad',
 
     '/inventario/pedidos': 'inventario/pedidos',
 
@@ -246,6 +252,7 @@ const getActiveModule = (path, user) => {
     '/inventario/solicitudes': 'inventario/solicitudes',
 
     '/inventario/mis-herramientas': 'inventario/mis-herramientas',
+    '/inventario/entregas-empleado': 'inventario/entregas-empleado',
     '/inventario/traspasos': 'inventario/traspasos',
     '/inventario/taller': 'inventario/taller',
 
@@ -259,6 +266,7 @@ const getActiveModule = (path, user) => {
     '/gestion/incidencias': 'gestion/incidencias',
 
     '/personal/documentacion': 'personal/documentacion',
+    '/personal/nominas': 'personal/nominas',
 
     '/administracion/documentacion': 'administracion/documentacion',
     '/administracion/gastos': 'administracion/gastos',
@@ -276,6 +284,7 @@ const getActiveModule = (path, user) => {
     '/bandeja-entrada': 'bandeja-entrada',
     '/inbox': 'bandeja-entrada',
     '/calendario-privado': 'calendario-privado',
+    '/control-ia': 'control-ia',
 
     '/prueba-extras': 'prueba-extras',
 
@@ -287,6 +296,7 @@ const getActiveModule = (path, user) => {
   if (path === '/' || path === '/dashboard') return { name: 'inicio' };
   if (path.startsWith('/gestion/partes')) return { name: 'gestion/partes' };
   if (path.startsWith('/crm/leads')) return { name: 'crm/leads' };
+  if (path.startsWith('/gestion/leads')) return { name: 'crm/leads' };
   if (path.startsWith('/inventario/herramientas')) return { name: 'inventario/catalogo' };
   if (path.startsWith('/inventario/solicitudes')) return { name: 'inventario/solicitudes' };
 
@@ -337,6 +347,7 @@ const AppContent = () => {
         '/inbox',
         '/bandeja-entrada',
         '/crm/leads',
+        '/gestion/leads',
         '/carpetas'
       ];
       const isAllowed = allowedPaths.some(p => currentPath.startsWith(p));
@@ -440,7 +451,7 @@ const AppContent = () => {
             <main className="flex-1 p-0 w-full relative">
               <ErrorBoundary>
                 <Suspense fallback={<ModuleLoader />}>
-                  {user && (
+                  {user && sessionRole?.loaded && (
                     <Suspense fallback={null}>
                       <NotificationsHandler />
                     </Suspense>
@@ -452,7 +463,7 @@ const AppContent = () => {
                         case 'login': return <Login navigate={navigate} />;
                         case 'reset-password': return <ResetPassword navigate={navigate} />;
                         case 'auth-callback': return <AuthCallback navigate={navigate} />;
-
+                        
                         case 'crm/leads': return <Leads navigate={navigate} />;
                         case 'crm/leads/detail': return <LeadDetail leadId={activeModule.id} navigate={navigate} />;
                         case 'crm/clientes': return <Clients navigate={navigate} />;
@@ -499,6 +510,7 @@ const AppContent = () => {
                         case 'personal/incidencias': return <AdminIncidencias />;
                         case 'personal/documentacion': return <PersonalDocuments />;
                         case 'personal/ausencias': return <EmployeeAusencias />;
+                        case 'personal/nominas': return <NominasTab />;
 
                         case 'inventario/vehiculos': return <Vehiculos navigate={navigate} />;
                         case 'inventario/vehiculos/detail': return <VehiculoDetail vehiculoId={activeModule.id} navigate={navigate} />;
@@ -510,11 +522,14 @@ const AppContent = () => {
                         case 'inventario/solicitudes': return <SolicitudesHerramientasView navigate={navigate} />;
 
                         case 'inventario/mis-herramientas': return <MisHerramientas navigate={navigate} />;
+                        case 'inventario/entregas-empleado': return <EntregasEmpleado navigate={navigate} />;
+                        case 'inventario/mis-entregas/detail': return <FirmaEntregaEmpleado entregaId={activeModule.id} navigate={navigate} />;
                         case 'inventario/traspasos': return <ToolTransfersView navigate={navigate} />;
                         case 'inventario/taller': return <RepairWorkshopView navigate={navigate} />;
 
                         case 'administracion/documentacion': return <AdminDocumentacion />;
                         case 'administracion/gastos': return <GastosView navigate={navigate} />;
+                        case 'contabilidad': return <ContabilidadView navigate={navigate} />;
                         case 'administracion/gastos/scanner': return <GastosScanner navigate={navigate} />;
 
                         case 'mediciones': return <MedicionesPage />;
@@ -523,6 +538,9 @@ const AppContent = () => {
                         case 'estado-sistema': return <InicioView />;
                         case 'bandeja-entrada': return <BandejaEntradaView />;
                         case 'calendario-privado': return <CalendarioPrivadoView />;
+                        case 'control-ia':
+                          if (!['admin', 'encargado'].includes(sessionRole?.rol)) return <Navigate to="/inicio" />;
+                          return <CentroControlIA navigate={navigate} />;
 
                         case 'prueba-extras': return <TestControlHorarioExtras />;
 

@@ -6,7 +6,7 @@ import {
     User, HardHat, Image, X, Send, Trash2, PenTool, FileDown,
     Clock, Play, Square, Timer, FileText, Pencil, Package, AlertCircle,
     History, Megaphone, ArchiveRestore, FolderArchive, Wrench,
-    Camera, File, Users, CalendarCheck
+    Camera, File, Users, CalendarCheck, Euro
 } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -38,7 +38,8 @@ import ParteDocuments from '@/components/ParteDocuments';
 import ParteAssignmentManager from '@/components/ParteAssignmentManager';
 import ScheduleVisitModal from '@/components/ScheduleVisitModal';
 
-import { fmtMadrid, formatCurrency } from '@/lib/utils';
+import { fmtMadrid, formatCurrency, cn } from '@/lib/utils';
+import selloFirmaEmpresa from '@/assets/sello_firma_orkaled.png';
 import html2pdf from 'html2pdf.js';
 import { differenceInMinutes } from 'date-fns';
 import { getStatusColor, getStatusTextColor, getStatusLabel } from '@/utils/statusColors';
@@ -168,9 +169,24 @@ const ParteDetail = ({ navigate, parteId }) => {
     const [converting, setConverting] = useState(false);
     const [existingLeadId, setExistingLeadId] = useState(null);
 
+    const [markingCobrado, setMarkingCobrado] = useState(false);
+
     const [existingFilesCount, setExistingFilesCount] = useState(0);
     const [closureFile, setClosureFile] = useState(null);
-    const [parteImages, setParteImages] = useState([]);
+    const [parteImages, setParteImages] = useState([]); // Evidencia de cierre (para el PDF)
+    const [galleryPhotos, setGalleryPhotos] = useState([]); // Galería completa del parte (para el selector)
+
+    // Evidencia de cierre: 'nueva' (foto tomada/subida en el momento) o 'existente'
+    // (elige una de las fotos ya subidas al parte durante la visita).
+    const [evidenceMode, setEvidenceMode] = useState('nueva');
+    const [selectedExistingFiles, setSelectedExistingFiles] = useState([]);
+
+    const toggleExistingFile = (img) => {
+        setSelectedExistingFiles(prev => {
+            const exists = prev.some(f => f.id === img.id);
+            return exists ? prev.filter(f => f.id !== img.id) : [...prev, img];
+        });
+    };
     
     const [closureData, setClosureData] = useState({
         descripcion_cierre: '',
@@ -182,7 +198,6 @@ const ParteDetail = ({ navigate, parteId }) => {
 
     const fileInputRef = useRef(null);
     const clienteCanvasRef = useRef(null);
-    const tecnicoCanvasRef = useRef(null);
     const isMounted = useRef(false);
     // Added refresh timer ref for debouncing
     const refreshTimerRef = useRef(null);
@@ -195,6 +210,17 @@ const ParteDetail = ({ navigate, parteId }) => {
     const isTechnician = sessionRole?.rol === 'tecnico';
     const canEditTimes = isAdminOrEncargado || isFincaAdmin;
     const canEdit = isAdminOrEncargado;
+    // El técnico asignado a este parte concreto puede cambiar su estado,
+    // igual que admin/encargado (la RLS y la RPC api_parte_cambiar_estado ya
+    // lo permitían; solo faltaba mostrarlo en el frontend).
+    const isAssignedTechnician = isTechnician && !!parte && parte.tecnico_asignado_id === sessionRole?.empleadoId;
+    const canEditStatus = isAdminOrEncargado || isAssignedTechnician;
+    const canCloseParte = isAdminOrEncargado || isAssignedTechnician || (
+        isFincaAdmin && !!parte && (
+            parte.administrador_finca_id === sessionRole?.empleadoId ||
+            parte.created_by === sessionRole?.empleadoId
+        )
+    );
 
    useEffect(() => {
     isMounted.current = true;
@@ -204,6 +230,17 @@ const ParteDetail = ({ navigate, parteId }) => {
     };
 }, []);
 
+    // Aviso de admin: al entrar a un parte como Mikelo, se marcan como leídos
+    // todos los avisos pendientes (comentario/cambio_estado/checkin/checkout/archivo)
+    // de este parte, para que desaparezca la bolita verde en listados y Kanban.
+    useEffect(() => {
+        if (!parteId || !isAdmin) return;
+        supabase
+            .rpc('api_marcar_avisos_leidos', { p_tipo_entidad: 'parte', p_entidad_id: parteId })
+            .then(({ error }) => {
+                if (error) console.error('Error marcando avisos de parte como leídos:', error);
+            });
+    }, [parteId, isAdmin]);
 
     const fetchFilesCount = useCallback(async () => {
         const { count, error } = await supabase
@@ -243,17 +280,17 @@ const ParteDetail = ({ navigate, parteId }) => {
         }
     }, [parteId]);
 
-    const getSecureUrl = async (pathOrUrl) => {
+    const getSecureUrl = async (pathOrUrl, bucket = 'partes-data') => {
         if (!pathOrUrl) return null;
         let path = pathOrUrl;
-        if (pathOrUrl.includes('/partes-data/')) {
+        if (pathOrUrl.includes(`/${bucket}/`)) {
             try {
-                path = pathOrUrl.split('/partes-data/')[1];
+                path = pathOrUrl.split(`/${bucket}/`)[1];
             } catch (e) { return null; }
         }
         
         if (path) {
-            const { data, error } = await supabase.storage.from('partes-data').createSignedUrl(path, 3600);
+            const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
             if (error) {
                 return null; 
             }
@@ -297,8 +334,10 @@ const ParteDetail = ({ navigate, parteId }) => {
 
             if (isMounted.current) setSessions(sessionsData || []);
 
-            const { data: matData } = await supabase
-                .from('detalles_solicitud')
+            // Vista operativa segura: el precio de coste solo se devuelve para
+            // admin/encargado. Los técnicos reciben el mismo campo como NULL.
+            const { data: matData, error: matError } = await supabase
+                .from('v_parte_materiales_operativos')
                 .select(`
                     id,
                     descripcion_personalizada,
@@ -306,26 +345,39 @@ const ParteDetail = ({ navigate, parteId }) => {
                     unidad,
                     material_id,
                     preparada,
-                    header:solicitudes_material!inner (
-                        id,
-                        fecha_solicitud,
-                        estado_solicitud,
-                        parte_id,
-                        notas
-                    ),
-                    material_info:materiales (
-                        nombre,
-                        precio_coste
-                    )
+                    solicitud_id,
+                    fecha_solicitud,
+                    estado_solicitud,
+                    parte_id,
+                    notas,
+                    material_nombre,
+                    precio_coste
                 `)
-                .eq('header.parte_id', parteId)
+                .eq('parte_id', parteId)
                 .order('id', { ascending: true });
 
-            if (isMounted.current) {
-                setMaterials(matData || []);
+            if (matError) {
+                console.error('Error cargando materiales operativos del parte:', matError);
             }
 
-            // --- FETCH PHOTOS FOR PDF (UNIFIED SOURCES) ---
+            if (isMounted.current) {
+                setMaterials((matData || []).map(item => ({
+                    ...item,
+                    header: {
+                        id: item.solicitud_id,
+                        fecha_solicitud: item.fecha_solicitud,
+                        estado_solicitud: item.estado_solicitud,
+                        parte_id: item.parte_id,
+                        notas: item.notas
+                    },
+                    material_info: {
+                        nombre: item.material_nombre,
+                        precio_coste: item.precio_coste
+                    }
+                })));
+            }
+
+            // --- FETCH PHOTOS ---
             const { data: filesData } = await supabase
                 .from('partes_archivos')
                 .select('*')
@@ -337,39 +389,60 @@ const ParteDetail = ({ navigate, parteId }) => {
                 .eq('parte_id', parteId)
                 .eq('tipo', 'archivo');
 
-            const archivePaths = new Set((filesData || []).map(f => f.archivo_url));
-            const mergedImages = [...(filesData || []).map(f => ({...f, origin: 'Galería'}))];
-
-            if (activityData) {
-                activityData.forEach(act => {
-                    try {
-                        const content = JSON.parse(act.contenido);
-                        if (content.path && !archivePaths.has(content.path)) {
-                            mergedImages.push({
-                                id: act.id,
-                                archivo_url: content.path,
-                                nombre_archivo: content.name || 'Evidencia Cierre',
-                                created_at: act.fecha_creacion,
-                                tipo_archivo: content.type,
-                                origin: 'Cierre',
-                                subido_por: act.usuario_id
-                            });
-                        }
-                    } catch(e) {}
-                });
+            // 1) Galería completa del parte (todas las fotos subidas durante la visita,
+            //    incluyendo las heredadas del lead que viven en otro bucket).
+            //    Se usa para el selector "De la galería" al cerrar el parte.
+            const processedGallery = await Promise.all((filesData || []).map(async (file) => {
+                const url = await getSecureUrl(file.archivo_url, file.bucket || 'partes-data');
+                const isImage = file.tipo_archivo?.startsWith('image/') ||
+                                file.nombre_archivo?.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+                return { ...file, url, isImage, origin: 'Galería' };
+            }));
+            if (isMounted.current) {
+                setGalleryPhotos(processedGallery.filter(f => f.isImage));
             }
-            
-            mergedImages.sort((a,b) => new Date(a.created_at) - new Date(b.created_at));
 
-            const processedFiles = await Promise.all(mergedImages.map(async (file) => {
-                const url = await getSecureUrl(file.archivo_url);
+            // Mapa path -> bucket para resolver el bucket real de las evidencias marcadas
+            // en partes_actividad (esa tabla no guarda el bucket, solo la ruta).
+            const bucketByPath = new Map((filesData || []).map(f => [f.archivo_url, f.bucket || 'partes-data']));
+
+            // 2) Evidencia de cierre (SOLO lo marcado explícitamente en partes_actividad
+            //    tipo='archivo': fotos nuevas subidas al cerrar, o fotos de la galería
+            //    elegidas como evidencia). Esto es lo que se pinta en el anexo del PDF.
+            const evidenceByPath = new Map();
+            (activityData || []).forEach(act => {
+                try {
+                    const content = JSON.parse(act.contenido);
+                    if (!content.path) return;
+                    evidenceByPath.set(content.path, {
+                        id: act.id,
+                        archivo_url: content.path,
+                        nombre_archivo: content.name || 'Evidencia Cierre',
+                        created_at: act.fecha_creacion,
+                        tipo_archivo: content.type,
+                        origin: 'Cierre',
+                        subido_por: act.usuario_id,
+                        bucket: bucketByPath.get(content.path) || 'partes-data'
+                    });
+                } catch(e) {}
+            });
+            const evidenceList = Array.from(evidenceByPath.values())
+                .sort((a,b) => new Date(a.created_at) - new Date(b.created_at));
+
+            // Fallback: partes cerrados ANTES de este cambio no tienen evidencia marcada
+            // explícitamente. En ese caso se sigue mostrando toda la galería, como antes,
+            // para no dejar sus PDFs ya generados sin fotos.
+            const evidenceSource = evidenceList.length > 0 ? evidenceList : (filesData || []).map(f => ({ ...f, origin: 'Galería' }));
+
+            const processedEvidence = await Promise.all(evidenceSource.map(async (file) => {
+                const url = await getSecureUrl(file.archivo_url, file.bucket || 'partes-data');
                 const isImage = file.tipo_archivo?.startsWith('image/') || 
                                 file.nombre_archivo?.match(/\.(jpg|jpeg|png|gif|webp)$/i);
                 return { ...file, url, isImage };
             }));
             
             if (isMounted.current) {
-                setParteImages(processedFiles.filter(f => f.isImage));
+                setParteImages(processedEvidence.filter(f => f.isImage));
             }
 
             const signatures = { cliente: null, tecnico: null };
@@ -443,6 +516,20 @@ const ParteDetail = ({ navigate, parteId }) => {
         const creatorPhone = parte.creador?.telefono || parte.telefono_contacto;
         const recipientName = parte.cliente_nombre || parte.creador?.nombre || 'Cliente';
         if (!creatorPhone) return;
+
+        // Evita que el entorno local/de desarrollo envíe mensajes reales por
+        // accidente. Las notificaciones externas se mantienen activas en los
+        // builds de producción y pueden habilitarse expresamente en desarrollo
+        // con VITE_ENABLE_EXTERNAL_NOTIFICATIONS=true cuando existan
+        // credenciales de prueba válidas en Supabase.
+        const externalNotificationsEnabled =
+            import.meta.env.PROD ||
+            import.meta.env.VITE_ENABLE_EXTERNAL_NOTIFICATIONS === 'true';
+
+        if (!externalNotificationsEnabled) {
+            console.info('Notificación externa omitida: entorno de desarrollo seguro.');
+            return;
+        }
 
         try {
             await supabase.functions.invoke('notify-technician', {
@@ -549,35 +636,43 @@ const ParteDetail = ({ navigate, parteId }) => {
     };
 
     const handleCloseParte = async () => {
-        const isFileRequired = existingFilesCount === 0 && !closureFile;
+        const isFileRequired = existingFilesCount === 0 && !closureFile && selectedExistingFiles.length === 0;
         
         if (!closureData.descripcion_cierre.trim()) { toast({ variant: 'destructive', title: 'Error', description: 'La descripción del cierre es obligatoria.' }); return; }
-        if (isFileRequired) { toast({ variant: 'destructive', title: 'Evidencia Requerida', description: 'Debes adjuntar al menos un archivo de evidencia final.' }); return; }
+        if (isFileRequired) { toast({ variant: 'destructive', title: 'Evidencia Requerida', description: 'Debes adjuntar o elegir al menos una foto de evidencia final.' }); return; }
         if (isCanvasEmpty(clienteCanvasRef)) { toast({ variant: 'destructive', title: 'Error', description: 'La firma del cliente es obligatoria.' }); return; }
-        if (isCanvasEmpty(tecnicoCanvasRef)) { toast({ variant: 'destructive', title: 'Error', description: 'Tu firma como técnico es obligatoria.' }); return; }
+
+        const uploadedPaths = [];
+        let cierreConfirmado = false;
 
         setSaving(true);
         try {
-            let fileInfo = null;
+            const evidenceItems = [];
             
-            if (closureFile) {
+            if (evidenceMode === 'nueva' && closureFile) {
                 const fileExt = closureFile.name.split('.').pop();
                 const filePath = `archivos/${parteId}/final_proof_${Date.now()}.${fileExt}`;
                 const { error: uploadError } = await supabase.storage.from('partes-data').upload(filePath, closureFile);
                 if (uploadError) throw new Error(`Error upload: ${uploadError.message}`);
+                uploadedPaths.push(filePath);
                 
-                fileInfo = JSON.stringify({
-                    path: filePath, name: closureFile.name, type: closureFile.type, comment: 'Evidencia final subida al cerrar el parte.'
+                evidenceItems.push({
+                    path: filePath,
+                    name: closureFile.name,
+                    type: closureFile.type,
+                    comment: 'Evidencia final subida al cerrar el parte.',
+                    registrar_archivo: true
                 });
+            }
 
-                // ALSO Insert into partes_archivos to unify gallery
-                await supabase.from('partes_archivos').insert({
-                    parte_id: parteId,
-                    archivo_url: filePath,
-                    nombre_archivo: closureFile.name,
-                    tipo_archivo: closureFile.type,
-                    subido_por: sessionRole?.empleadoId
-                });
+            if (evidenceMode === 'existente' && selectedExistingFiles.length > 0) {
+                evidenceItems.push(...selectedExistingFiles.map(f => ({
+                    path: f.archivo_url,
+                    name: f.nombre_archivo,
+                    type: f.tipo_archivo,
+                    comment: 'Evidencia final seleccionada de las fotos ya subidas al parte.',
+                    registrar_archivo: false
+                })));
             }
 
             const uploadSignature = async (canvasRef, prefix) => {
@@ -586,33 +681,47 @@ const ParteDetail = ({ navigate, parteId }) => {
                 const sigFileName = `firmas/${parteId}/${prefix}_${Date.now()}.png`; 
                 const { error: uploadError } = await supabase.storage.from('partes-data').upload(sigFileName, blob, { contentType: 'image/png', upsert: true });
                 if (uploadError) throw new Error(`Error firma ${prefix}: ${uploadError.message}`);
+                uploadedPaths.push(sigFileName);
                 return sigFileName;
             };
             const clienteFirmaPath = await uploadSignature(clienteCanvasRef, 'cliente');
-            const tecnicoFirmaPath = await uploadSignature(tecnicoCanvasRef, 'tecnico');
+            // El técnico ya no firma: en el PDF/vista de resolución se imprime el sello
+            // fijo de la empresa (selloFirmaEmpresa), no una firma manuscrita por parte.
 
             const { error: rpcError } = await supabase.rpc('api_parte_cerrar', {
                 p_parte_id: parteId,
                 p_descripcion_cierre: closureData.descripcion_cierre,
                 p_cliente_nombre: closureData.cliente_nombre,
                 p_firma_cliente: clienteFirmaPath,
-                p_firma_tecnico: tecnicoFirmaPath,
-                p_evidencia_file: fileInfo ? JSON.parse(fileInfo) : null
+                p_firma_tecnico: null,
+                p_evidencia_file: evidenceItems.length > 0 ? evidenceItems : null
             });
 
             if (rpcError) throw rpcError;
+            cierreConfirmado = true;
 
-            // Updated status to cerrado, which should map to VISITADO now in UI, but closing implies done?
-            // "Cerrar Parte" typically means job done. But user requested 'cerrado' -> 'VISITADO'.
-            setParte(prev => ({ ...prev, estado: 'cerrado' })); 
+            // Al cerrar parte el estado pasa a 'realizado' (lo fija la RPC api_parte_cerrar).
+            // Aquí solo actualizamos la UI de forma optimista para que coincida.
+            setParte(prev => ({ ...prev, estado: 'realizado' }));
 
             await handleNotifyClientOnClose();
 
             toast({ title: 'Parte Cerrado', description: 'El parte ha sido completado y cerrado. PDF disponible.' });
-            if (isMounted.current) setIsClosureModalOpen(false);
+            if (isMounted.current) {
+                setIsClosureModalOpen(false);
+                setClosureFile(null);
+                setSelectedExistingFiles([]);
+                setEvidenceMode('nueva');
+            }
             fetchData(); 
 
         } catch (error) {
+            if (!cierreConfirmado && uploadedPaths.length > 0) {
+                const { error: cleanupError } = await supabase.storage
+                    .from('partes-data')
+                    .remove(uploadedPaths);
+                if (cleanupError) console.warn('No se pudieron limpiar todos los archivos del cierre fallido.');
+            }
             handleError(error);
         } finally {
             if (isMounted.current) setSaving(false);
@@ -638,6 +747,29 @@ const ParteDetail = ({ navigate, parteId }) => {
             handleError(error);
         } finally {
             if (isMounted.current) setSaving(false);
+        }
+    };
+
+    const handleMarkAsCobrado = async () => {
+        setMarkingCobrado(true);
+        // Optimistic update
+        setParte(prev => ({ ...prev, estado: 'cobrado' }));
+        try {
+            const { error } = await supabase.rpc('api_parte_cambiar_estado', {
+                p_parte_id: parteId,
+                p_nuevo_estado: 'cobrado',
+                p_nota: null
+            });
+
+            if (error) throw error;
+
+            toast({ title: "Parte Cobrado", description: "El parte se ha marcado como cobrado y pasa al Archivo Histórico." });
+            fetchData();
+        } catch (error) {
+            handleError(error);
+            fetchData();
+        } finally {
+            if (isMounted.current) setMarkingCobrado(false);
         }
     };
 
@@ -716,6 +848,11 @@ const ParteDetail = ({ navigate, parteId }) => {
             setSaving(false);
         }
         
+        // Reset evidence picker state each time the closure modal is opened
+        setEvidenceMode('nueva');
+        setSelectedExistingFiles([]);
+        setClosureFile(null);
+
         // Proceed with normal closure
         setIsClosureModalOpen(true); 
         fetchFilesCount();
@@ -818,7 +955,7 @@ const ParteDetail = ({ navigate, parteId }) => {
                 .update({
                     visita_agendada_at: visitDate.toISOString(),
                     visita_agendada_by: user.id, // Storing auth.uid() as requested
-                    estado: 'en_curso'
+                    estado: 'visita_agendada'
                 })
                 .eq('id', parteId);
 
@@ -868,6 +1005,11 @@ const ParteDetail = ({ navigate, parteId }) => {
         return acc + calculateSessionMinutes(s.hora_entrada, s.hora_salida);
     }, 0);
 
+    // Fechas reales en las que se ha visitado (a partir de las sesiones de fichaje),
+    // sin duplicados y en orden cronológico. Distinto de parte.fecha_visita, que es
+    // la fecha AGENDADA, no la(s) fecha(s) en que realmente se fichó entrada.
+    const visitDates = [...new Set(sessions.map(s => fmtMadrid(s.hora_entrada, 'date')))];
+
     const formatMinutes = (mins) => {
         const h = Math.floor(mins / 60);
         const m = mins % 60;
@@ -916,7 +1058,8 @@ const ParteDetail = ({ navigate, parteId }) => {
     if (!parte) return <div className="p-8 text-center">Parte no encontrado</div>;
 
     const isDeleted = !!parte.deleted_at;
-    const isClosed = ['aceptado', 'cerrado', 'completado', 'finalizado'].includes(parte.estado?.toLowerCase());
+    // Estados que se consideran "cerrados": ocultan el botón Cerrar Parte / bloquean fichajes / muestran PDF.
+    const isClosed = ['realizado', 'aceptado', 'rechazado', 'cancelado', 'facturado', 'cerrado', 'cobrado'].includes(parte.estado?.toLowerCase());
     
     const canEditParte = isAdminOrEncargado || (isFincaAdmin && parte.created_by === sessionRole?.empleadoId);
 
@@ -924,14 +1067,8 @@ const ParteDetail = ({ navigate, parteId }) => {
         if (isDeleted) return <Badge variant="destructive" className="transition-colors duration-300">Eliminado</Badge>;
         
         let rawStatus = status?.toLowerCase() || 'contactado';
-        
-        // Force mapping for 'cerrado' -> 'VISITADO' or any other mapped state
-        const uiStatus = mapInternalToUI(rawStatus);
 
-        // Override logic for 'VISITA AGENDADA' based on DB state 'en_curso' + date present
-        if (rawStatus === 'en_curso' && parte.visita_agendada_at) {
-            return <Badge className="bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700">VISITA AGENDADA</Badge>;
-        }
+        const uiStatus = mapInternalToUI(rawStatus);
 
         if (parte.es_garantia && uiStatus === 'ACEPTADO') {
             const gColor = getStatusColor('garantia');
@@ -981,7 +1118,7 @@ const ParteDetail = ({ navigate, parteId }) => {
                                         {parte.archived_folder_path.split('/')[1]}
                                     </Badge>
                                 )}
-                                {isAdminOrEncargado && (
+                                {canEditStatus && (
                                     <Button 
                                         variant="ghost" 
                                         size="sm" 
@@ -1073,6 +1210,18 @@ const ParteDetail = ({ navigate, parteId }) => {
                             </Button>
                         )}
 
+                        {isAdminOrEncargado && !isDeleted && parte.estado?.toLowerCase() === 'facturado' && (
+                            <Button
+                                onClick={handleMarkAsCobrado}
+                                disabled={markingCobrado}
+                                className="bg-emerald-700 hover:bg-emerald-800 text-white border border-emerald-800 shadow-sm"
+                                size="sm"
+                            >
+                                {markingCobrado ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Euro className="w-4 h-4 mr-2" />}
+                                Marcar como Cobrado
+                            </Button>
+                        )}
+
                         {!isClosed && !isDeleted && parte.tecnico?.telefono && (
                             <Button 
                                 onClick={handleNotifyTechnician} 
@@ -1084,7 +1233,7 @@ const ParteDetail = ({ navigate, parteId }) => {
                             </Button>
                         )}
 
-                        {!isClosed && !isDeleted && (
+                        {canCloseParte && !isClosed && !isDeleted && (
                             <Button 
                                 onClick={initiateCloseParte} 
                                 className="bg-slate-900 hover:bg-slate-800 flex-1 sm:flex-none"
@@ -1375,10 +1524,8 @@ const ParteDetail = ({ navigate, parteId }) => {
                                                         ) : <span className="text-xs italic">Sin firma</span>}
                                                     </div>
                                                     <div className="flex-1 space-y-1">
-                                                        <Label className="text-xs text-muted-foreground">Técnico</Label>
-                                                        {signedSignatures.tecnico ? (
-                                                            <img src={signedSignatures.tecnico} className="h-16 object-contain" alt="Firma Técnico" crossOrigin="anonymous" />
-                                                        ) : <span className="text-xs italic">Sin firma</span>}
+                                                        <Label className="text-xs text-muted-foreground">Empresa Instaladora</Label>
+                                                        <img src={selloFirmaEmpresa} alt="Sello y Firma Empresa Instaladora" className="h-16 object-contain" />
                                                     </div>
                                                 </div>
                                             </CardContent>
@@ -1505,28 +1652,100 @@ const ParteDetail = ({ navigate, parteId }) => {
                             {existingFilesCount > 0 ? (
                                 <p className="text-xs text-gray-700 dark:text-muted-foreground italic">Opcional (ya hay archivos en bitácora).</p>
                             ) : (
-                                <p className="text-xs text-red-600 dark:text-red-400 font-bold">⚠️ Obligatorio: Sube una foto.</p>
+                                <p className="text-xs text-red-600 dark:text-red-400 font-bold">⚠️ Obligatorio: sube o elige una foto.</p>
                             )}
-                            <input type="file" ref={fileInputRef} className="hidden" onChange={handleModalFileSelect} accept="image/*,application/pdf" capture="environment" />
-                            {closureFile ? (
-                                <div className="flex items-center justify-between p-2 bg-blue-100 border border-blue-300 rounded text-sm dark:bg-blue-900/50 dark:border-blue-700">
-                                    <span className="truncate max-w-[200px]">{closureFile.name}</span>
-                                    <button type="button" onClick={handleClearModalFile} className="text-red-500"><X className="w-4 h-4" /></button>
-                                </div>
-                            ) : (
-                                <Button type="button" variant="outline" onClick={() => fileInputRef.current?.click()} className="w-full border-dashed border-yellow-500 text-yellow-700 dark:border-yellow-700 dark:text-yellow-300" disabled={saving}>
-                                    <Image className="w-4 h-4 mr-2" /> Subir Foto Final
+
+                            {/* Selector: foto nueva vs. elegir de las ya subidas al parte */}
+                            <div className="flex gap-2">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant={evidenceMode === 'nueva' ? 'default' : 'outline'}
+                                    className="flex-1"
+                                    onClick={() => { setEvidenceMode('nueva'); setSelectedExistingFiles([]); }}
+                                    disabled={saving}
+                                >
+                                    <Camera className="w-3.5 h-3.5 mr-1.5" /> Foto Nueva
                                 </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant={evidenceMode === 'existente' ? 'default' : 'outline'}
+                                    className="flex-1"
+                                    onClick={() => { setEvidenceMode('existente'); handleClearModalFile(); }}
+                                    disabled={saving || galleryPhotos.length === 0}
+                                    title={galleryPhotos.length === 0 ? 'Este parte todavía no tiene fotos subidas' : undefined}
+                                >
+                                    <Image className="w-3.5 h-3.5 mr-1.5" /> De la galería {galleryPhotos.length > 0 ? `(${galleryPhotos.length})` : ''}
+                                </Button>
+                            </div>
+                            {evidenceMode === 'existente' && (
+                                <p className="text-[11px] text-muted-foreground -mt-1">
+                                    Toca una o varias fotos para seleccionarlas
+                                    {selectedExistingFiles.length > 0 ? ` — ${selectedExistingFiles.length} seleccionada${selectedExistingFiles.length > 1 ? 's' : ''}` : ''}.
+                                </p>
+                            )}
+
+                            {evidenceMode === 'nueva' && (
+                                <>
+                                    <input type="file" ref={fileInputRef} className="hidden" onChange={handleModalFileSelect} accept="image/*,application/pdf" capture="environment" />
+                                    {closureFile ? (
+                                        <div className="flex items-center justify-between p-2 bg-blue-100 border border-blue-300 rounded text-sm dark:bg-blue-900/50 dark:border-blue-700">
+                                            <span className="truncate max-w-[200px]">{closureFile.name}</span>
+                                            <button type="button" onClick={handleClearModalFile} className="text-red-500"><X className="w-4 h-4" /></button>
+                                        </div>
+                                    ) : (
+                                        <Button type="button" variant="outline" onClick={() => fileInputRef.current?.click()} className="w-full border-dashed border-yellow-500 text-yellow-700 dark:border-yellow-700 dark:text-yellow-300" disabled={saving}>
+                                            <Image className="w-4 h-4 mr-2" /> Subir Foto Final
+                                        </Button>
+                                    )}
+                                </>
+                            )}
+
+                            {evidenceMode === 'existente' && (
+                                <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto p-1">
+                                    {galleryPhotos.length === 0 ? (
+                                        <p className="col-span-3 text-xs text-muted-foreground italic text-center py-4">
+                                            No hay fotos subidas todavía en este parte.
+                                        </p>
+                                    ) : (
+                                        galleryPhotos.map((img) => {
+                                            const isSelected = selectedExistingFiles.some(f => f.id === img.id);
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    key={img.id}
+                                                    onClick={() => toggleExistingFile(img)}
+                                                    disabled={saving}
+                                                    className={cn(
+                                                        "relative rounded-md overflow-hidden border-2 aspect-square bg-muted",
+                                                        isSelected ? "border-green-500 ring-2 ring-green-300" : "border-transparent hover:border-yellow-400"
+                                                    )}
+                                                    title={img.nombre_archivo}
+                                                >
+                                                    {img.url ? (
+                                                        <img src={img.url} alt={img.nombre_archivo} className="w-full h-full object-cover" />
+                                                    ) : (
+                                                        <div className="w-full h-full flex items-center justify-center text-[9px] text-muted-foreground p-1 text-center">
+                                                            Sin vista previa
+                                                        </div>
+                                                    )}
+                                                    {isSelected && (
+                                                        <div className="absolute top-1 right-1 bg-green-500 rounded-full p-0.5 shadow">
+                                                            <CheckCircle2 className="w-3 h-3 text-white" />
+                                                        </div>
+                                                    )}
+                                                </button>
+                                            );
+                                        })
+                                    )}
+                                </div>
                             )}
                         </div>
 
                         <div className="space-y-2">
                             <Label>Firma Cliente</Label>
                             <SignaturePad canvasRef={clienteCanvasRef} onClear={() => handleClearSignature(clienteCanvasRef)} title="Firma Cliente" />
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Firma Técnico</Label>
-                            <SignaturePad canvasRef={tecnicoCanvasRef} onClear={() => handleClearSignature(tecnicoCanvasRef)} title="Firma Técnico" />
                         </div>
                     </div>
 
@@ -1612,11 +1831,18 @@ const ParteDetail = ({ navigate, parteId }) => {
                                 <SelectValue placeholder="Selecciona estado" />
                             </SelectTrigger>
                             <SelectContent>
+                                <SelectItem value="NUEVO">NUEVO</SelectItem>
                                 <SelectItem value="CONTACTADO">CONTACTADO</SelectItem>
                                 <SelectItem value="VISITA AGENDADA">VISITA AGENDADA</SelectItem>
                                 <SelectItem value="VISITADO">VISITADO</SelectItem>
                                 <SelectItem value="PRESUPUESTADO">PRESUPUESTADO</SelectItem>
+                                <SelectItem value="REALIZADO">REALIZADO</SelectItem>
                                 <SelectItem value="ACEPTADO">ACEPTADO</SelectItem>
+                                <SelectItem value="RECHAZADO">RECHAZADO</SelectItem>
+                                <SelectItem value="CANCELADO">CANCELADO</SelectItem>
+                                <SelectItem value="FACTURADO">FACTURADO</SelectItem>
+                                <SelectItem value="COBRADO">COBRADO</SelectItem>
+                                <SelectItem value="CERRADO">CERRADO</SelectItem>
                             </SelectContent>
                         </Select>
                     </div>
@@ -1644,7 +1870,7 @@ const ParteDetail = ({ navigate, parteId }) => {
                             <p className="text-base font-mono text-gray-700 mt-1">{parte.custom_id || '#' + parte.id.substring(0,8)}</p>
                             <p className="text-[10px] mt-1">Fecha: <strong>{fmtMadrid(parte.created_at, 'date')}</strong></p>
                             <div className="mt-2 inline-block px-3 py-1 border border-black text-[10px] font-bold uppercase">
-                                {parte.es_garantia && (parte.estado === 'cerrado' || parte.estado === 'facturado' || parte.estado === 'finalizado') ? 'GARANTÍA' : mapInternalToUI(parte.estado)}
+                                {parte.es_garantia && (parte.estado === 'realizado' || parte.estado === 'facturado' || parte.estado === 'cobrado' || parte.estado === 'aceptado') ? 'GARANTÍA' : mapInternalToUI(parte.estado)}
                             </div>
                         </div>
                     </div>
@@ -1666,8 +1892,8 @@ const ParteDetail = ({ navigate, parteId }) => {
                                 <p><span className="text-gray-500">Técnico Asignado:</span><br/>
                                     {parte.tecnico ? `${parte.tecnico.nombre} ${parte.tecnico.apellidos || ''}` : 'Sin asignar'}
                                 </p>
-                                <p><span className="text-gray-500">Fecha Visita:</span><br/>
-                                    {parte.fecha_visita ? fmtMadrid(parte.fecha_visita) : 'Sin fecha'}
+                                <p><span className="text-gray-500">Fecha(s) de Visita:</span><br/>
+                                    {visitDates.length > 0 ? visitDates.join(', ') : 'Sin visitas registradas'}
                                 </p>
                                 <p><span className="text-gray-500">Generado por:</span><br/>
                                     {parte.creador ? `${parte.creador.nombre}` : '-'}
@@ -1751,7 +1977,7 @@ const ParteDetail = ({ navigate, parteId }) => {
                     )}
 
                     {isClosed && (
-                        <div className="mt-8 mb-8">
+                        <div className="mt-8 mb-8 avoid-break" style={{ pageBreakInside: 'avoid', breakInside: 'avoid-page', display: 'inline-block', width: '100%' }}>
                             <div className="grid grid-cols-2 gap-10">
                                 <div className="text-center">
                                     <div className="h-20 border-b border-black flex items-end justify-center mb-2">
@@ -1764,12 +1990,10 @@ const ParteDetail = ({ navigate, parteId }) => {
                                 </div>
                                 <div className="text-center">
                                     <div className="h-20 border-b border-black flex items-end justify-center mb-2">
-                                        {signedSignatures.tecnico ? (
-                                            <img src={signedSignatures.tecnico} className="h-16 object-contain" alt="Firma Técnico" crossOrigin="anonymous" />
-                                        ) : <span className="text-[10px] italic text-gray-400 mb-2">Sin firma</span>}
+                                        <img src={selloFirmaEmpresa} className="h-20 object-contain" alt="Sello y Firma Empresa Instaladora" />
                                     </div>
-                                    <p className="text-[10px] font-bold uppercase">Firma Técnico</p>
-                                    <p className="text-[9px]">{parte.tecnico?.nombre}</p>
+                                    <p className="text-[10px] font-bold uppercase">Firma de la Empresa Instaladora</p>
+                                    <p className="text-[9px]">ORKALED INSTALACIONES SLU</p>
                                 </div>
                             </div>
                         </div>
@@ -1778,14 +2002,19 @@ const ParteDetail = ({ navigate, parteId }) => {
                     {parteImages && parteImages.length > 0 && (
                         <div className="mt-8 page-break-before-always">
                             <h3 className="font-bold bg-gray-800 text-white p-2 text-[10px] uppercase mb-4 text-center">Anexo: Evidencias Fotográficas</h3>
-                            <div className="grid grid-cols-2 gap-4">
+                            {/* Lista vertical (1 columna) en vez de grid de 2 columnas: el modo
+                                'legacy' de html2pdf/jsPDF no respeta bien 'avoid-break' dentro de
+                                un CSS Grid, y las fotos aparecían partidas entre páginas. En una
+                                columna cada tarjeta es un bloque independiente y el salto de
+                                página la mueve entera a la siguiente hoja si no cabe. */}
+                            <div className="flex flex-col gap-4">
                                 {parteImages.map((img, idx) => (
                                     <div 
                                         key={idx} 
-                                        className="pdf-image-card avoid-break border p-2 flex flex-col items-center justify-center bg-gray-50 rounded h-fit"
-                                        style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}
+                                        className="pdf-image-card avoid-break border p-3 flex flex-col items-center justify-center bg-gray-50 rounded w-full"
+                                        style={{ pageBreakInside: 'avoid', breakInside: 'avoid-page', display: 'inline-block', width: '100%' }}
                                     >
-                                        <div className="relative w-full">
+                                        <div className="relative w-full flex justify-center">
                                             {img.origin === 'Cierre' && (
                                                 <div className="absolute top-0 right-0 bg-yellow-100 text-yellow-800 text-[8px] px-1.5 py-0.5 rounded-bl border border-yellow-200 z-10 font-bold uppercase">
                                                     Cierre
@@ -1795,7 +2024,7 @@ const ParteDetail = ({ navigate, parteId }) => {
                                                 <img 
                                                     src={img.url} 
                                                     alt={`Evidencia ${idx + 1}`} 
-                                                    className="max-h-[250px] object-contain max-w-full mb-2 border border-gray-200 bg-white" 
+                                                    className="max-h-[220px] object-contain max-w-full mb-2 border border-gray-200 bg-white"
                                                     crossOrigin="anonymous"
                                                 />
                                             ) : (
