@@ -126,7 +126,13 @@ async function callContasimple(token: string, endpoint: string, init: RequestIni
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = payload?.errorMessage || payload?.message || payload?.error || `HTTP ${response.status}`;
-    throw new Error(`ContaSimple devolvió un error: ${detail}`);
+    const code = payload?.errorCode || payload?.code;
+    const extra = payload?.extra;
+    const diagnostic = [
+      code ? `código ${String(code)}` : '',
+      extra ? `detalle ${typeof extra === 'string' ? extra : JSON.stringify(extra)}` : '',
+    ].filter(Boolean).join('; ');
+    throw new Error(`ContaSimple devolvió un error: ${detail}${diagnostic ? ` (${diagnostic})` : ''}`);
   }
   return payload;
 }
