@@ -160,11 +160,24 @@ Deno.serve(async (request) => {
       return json({ ok: false, code: 'invalid_session', message: 'La sesión no es válida.' }, 401);
     }
 
-    const { data: employee, error: employeeError } = await adminClient
+    let { data: employee, error: employeeError } = await adminClient
       .from('empleados')
       .select('id, rol, activo, baja')
       .eq('auth_user_id', userData.user.id)
       .maybeSingle();
+
+    // Algunas cuentas antiguas pueden conservar el correo correcto aunque el
+    // vínculo auth_user_id no se haya propagado todavía. El fallback sigue
+    // exigiendo una cuenta autenticada y un empleado activo con rol permitido.
+    if (!employee && !employeeError && userData.user.email) {
+      const fallback = await adminClient
+        .from('empleados')
+        .select('id, rol, activo, baja')
+        .ilike('email', userData.user.email.trim())
+        .maybeSingle();
+      employee = fallback.data;
+      employeeError = fallback.error;
+    }
     if (employeeError || !employee || employee.activo === false || employee.baja === true) {
       return json({ ok: false, code: 'forbidden', message: 'Usuario sin acceso al conector.' }, 403);
     }
