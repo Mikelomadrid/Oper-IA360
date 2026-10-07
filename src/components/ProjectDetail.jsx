@@ -218,7 +218,7 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
                         </TabsContent>
 
                         <TabsContent value="materiales" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
-                            <ProjectMaterialsView projectId={projectId} />
+                            <ProjectMaterialsView projectId={projectId} canManage={canManage} />
                         </TabsContent>
 
                         <TabsContent value="mano_obra" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">

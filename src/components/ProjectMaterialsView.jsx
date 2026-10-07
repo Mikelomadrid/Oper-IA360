@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import MaterialExpenseModal from '@/components/MaterialExpenseModal';
 import MaterialesExpenseTable from '@/components/MaterialesExpenseTable';
+import ProjectMaterialAudit from '@/components/ProjectMaterialAudit';
 import { toast } from '@/components/ui/use-toast';
 import {
   AlertDialog,
@@ -24,7 +25,7 @@ const formatCurrency = (amount) => {
     return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(amount || 0);
 };
 
-const ProjectMaterialsView = ({ projectId }) => {
+const ProjectMaterialsView = ({ projectId, canManage = false }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [expenseToEdit, setExpenseToEdit] = useState(null);
@@ -130,6 +131,8 @@ const ProjectMaterialsView = ({ projectId }) => {
 
     return (
         <div className="space-y-6 animate-in fade-in duration-500">
+            <ProjectMaterialAudit projectId={projectId} canManage={canManage} />
+
             {/* Header / Actions */}
             <div className="flex flex-col sm:flex-row justify-end items-center gap-4">
                  <Button 
