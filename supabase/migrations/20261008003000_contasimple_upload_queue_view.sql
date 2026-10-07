@@ -70,6 +70,7 @@ from base b
 left join public.facturas_gastos_contasimple_control c on c.factura_id = b.factura_id;
 
 grant select on public.v_contasimple_admin_bandeja_facturas to authenticated, service_role;
+grant select on public.v_contasimple_admin_resumen_facturas to authenticated, service_role;
 
 comment on view public.v_contasimple_admin_bandeja_facturas is
   'Bandeja ERP de facturas con trazabilidad del envío OCR a ContaSimple.';
