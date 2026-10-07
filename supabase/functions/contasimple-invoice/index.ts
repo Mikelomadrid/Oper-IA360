@@ -169,7 +169,7 @@ Deno.serve(async (request) => {
     // Algunas cuentas antiguas pueden conservar el correo correcto aunque el
     // vínculo auth_user_id no se haya propagado todavía. El fallback sigue
     // exigiendo una cuenta autenticada y un empleado activo con rol permitido.
-    if (!employee && !employeeError && userData.user.email) {
+    if (!employee && userData.user.email) {
       const fallback = await adminClient
         .from('empleados')
         .select('id, rol, activo, baja')
