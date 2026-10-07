@@ -7,6 +7,7 @@ import {
   CalendarClock,
   CheckCircle2,
   ClipboardList,
+  Euro,
   FileWarning,
   Loader2,
   Link2,
@@ -16,7 +17,11 @@ import {
   Wrench,
 } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
-import { testConnection as testContasimpleConnection } from '@/services/contasimpleService';
+import {
+  getFacturasEmitidas,
+  getFacturasRecibidas,
+  testConnection as testContasimpleConnection,
+} from '@/services/contasimpleService';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -46,6 +51,40 @@ const formatDate = (value) => {
   const date = validDate(value);
   if (!date) return 'Sin fecha';
   return new Intl.DateTimeFormat('es-ES', { day: '2-digit', month: 'short' }).format(date);
+};
+
+const formatCurrency = (value) => new Intl.NumberFormat('es-ES', {
+  style: 'currency',
+  currency: 'EUR',
+}).format(Number(value) || 0);
+
+const normalizeContasimpleRows = (payload) => {
+  const candidates = [
+    payload?.data,
+    payload?.items,
+    payload?.results,
+    payload?.invoices,
+    payload?.rows,
+    payload,
+  ];
+  return candidates.find(Array.isArray) || [];
+};
+
+const getInvoiceAmount = (invoice) => {
+  const candidates = [
+    invoice?.total,
+    invoice?.Total,
+    invoice?.totalAmount,
+    invoice?.TotalAmount,
+    invoice?.total_amount,
+    invoice?.grossAmount,
+    invoice?.amount,
+    invoice?.Amount,
+  ];
+  const value = candidates.find((candidate) => candidate !== null && candidate !== undefined && candidate !== '');
+  const normalized = typeof value === 'string' ? value.replace(/\s/g, '').replace(',', '.') : value;
+  const amount = Number(normalized);
+  return Number.isFinite(amount) ? amount : 0;
 };
 
 const buildRadar = ({ tareas, partes, leads, proyectos, gastos }) => {
@@ -272,6 +311,17 @@ const CentroControlIA = ({ navigate }) => {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [refreshMessage, setRefreshMessage] = useState('');
   const [contasimpleStatus, setContasimpleStatus] = useState({ state: 'idle', message: 'Pendiente de comprobación' });
+  const [contasimpleInvoices, setContasimpleInvoices] = useState({
+    state: 'idle',
+    issuedCount: 0,
+    receivedCount: 0,
+    issuedTotal: 0,
+    receivedTotal: 0,
+    issuedComplete: true,
+    receivedComplete: true,
+    loadedAt: null,
+    message: '',
+  });
   const feedbackTimerRef = useRef(null);
 
   const loadRadar = useCallback(async ({ silent = false } = {}) => {
@@ -335,6 +385,39 @@ const CentroControlIA = ({ navigate }) => {
     }
   }, []);
 
+  const loadContasimpleInvoices = useCallback(async () => {
+    const currentYearStart = `${new Date().getFullYear()}-01-01`;
+    setContasimpleInvoices((current) => ({ ...current, state: 'loading', message: '' }));
+    try {
+      const [issuedResult, receivedResult] = await Promise.all([
+        getFacturasEmitidas(currentYearStart),
+        getFacturasRecibidas(currentYearStart),
+      ]);
+      const issued = normalizeContasimpleRows(issuedResult?.data);
+      const received = normalizeContasimpleRows(receivedResult?.data);
+
+      setContasimpleStatus({ state: 'connected', message: 'Conectado en modo solo lectura' });
+      setContasimpleInvoices({
+        state: 'loaded',
+        issuedCount: issued.length,
+        receivedCount: received.length,
+        issuedTotal: issued.reduce((total, invoice) => total + getInvoiceAmount(invoice), 0),
+        receivedTotal: received.reduce((total, invoice) => total + getInvoiceAmount(invoice), 0),
+        issuedComplete: issuedResult?.meta?.complete !== false,
+        receivedComplete: receivedResult?.meta?.complete !== false,
+        loadedAt: new Date(),
+        message: '',
+      });
+    } catch (invoiceError) {
+      console.error('Error loading Contasimple invoices:', invoiceError);
+      setContasimpleInvoices((current) => ({
+        ...current,
+        state: 'error',
+        message: invoiceError?.message || 'No se pudieron leer las facturas.',
+      }));
+    }
+  }, []);
+
   const lanes = useMemo(() => ({
     urgente: items.filter((item) => item.lane === 'urgente'),
     proximo: items.filter((item) => item.lane === 'proximo'),
@@ -386,35 +469,83 @@ const CentroControlIA = ({ navigate }) => {
           </div>
         </header>
 
-        <section className="mb-5 flex flex-col gap-3 rounded-lg border border-border/60 bg-card px-4 py-3 sm:flex-row sm:items-center sm:justify-between" aria-label="Estado de Contasimple">
-          <div className="flex items-start gap-3">
-            <div className="rounded-md border border-border/50 bg-muted/35 p-2 text-primary">
-              <Link2 className="h-4 w-4" />
+        <section className="mb-5 rounded-lg border border-border/60 bg-card px-4 py-3" aria-label="Estado de Contasimple">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="rounded-md border border-border/50 bg-muted/35 p-2 text-primary">
+                <Link2 className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold">Contasimple</p>
+                <p className={cn(
+                  'mt-0.5 text-xs',
+                  contasimpleStatus.state === 'connected' && 'text-emerald-700 dark:text-emerald-300',
+                  contasimpleStatus.state === 'error' ? 'text-destructive' : 'text-muted-foreground',
+                )}>
+                  {contasimpleStatus.message}
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-semibold">Contasimple</p>
-              <p className={cn(
-                'mt-0.5 text-xs',
-                contasimpleStatus.state === 'connected' && 'text-emerald-700 dark:text-emerald-300',
-                contasimpleStatus.state === 'error' ? 'text-destructive' : 'text-muted-foreground',
-              )}>
-                {contasimpleStatus.message}
-              </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={checkContasimple}
+                disabled={contasimpleStatus.state === 'checking' || contasimpleInvoices.state === 'loading'}
+              >
+                {contasimpleStatus.state === 'checking'
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <Link2 className="h-4 w-4" />}
+                {contasimpleStatus.state === 'checking' ? 'Comprobando…' : 'Probar conexión'}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="gap-2"
+                onClick={loadContasimpleInvoices}
+                disabled={contasimpleInvoices.state === 'loading' || contasimpleStatus.state === 'checking'}
+              >
+                {contasimpleInvoices.state === 'loading'
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <Euro className="h-4 w-4" />}
+                {contasimpleInvoices.state === 'loading' ? 'Leyendo…' : 'Leer facturas del año'}
+              </Button>
             </div>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="gap-2"
-            onClick={checkContasimple}
-            disabled={contasimpleStatus.state === 'checking'}
-          >
-            {contasimpleStatus.state === 'checking'
-              ? <Loader2 className="h-4 w-4 animate-spin" />
-              : <Link2 className="h-4 w-4" />}
-            {contasimpleStatus.state === 'checking' ? 'Comprobando…' : 'Probar conexión'}
-          </Button>
+
+          {contasimpleInvoices.state === 'loaded' && (
+            <div className="mt-4 grid gap-3 border-t border-border/50 pt-4 sm:grid-cols-2 lg:grid-cols-4" aria-live="polite">
+              <div className="rounded-md bg-muted/25 px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Facturas emitidas</p>
+                <p className="mt-1 text-lg font-bold tabular-nums">{contasimpleInvoices.issuedCount}{contasimpleInvoices.issuedComplete ? '' : '+'}</p>
+              </div>
+              <div className="rounded-md bg-muted/25 px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Importe emitido</p>
+                <p className="mt-1 text-lg font-bold tabular-nums">{formatCurrency(contasimpleInvoices.issuedTotal)}</p>
+              </div>
+              <div className="rounded-md bg-muted/25 px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Facturas recibidas</p>
+                <p className="mt-1 text-lg font-bold tabular-nums">{contasimpleInvoices.receivedCount}{contasimpleInvoices.receivedComplete ? '' : '+'}</p>
+              </div>
+              <div className="rounded-md bg-muted/25 px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Importe recibido</p>
+                <p className="mt-1 text-lg font-bold tabular-nums">{formatCurrency(contasimpleInvoices.receivedTotal)}</p>
+              </div>
+              <p className="text-xs text-muted-foreground sm:col-span-2 lg:col-span-4">
+                Lectura temporal desde el 1 de enero. No se ha guardado ni modificado ningún dato.
+                {(!contasimpleInvoices.issuedComplete || !contasimpleInvoices.receivedComplete) && ' Contasimple ha limitado la respuesta; los recuentos e importes mostrados son parciales.'}
+                {contasimpleInvoices.loadedAt && ` Actualizado a las ${contasimpleInvoices.loadedAt.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}.`}
+              </p>
+            </div>
+          )}
+
+          {contasimpleInvoices.state === 'error' && (
+            <p className="mt-3 border-t border-border/50 pt-3 text-xs text-destructive" role="alert">
+              {contasimpleInvoices.message}
+            </p>
+          )}
         </section>
 
         {loading ? (

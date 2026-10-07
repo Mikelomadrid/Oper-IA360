@@ -62,6 +62,58 @@ async function callContasimple(token: string, endpoint: string) {
   return response.json();
 }
 
+function normalizeRows(payload: unknown) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [];
+  const record = payload as Record<string, unknown>;
+  const candidates = [record.data, record.items, record.results, record.invoices, record.rows];
+  return candidates.find(Array.isArray) || [];
+}
+
+async function readInvoicePages(token: string, resource: 'issued' | 'received', fromDate: string) {
+  const pageSize = 50;
+  const maxPages = 20;
+  const rows: unknown[] = [];
+  const seenIds = new Set<string>();
+  let pagesRead = 0;
+  let truncated = false;
+  let truncatedReason: 'repeated_page' | 'safety_limit' | null = null;
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const result = await callContasimple(
+      token,
+      `/accounting/invoices/${resource}/from?date=${encodeURIComponent(fromDate)}&page=${page}&pageSize=${pageSize}`,
+    );
+    const pageRows = normalizeRows(result);
+    pagesRead = page;
+
+    const uniqueRows = pageRows.filter((row) => {
+      const rawId = row && typeof row === 'object' ? (row as Record<string, unknown>).id : null;
+      if (rawId === null || rawId === undefined || rawId === '') return true;
+      const id = String(rawId);
+      if (seenIds.has(id)) return false;
+      seenIds.add(id);
+      return true;
+    });
+
+    if (pageRows.length > 0 && uniqueRows.length === 0) {
+      truncated = true;
+      truncatedReason = 'repeated_page';
+      break;
+    }
+
+    rows.push(...uniqueRows);
+
+    if (pageRows.length < pageSize) break;
+    if (page === maxPages) {
+      truncated = true;
+      truncatedReason = 'safety_limit';
+    }
+  }
+
+  return { rows, pagesRead, truncated, truncatedReason };
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -145,17 +197,22 @@ Deno.serve(async (request) => {
 
     if (action === 'invoices' || action === 'expenses') {
       const resource = action === 'invoices' ? 'issued' : 'received';
-      const result = await callContasimple(
-        contasimpleToken,
-        `/accounting/invoices/${resource}/from?date=${encodeURIComponent(fromDate)}&page=1&pageSize=50`,
-      );
+      const result = await readInvoicePages(contasimpleToken, resource, fromDate);
 
       return json({
         ok: true,
         provider: 'contasimple',
         mode: 'read_only',
         action,
-        data: result?.data || result || [],
+        data: result.rows,
+        meta: {
+          fromDate,
+          count: result.rows.length,
+          pagesRead: result.pagesRead,
+          truncated: result.truncated,
+          complete: !result.truncated,
+          truncatedReason: result.truncatedReason,
+        },
       });
     }
 

@@ -25,3 +25,12 @@ La función debe desplegarse exclusivamente en el proyecto de desarrollo
 - Prueba ejecutada desde una sesión administrativa del ERP.
 - Resultado mostrado en el Centro IA360: `Conectado en modo solo lectura`.
 - No se descargaron ni persistieron facturas durante esta prueba.
+
+## Lectura de facturas
+
+- Las acciones `invoices` y `expenses` consultan facturas emitidas y recibidas.
+- La lectura se pagina en bloques de 50 y se detiene al encontrar la última
+  página.
+- Existe un límite de seguridad de 20 páginas (1.000 registros por tipo).
+- La respuesta indica mediante `meta.truncated` si se alcanzó ese límite.
+- Los resultados se devuelven al navegador y no se guardan en el ERP.
