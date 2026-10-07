@@ -331,6 +331,7 @@ Deno.serve(async (request) => {
     const form = new FormData();
     form.append('file', new Blob([documentBytes], { type: contentType }), safeFilename(invoice.imagen_url, contentType));
     form.append('period', period);
+    form.append('invoiceClass', '600');
     form.append('comments', `ERP IA360 · factura ${facturaId}`);
 
     const uploadPayload = await callContasimple(token, '/ocr/receivedInvoice', {
