@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import {
   Loader2, Save, Scan, ArrowLeft, UploadCloud, Camera,
-  Trash2, FileText, Plus, Pencil, Check, X, Package, AlertCircle
+  Trash2, FileText, Plus, Pencil, Check, X, Package, AlertCircle,
+  Building2, CircleDollarSign, ListChecks, Warehouse
 } from 'lucide-react';
 import { analyzeInvoice } from '@/lib/openaiService';
 import { supabase } from '@/lib/customSupabaseClient';
@@ -15,11 +16,25 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { ProviderSelect } from '@/components/ProviderSelect';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import InvoiceLineDistribution, {
+  buildDefaultAssignments,
+  DestinationSelect,
+  parseDestino,
+} from '@/components/InvoiceLineDistribution';
 
 const CATEGORIAS = ['electricidad', 'fontanería', 'pintura', 'albañilería', 'herramientas', 'materiales', 'otro'];
 const UNIDADES = ['ud', 'm', 'm2', 'm3', 'kg', 'l', 'h', 'caja', 'rollo', 'pack'];
 
-const LineaEditable = ({ linea, index, onChange, onDelete }) => {
+const LineaEditable = ({
+  linea,
+  index,
+  onChange,
+  onDelete,
+  proyectos,
+  destinoPrincipal,
+  distribucionActiva,
+  onDistributionChange,
+}) => {
   const [editing, setEditing] = useState(false);
   const [local, setLocal] = useState(linea);
   const unidadesDisponibles = local.unidad && !UNIDADES.includes(local.unidad)
@@ -30,24 +45,44 @@ const LineaEditable = ({ linea, index, onChange, onDelete }) => {
   const handleCancel = () => { setLocal(linea); setEditing(false); };
 
   if (!editing) return (
-    <div className="flex items-center gap-2 p-2 rounded-lg bg-muted/30 hover:bg-muted/50 group text-sm">
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          {linea.referencia && <span className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground">{linea.referencia}</span>}
-          <span className="font-medium truncate">{linea.nombre}</span>
-          {linea.categoria && <Badge variant="outline" className="text-[10px] h-4 px-1">{linea.categoria}</Badge>}
+    <div className="rounded-lg bg-muted/30 p-2 text-sm transition-colors hover:bg-muted/50">
+      <div className="group flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            {linea.referencia && <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">{linea.referencia}</span>}
+            <span className="truncate font-medium">{linea.nombre}</span>
+            {linea.categoria && <Badge variant="outline" className="h-4 px-1 text-[10px]">{linea.categoria}</Badge>}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            <span>{linea.cantidad} {linea.unidad || 'ud'}</span>
+            <span>×</span>
+            <span>{Number(linea.precio_unitario || 0).toFixed(2)} €/ud</span>
+            <span className="font-semibold text-foreground">{Number(linea.total_linea || 0).toFixed(2)} €</span>
+            {!distribucionActiva && (
+              <InvoiceLineDistribution
+                linea={linea}
+                proyectos={proyectos}
+                destinoPrincipal={destinoPrincipal}
+                enabled={false}
+                onChange={onDistributionChange}
+              />
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-          <span>{linea.cantidad} {linea.unidad || 'ud'}</span>
-          <span>×</span>
-          <span>{Number(linea.precio_unitario || 0).toFixed(2)} €/ud</span>
-          <span className="font-semibold text-foreground">{Number(linea.total_linea || 0).toFixed(2)} €</span>
+        <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditing(true)}><Pencil className="h-3 w-3" /></Button>
+          <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => onDelete(index)}><Trash2 className="h-3 w-3" /></Button>
         </div>
       </div>
-      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditing(true)}><Pencil className="w-3 h-3" /></Button>
-        <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => onDelete(index)}><Trash2 className="w-3 h-3" /></Button>
-      </div>
+      {distribucionActiva && (
+        <InvoiceLineDistribution
+          linea={linea}
+          proyectos={proyectos}
+          destinoPrincipal={destinoPrincipal}
+          enabled
+          onChange={onDistributionChange}
+        />
+      )}
     </div>
   );
 
@@ -93,6 +128,8 @@ const GastosScanner = ({ navigate }) => {
   const [currentEmpleadoId, setCurrentEmpleadoId] = useState(null);
   const [lineas, setLineas] = useState([]);
   const [ocrResult, setOcrResult] = useState(null);
+  const [destinoPrincipal, setDestinoPrincipal] = useState('');
+  const [distribucionActiva, setDistribucionActiva] = useState(false);
   const { toast } = useToast();
 
   // Modal de crear proveedor nuevo
@@ -112,7 +149,6 @@ const GastosScanner = ({ navigate }) => {
     iva_importe: '',
     total_con_iva: '',
     concepto: '',
-    proyecto_id: 'general',
   });
 
   useEffect(() => {
@@ -144,6 +180,7 @@ const GastosScanner = ({ navigate }) => {
       setPreview(URL.createObjectURL(selectedFile));
       setLineas([]);
       setOcrResult(null);
+      setDistribucionActiva(false);
       setFormData(prev => ({ ...prev, numero_factura: '', fecha_emision: '', total_con_iva: '', iva: '', monto_bruto: '', concepto: '' }));
     }
   };
@@ -274,8 +311,34 @@ const GastosScanner = ({ navigate }) => {
   };
 
   const handleAddLinea = () => {
-    setLineas(prev => [...prev, { referencia: '', nombre: '', categoria: 'materiales', cantidad: 1, unidad: 'ud', precio_unitario: 0, total_linea: 0 }]);
+    setLineas(prev => [...prev, { referencia: '', nombre: '', categoria: 'materiales', cantidad: 1, unidad: 'ud', precio_unitario: 0, total_linea: 0, asignaciones: [] }]);
   };
+
+  const lineasConDestino = useMemo(() => lineas.map((linea) => ({
+    ...linea,
+    asignaciones: linea.asignaciones?.length
+      ? linea.asignaciones
+      : buildDefaultAssignments(linea, destinoPrincipal),
+  })), [lineas, destinoPrincipal]);
+
+  const resumenDestinos = useMemo(() => {
+    const resumen = { obras: new Set(), general: 0, almacen: 0, importeObras: 0 };
+    lineasConDestino.forEach((linea) => {
+      const precio = Number(linea.precio_unitario || 0);
+      linea.asignaciones.forEach((asignacion) => {
+        const importe = Number(asignacion.cantidad || 0) * precio;
+        if (asignacion.destino_tipo === 'obra') {
+          resumen.obras.add(asignacion.obra_id);
+          resumen.importeObras += importe;
+        } else if (asignacion.destino_tipo === 'general') {
+          resumen.general += importe;
+        } else if (asignacion.destino_tipo === 'almacen') {
+          resumen.almacen += importe;
+        }
+      });
+    });
+    return resumen;
+  }, [lineasConDestino]);
 
   const handleSave = async () => {
     if (!formData.numero_factura || !formData.total_con_iva) {
@@ -294,8 +357,8 @@ const GastosScanner = ({ navigate }) => {
       toast({ variant: "destructive", title: "Documento requerido", description: "Adjunta la foto o PDF de la factura." });
       return;
     }
-    if (formData.proyecto_id === 'general') {
-      toast({ variant: "destructive", title: "Obra requerida", description: "Las facturas de materiales deben asignarse a una obra." });
+    if (!parseDestino(destinoPrincipal)) {
+      toast({ variant: "destructive", title: "Destino requerido", description: "Selecciona una obra, gastos generales o almacén propio." });
       return;
     }
     if (lineas.length === 0) {
@@ -316,6 +379,26 @@ const GastosScanner = ({ navigate }) => {
         variant: "destructive",
         title: "Línea pendiente de revisar",
         description: "Cada material necesita referencia, descripción, unidad, cantidad y precio.",
+      });
+      return;
+    }
+
+    const repartoInvalido = lineasConDestino.find((linea) => {
+      if (!linea.asignaciones.length) return true;
+      const suma = linea.asignaciones.reduce((total, asignacion) => total + Number(asignacion.cantidad || 0), 0);
+      return Math.abs(suma - Number(linea.cantidad || 0)) > 0.001
+        || linea.asignaciones.some((asignacion) => (
+          Number(asignacion.cantidad || 0) <= 0
+          || !['obra', 'general', 'almacen'].includes(asignacion.destino_tipo)
+          || (asignacion.destino_tipo === 'obra' && !asignacion.obra_id)
+        ));
+    });
+
+    if (repartoInvalido) {
+      toast({
+        variant: "destructive",
+        title: "Distribución incompleta",
+        description: `Revisa el reparto de ${repartoInvalido.nombre || 'una línea'}: todas sus unidades deben tener destino.`,
       });
       return;
     }
@@ -364,7 +447,7 @@ const GastosScanner = ({ navigate }) => {
       const { data: urlData } = supabase.storage.from('facturas_ocr').getPublicUrl(uploadedPath);
       if (!urlData?.publicUrl) throw new Error('No se pudo obtener la URL del documento.');
 
-      const lineasOcr = lineas.map((l, index) => {
+      const lineasOcr = lineasConDestino.map((l, index) => {
         const cantidad = Number(l.cantidad);
         const precioUnitario = Number(l.precio_unitario);
         const baseLinea = Number(l.total_linea || (cantidad * precioUnitario));
@@ -379,12 +462,16 @@ const GastosScanner = ({ navigate }) => {
           base_linea: baseLinea,
           total_linea: baseLinea,
           es_material: true,
+          asignaciones: l.asignaciones.map((asignacion) => ({
+            destino_tipo: asignacion.destino_tipo,
+            obra_id: asignacion.destino_tipo === 'obra' ? asignacion.obra_id : null,
+            cantidad: Number(asignacion.cantidad),
+          })),
         };
       });
 
-      const { data: intakeResult, error: intakeError } = await supabase.rpc('ia360_registrar_factura_materiales_desde_ocr', {
+      const { data: intakeResult, error: intakeError } = await supabase.rpc('ia360_registrar_factura_distribuida_desde_ocr', {
         p_subido_por: currentEmpleadoId,
-        p_obra_id: formData.proyecto_id,
         p_proveedor_id: formData.proveedor_id,
         p_imagen_url: urlData.publicUrl,
         p_proveedor_nombre: formData.proveedor_nombre_ocr || proveedores.find(p => p.id === formData.proveedor_id)?.nombre || null,
@@ -414,13 +501,14 @@ const GastosScanner = ({ navigate }) => {
       }
 
       toast({
-        title: "Factura de materiales contabilizada",
-        description: `${intakeResult.lineas_validadas || lineas.length} líneas asignadas a la obra, auditadas y preparadas para Contasimple.`,
+        title: "Factura distribuida y contabilizada",
+        description: `${intakeResult.asignaciones_creadas || lineas.length} destinos internos guardados; la factura queda preparada una sola vez para Contasimple.`,
       });
 
       // Reset
       setFile(null); setPreview(null); setLineas([]); setOcrResult(null);
-      setFormData({ proveedor_id: '', proveedor_nombre_ocr: '', proveedor_cif_ocr: '', numero_factura: '', fecha_emision: '', monto_bruto: '', iva: 0.21, iva_importe: '', total_con_iva: '', concepto: '', proyecto_id: 'general' });
+      setDestinoPrincipal(''); setDistribucionActiva(false);
+      setFormData({ proveedor_id: '', proveedor_nombre_ocr: '', proveedor_cif_ocr: '', numero_factura: '', fecha_emision: '', monto_bruto: '', iva: 0.21, iva_importe: '', total_con_iva: '', concepto: '' });
 
     } catch (err) {
       console.error(err);
@@ -534,15 +622,20 @@ const GastosScanner = ({ navigate }) => {
                   <Input type="number" value={formData.total_con_iva} onChange={e => setFormData(p => ({ ...p, total_con_iva: e.target.value }))} className="h-8 text-sm mt-1" />
                 </div>
               </div>
-              <div>
-                <Label className="text-xs">Proyecto</Label>
-                <Select value={formData.proyecto_id} onValueChange={v => setFormData(p => ({ ...p, proyecto_id: v }))}>
-                  <SelectTrigger className="h-8 text-sm mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="general">Selecciona una obra</SelectItem>
-                    {proyectos.map(p => <SelectItem key={p.id} value={p.id}>{p.nombre_proyecto}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+              <div className="rounded-lg border border-primary/15 bg-primary/[0.035] p-3">
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div>
+                    <Label className="text-xs font-semibold">Destino principal de la compra *</Label>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Se aplicará a todos los productos salvo que edites su distribución.</p>
+                  </div>
+                  {destinoPrincipal && <Badge variant="outline" className="border-green-200 bg-green-50 text-green-700">Asignado</Badge>}
+                </div>
+                <DestinationSelect
+                  value={destinoPrincipal}
+                  onValueChange={setDestinoPrincipal}
+                  proyectos={proyectos}
+                  className="h-9 bg-background text-sm"
+                />
               </div>
             </CardContent>
           </Card>
@@ -550,7 +643,7 @@ const GastosScanner = ({ navigate }) => {
           {/* Líneas de productos */}
           <Card>
             <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
+              <div className="flex items-start justify-between gap-3">
                 <div>
                   <CardTitle className="text-base flex items-center gap-2">
                     <Package className="w-4 h-4 text-primary" />
@@ -559,9 +652,24 @@ const GastosScanner = ({ navigate }) => {
                   </CardTitle>
                   <CardDescription className="text-xs">Referencia y unidad son obligatorias para comparar con el presupuesto</CardDescription>
                 </div>
-                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleAddLinea}>
-                  <Plus className="w-3 h-3 mr-1" />Añadir
-                </Button>
+                <div className="flex flex-wrap justify-end gap-2">
+                  {lineas.length > 0 && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={distribucionActiva ? 'secondary' : 'outline'}
+                      className="h-7 text-xs"
+                      onClick={() => setDistribucionActiva((value) => !value)}
+                      disabled={!destinoPrincipal}
+                    >
+                      <ListChecks className="mr-1 h-3 w-3" />
+                      {distribucionActiva ? 'Cerrar distribución' : 'Editar distribución'}
+                    </Button>
+                  )}
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleAddLinea}>
+                    <Plus className="mr-1 h-3 w-3" />Añadir
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="space-y-2">
@@ -572,15 +680,42 @@ const GastosScanner = ({ navigate }) => {
                 </div>
               ) : (
                 lineas.map((linea, idx) => (
-                  <LineaEditable key={idx} linea={linea} index={idx} onChange={handleLineaChange} onDelete={handleLineaDelete} />
+                  <LineaEditable
+                    key={idx}
+                    linea={linea}
+                    index={idx}
+                    onChange={handleLineaChange}
+                    onDelete={handleLineaDelete}
+                    proyectos={proyectos}
+                    destinoPrincipal={destinoPrincipal}
+                    distribucionActiva={distribucionActiva}
+                    onDistributionChange={(asignaciones) => handleLineaChange(idx, { ...linea, asignaciones })}
+                  />
                 ))
+              )}
+
+              {lineas.length > 0 && destinoPrincipal && (
+                <div className="mt-3 grid grid-cols-1 gap-2 border-t border-border/60 pt-3 sm:grid-cols-3">
+                  <div className="flex items-center gap-2 rounded-md bg-muted/35 px-3 py-2">
+                    <Building2 className="h-4 w-4 text-primary" />
+                    <div><p className="text-[10px] uppercase text-muted-foreground">Obras</p><p className="text-sm font-semibold">{resumenDestinos.obras.size} · {resumenDestinos.importeObras.toFixed(2)} €</p></div>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-md bg-muted/35 px-3 py-2">
+                    <Warehouse className="h-4 w-4 text-primary" />
+                    <div><p className="text-[10px] uppercase text-muted-foreground">Almacén</p><p className="text-sm font-semibold">{resumenDestinos.almacen.toFixed(2)} €</p></div>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-md bg-muted/35 px-3 py-2">
+                    <CircleDollarSign className="h-4 w-4 text-primary" />
+                    <div><p className="text-[10px] uppercase text-muted-foreground">Generales</p><p className="text-sm font-semibold">{resumenDestinos.general.toFixed(2)} €</p></div>
+                  </div>
+                </div>
               )}
             </CardContent>
           </Card>
 
           {/* Botón guardar */}
           <Button className="w-full" size="lg" onClick={handleSave} disabled={isSaving || !formData.numero_factura || !formData.total_con_iva}>
-            {isSaving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Contabilizando...</> : <><Save className="w-4 h-4 mr-2" />Guardar, auditar y asignar a obra</>}
+            {isSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Contabilizando...</> : <><Save className="mr-2 h-4 w-4" />Guardar factura y distribución</>}
           </Button>
         </div>
       </div>
