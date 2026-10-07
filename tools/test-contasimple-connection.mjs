@@ -78,6 +78,7 @@ async function invoke(action) {
     truncated: payload?.meta?.truncated ?? null,
     complete: payload?.meta?.complete ?? null,
     truncatedReason: payload?.meta?.truncatedReason ?? null,
+    totalAvailable: payload?.meta?.totalAvailable ?? null,
     fields: rows[0] && typeof rows[0] === 'object' ? Object.keys(rows[0]).sort() : [],
   };
 }

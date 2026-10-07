@@ -78,6 +78,7 @@ async function readInvoicePages(token: string, resource: 'issued' | 'received', 
   let pagesRead = 0;
   let truncated = false;
   let truncatedReason: 'repeated_page' | 'safety_limit' | null = null;
+  let totalAvailable: number | null = null;
 
   for (let page = 1; page <= maxPages; page += 1) {
     const result = await callContasimple(
@@ -85,6 +86,7 @@ async function readInvoicePages(token: string, resource: 'issued' | 'received', 
       `/accounting/invoices/${resource}/from?date=${encodeURIComponent(fromDate)}&page=${page}&pageSize=${pageSize}`,
     );
     const pageRows = normalizeRows(result);
+    if (page === 1 && typeof result?.totalCount === 'number') totalAvailable = result.totalCount;
     pagesRead = page;
 
     const uniqueRows = pageRows.filter((row) => {
@@ -111,7 +113,7 @@ async function readInvoicePages(token: string, resource: 'issued' | 'received', 
     }
   }
 
-  return { rows, pagesRead, truncated, truncatedReason };
+  return { rows, pagesRead, truncated, truncatedReason, totalAvailable };
 }
 
 Deno.serve(async (request) => {
@@ -212,6 +214,7 @@ Deno.serve(async (request) => {
           truncated: result.truncated,
           complete: !result.truncated,
           truncatedReason: result.truncatedReason,
+          totalAvailable: result.totalAvailable,
         },
       });
     }

@@ -315,6 +315,8 @@ const CentroControlIA = ({ navigate }) => {
     state: 'idle',
     issuedCount: 0,
     receivedCount: 0,
+    issuedAvailable: 0,
+    receivedAvailable: 0,
     issuedTotal: 0,
     receivedTotal: 0,
     issuedComplete: true,
@@ -401,6 +403,8 @@ const CentroControlIA = ({ navigate }) => {
         state: 'loaded',
         issuedCount: issued.length,
         receivedCount: received.length,
+        issuedAvailable: issuedResult?.meta?.totalAvailable ?? issued.length,
+        receivedAvailable: receivedResult?.meta?.totalAvailable ?? received.length,
         issuedTotal: issued.reduce((total, invoice) => total + getInvoiceAmount(invoice), 0),
         receivedTotal: received.reduce((total, invoice) => total + getInvoiceAmount(invoice), 0),
         issuedComplete: issuedResult?.meta?.complete !== false,
@@ -519,7 +523,11 @@ const CentroControlIA = ({ navigate }) => {
             <div className="mt-4 grid gap-3 border-t border-border/50 pt-4 sm:grid-cols-2 lg:grid-cols-4" aria-live="polite">
               <div className="rounded-md bg-muted/25 px-3 py-2">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Facturas emitidas</p>
-                <p className="mt-1 text-lg font-bold tabular-nums">{contasimpleInvoices.issuedCount}{contasimpleInvoices.issuedComplete ? '' : '+'}</p>
+                <p className="mt-1 text-lg font-bold tabular-nums">
+                  {contasimpleInvoices.issuedComplete
+                    ? contasimpleInvoices.issuedCount
+                    : `${contasimpleInvoices.issuedCount} de ${contasimpleInvoices.issuedAvailable || `${contasimpleInvoices.issuedCount}+`} analizadas`}
+                </p>
               </div>
               <div className="rounded-md bg-muted/25 px-3 py-2">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Importe emitido</p>
@@ -527,7 +535,11 @@ const CentroControlIA = ({ navigate }) => {
               </div>
               <div className="rounded-md bg-muted/25 px-3 py-2">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Facturas recibidas</p>
-                <p className="mt-1 text-lg font-bold tabular-nums">{contasimpleInvoices.receivedCount}{contasimpleInvoices.receivedComplete ? '' : '+'}</p>
+                <p className="mt-1 text-lg font-bold tabular-nums">
+                  {contasimpleInvoices.receivedComplete
+                    ? contasimpleInvoices.receivedCount
+                    : `${contasimpleInvoices.receivedCount} de ${contasimpleInvoices.receivedAvailable || `${contasimpleInvoices.receivedCount}+`} analizadas`}
+                </p>
               </div>
               <div className="rounded-md bg-muted/25 px-3 py-2">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Importe recibido</p>
@@ -535,7 +547,7 @@ const CentroControlIA = ({ navigate }) => {
               </div>
               <p className="text-xs text-muted-foreground sm:col-span-2 lg:col-span-4">
                 Lectura temporal desde el 1 de enero. No se ha guardado ni modificado ningún dato.
-                {(!contasimpleInvoices.issuedComplete || !contasimpleInvoices.receivedComplete) && ' Contasimple ha limitado la respuesta; los recuentos e importes mostrados son parciales.'}
+                {(!contasimpleInvoices.issuedComplete || !contasimpleInvoices.receivedComplete) && ' Contasimple limita este endpoint a las 50 facturas más recientes; los importes mostrados corresponden solo a los registros analizados.'}
                 {contasimpleInvoices.loadedAt && ` Actualizado a las ${contasimpleInvoices.loadedAt.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}.`}
               </p>
             </div>
