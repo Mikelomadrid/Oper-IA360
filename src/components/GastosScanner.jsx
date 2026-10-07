@@ -22,6 +22,9 @@ const UNIDADES = ['ud', 'm', 'm2', 'm3', 'kg', 'l', 'h', 'caja', 'rollo', 'pack'
 const LineaEditable = ({ linea, index, onChange, onDelete }) => {
   const [editing, setEditing] = useState(false);
   const [local, setLocal] = useState(linea);
+  const unidadesDisponibles = local.unidad && !UNIDADES.includes(local.unidad)
+    ? [local.unidad, ...UNIDADES]
+    : UNIDADES;
 
   const handleSave = () => { onChange(index, local); setEditing(false); };
   const handleCancel = () => { setLocal(linea); setEditing(false); };
@@ -65,7 +68,7 @@ const LineaEditable = ({ linea, index, onChange, onDelete }) => {
         <div><Label className="text-xs">Unidad</Label>
           <Select value={local.unidad || 'ud'} onValueChange={v => setLocal(p => ({ ...p, unidad: v }))}>
             <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>{UNIDADES.map(u => <SelectItem key={u} value={u} className="text-xs">{u}</SelectItem>)}</SelectContent>
+            <SelectContent>{unidadesDisponibles.map(u => <SelectItem key={u} value={u} className="text-xs">{u}</SelectItem>)}</SelectContent>
           </Select>
         </div>
         <div><Label className="text-xs">Precio/ud (€)</Label><Input type="number" value={local.precio_unitario || ''} onChange={e => setLocal(p => ({ ...p, precio_unitario: e.target.value, total_linea: ((p.cantidad || 1) * e.target.value).toFixed(2) }))} className="h-7 text-xs" /></div>

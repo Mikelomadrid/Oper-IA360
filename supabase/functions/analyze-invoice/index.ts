@@ -110,6 +110,7 @@ Deno.serve(async (req) => {
                 'Extrae esta factura de proveedor española.',
                 'No inventes referencias ni importes: usa null o cadena vacía cuando no sean legibles.',
                 'Separa cada artículo o material en una línea y conserva sus unidades reales.',
+                'Si el concepto indica un envase de compra como palé, saco, caja, rollo o pack, usa ese envase como unidad; no lo conviertas a ud aunque el texto indique cuántas piezas contiene.',
                 'Los importes de cabecera y línea deben ser números, sin símbolos monetarios.',
               ].join(' '),
             },
