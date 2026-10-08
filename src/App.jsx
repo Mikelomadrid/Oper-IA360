@@ -60,6 +60,7 @@ const VehiculoDetail = React.lazy(() => import('@/components/VehiculoDetail'));
 
 const ToolsCatalogView = React.lazy(() => import('@/components/ToolsCatalogView'));
 const Materiales = React.lazy(() => import('@/components/Materiales'));
+const BibliotecaRendimientos = React.lazy(() => import('@/components/BibliotecaRendimientos'));
 const MaterialDetailView = React.lazy(() => import('@/components/MaterialDetailView'));
 const MaterialRequests = React.lazy(() => import('@/components/MaterialRequests'));
 const SolicitudesHerramientasView = React.lazy(() => import('@/components/SolicitudesHerramientasView'));
@@ -250,6 +251,7 @@ const getActiveModule = (path, user) => {
     '/inventario/catalogo': 'inventario/catalogo',
     '/inventario/herramientas': 'inventario/catalogo',
     '/inventario/materiales': 'inventario/materiales',
+    '/inventario/rendimientos': 'inventario/rendimientos',
     '/gestion/solicitudes': 'gestion/solicitudes',
 
     '/inventario/solicitudes-devoluciones': 'inventario/solicitudes',
@@ -521,6 +523,9 @@ const AppContent = () => {
                         case 'inventario/catalogo': return <ToolsCatalogView navigate={navigate} />;
                         case 'inventario/herramientas/detail': return <ToolDetailView toolId={activeModule.id} navigate={navigate} />;
                         case 'inventario/materiales': return <Materiales navigate={navigate} />;
+                        case 'inventario/rendimientos':
+                          if (!['admin', 'encargado'].includes(sessionRole?.rol)) return <Navigate to="/inicio" />;
+                          return <BibliotecaRendimientos />;
                         case 'inventario/materiales/detail': return <MaterialDetailView materialId={activeModule.id} navigate={navigate} />;
 
                         case 'inventario/solicitudes': return <SolicitudesHerramientasView navigate={navigate} />;

@@ -213,6 +213,17 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                     });
                 }
 
+                if (['admin', 'encargado'].includes(sessionRole?.rol) && !items.some(i => i.key === 'sistemas_rendimiento')) {
+                    items.push({
+                        key: 'sistemas_rendimiento',
+                        label: 'SISTEMAS Y RENDIMIENTOS',
+                        path: '/inventario/rendimientos',
+                        parent: 'inventario',
+                        orden: 47,
+                        icon: 'Ruler'
+                    });
+                }
+
                 items = items.map(item => {
                     if (item.key === 'empleados' && item.parent === 'personal') {
                         return { ...item, icon: 'Users' };
