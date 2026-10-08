@@ -111,6 +111,9 @@ Deno.serve(async (req) => {
                 'No inventes referencias ni importes: usa null o cadena vacía cuando no sean legibles.',
                 'Distingue emisor/proveedor y receptor/destinatario. El receptor es quien compra; extrae su nombre y NIF/CIF solo si aparecen expresamente.',
                 'El número del documento puede figurar como número de factura, factura simplificada, ticket, recibo u operación; conserva el texto impreso y usa null si no existe.',
+                'Identifica si el documento es una factura ordinaria o una factura rectificativa/abono. Marca es_abono=true solo cuando el propio documento lo indique o cuando los importes y el contexto muestren inequívocamente una devolución.',
+                'Si es un abono, extrae el número de la factura original solamente cuando aparezca impreso; no lo inventes.',
+                'Devuelve importes y cantidades con su signo tal como aparecen en el documento. Si el abono muestra importes positivos, consérvalos positivos: el ERP aplicará el signo contable tras la revisión.',
                 'Separa cada artículo o material en una línea y conserva sus unidades reales.',
                 'Si el concepto indica un envase de compra como palé, saco, caja, rollo o pack, usa ese envase como unidad; no lo conviertas a ud aunque el texto indique cuántas piezas contiene.',
                 'Los importes de cabecera y línea deben ser números, sin símbolos monetarios.',
@@ -130,6 +133,7 @@ Deno.serve(async (req) => {
               required: [
                 'proveedor_nombre', 'proveedor_cif', 'receptor_nombre', 'receptor_cif', 'numero_factura', 'fecha',
                 'subtotal', 'iva_importe', 'iva_porcentaje', 'total', 'confianza_ocr', 'lineas',
+                'tipo_documento_fiscal', 'es_abono', 'factura_original_numero', 'motivo_abono',
               ],
               properties: {
                 proveedor_nombre: { type: ['string', 'null'] },
@@ -142,6 +146,13 @@ Deno.serve(async (req) => {
                 iva_importe: { type: ['number', 'null'] },
                 iva_porcentaje: { type: ['number', 'null'], description: 'Porcentaje, por ejemplo 21' },
                 total: { type: ['number', 'null'] },
+                tipo_documento_fiscal: {
+                  type: 'string',
+                  enum: ['factura', 'factura_rectificativa', 'abono', 'desconocido'],
+                },
+                es_abono: { type: 'boolean' },
+                factura_original_numero: { type: ['string', 'null'] },
+                motivo_abono: { type: ['string', 'null'] },
                 confianza_ocr: { type: ['number', 'null'], minimum: 0, maximum: 1 },
                 lineas: {
                   type: 'array',

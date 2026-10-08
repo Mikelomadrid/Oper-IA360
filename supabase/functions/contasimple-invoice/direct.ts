@@ -219,6 +219,15 @@ Deno.serve(async (request) => {
       }, 409);
     }
     const isExpense = purchaseDocumentType === 'gasto';
+    const isCreditNote = documentMetadata.es_abono === true
+      || ['abono', 'factura_rectificativa'].includes(String(documentMetadata.tipo_documento_fiscal || ''));
+    if (isCreditNote && isExpense) {
+      return reply({
+        ok: false,
+        code: 'credit_note_must_be_received_invoice',
+        message: 'Un abono de proveedor debe registrarse como factura recibida rectificativa, no como gasto/ticket.',
+      }, 409);
+    }
 
     const nif = validSpanishTaxId(text(ocr.proveedor_nif, 'el NIF del proveedor'));
     if (!nif) {
@@ -232,6 +241,12 @@ Deno.serve(async (request) => {
     const invoiceNumber = text(ocr.numero_factura, 'el número de factura');
     const invoiceDate = text(ocr.fecha_factura, 'la fecha de factura');
     const invoiceTotal = number(ocr.total, 'El total de la factura');
+    if (isCreditNote && invoiceTotal >= 0) {
+      return reply({ ok: false, code: 'invalid_credit_note_sign', message: 'El abono debe tener total negativo en el ERP.' }, 409);
+    }
+    if (!isCreditNote && invoiceTotal <= 0) {
+      return reply({ ok: false, code: 'unexpected_negative_invoice', message: 'La factura tiene total negativo pero no está confirmada como abono.' }, 409);
+    }
     let mappedLines = isExpense ? [] : invoiceLines(sourceLines);
     const expenseLinesTotal = money(sourceLines.reduce((sum, line) => {
       const quantity = Number(line.cantidad ?? 1);
@@ -310,7 +325,10 @@ Deno.serve(async (request) => {
     const invoiceBase = {
       imputation: 100, vatImputation: 100, isCashCriteria: false, number: invoiceNumber,
       date: apiDate(invoiceDate), operationDate: apiDate(invoiceDate), invoiceClass: 600,
-      notes: `Registrada directamente desde ERP IA360 · ${facturaId}`, retentionPercentage: 0,
+      notes: isCreditNote
+        ? `Factura rectificativa registrada directamente desde ERP IA360 · original ${String(documentMetadata.factura_original_numero || 'no indicada')} · ${facturaId}`
+        : `Registrada directamente desde ERP IA360 · ${facturaId}`,
+      retentionPercentage: 0,
       operationType: 'Nacional', lines: mappedLines,
     };
     const paymentMethodId = Number(documentMetadata.contasimple_metodo_pago_id || 495834);
@@ -345,7 +363,7 @@ Deno.serve(async (request) => {
     };
 
     if (action === 'preview') return reply({
-      ok: true, action, facturaId, period, documentType: purchaseDocumentType,
+      ok: true, action, facturaId, period, documentType: purchaseDocumentType, isCreditNote,
       provider: { action: remoteProvider ? 'reuse' : 'create', id: remoteProvider?.id || null, organization: providerPayload.organization, nif },
       ...(isExpense
         ? {
@@ -417,7 +435,7 @@ Deno.serve(async (request) => {
 
     return reply({ ok: true, action, facturaId, documentId, documentNumber: created?.number || invoiceNumber,
       documentAmount: created?.totalAmount ?? created?.amount ?? invoiceTotal, period: created?.period || period,
-      documentType: purchaseDocumentType, providerId: issuerEntityId, providerCreated,
+      documentType: purchaseDocumentType, isCreditNote, providerId: issuerEntityId, providerCreated,
       state: 'creada_en_contasimple', uploadsFile: false, usesContasimpleOcr: false });
   } catch (error) {
     const errorMessage = message(error);

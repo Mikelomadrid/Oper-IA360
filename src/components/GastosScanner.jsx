@@ -3,7 +3,7 @@ import { useDropzone } from 'react-dropzone';
 import {
   Loader2, Save, Scan, ArrowLeft, UploadCloud, Camera,
   Trash2, FileText, Plus, Pencil, Check, X, Package, AlertCircle,
-  Building2, CircleDollarSign, ListChecks, Warehouse
+  Building2, CircleDollarSign, ListChecks, Warehouse, RotateCcw
 } from 'lucide-react';
 import { analyzeInvoice } from '@/lib/openaiService';
 import { supabase } from '@/lib/customSupabaseClient';
@@ -25,6 +25,7 @@ import {
 import InvoiceLineDistribution, {
   buildDefaultAssignments,
   DestinationSelect,
+  destinoObra,
   parseDestino,
 } from '@/components/InvoiceLineDistribution';
 
@@ -155,6 +156,8 @@ const GastosScanner = ({ navigate }) => {
   const [ocrResult, setOcrResult] = useState(null);
   const [destinoPrincipal, setDestinoPrincipal] = useState('');
   const [distribucionActiva, setDistribucionActiva] = useState(false);
+  const [devolucionesPendientes, setDevolucionesPendientes] = useState([]);
+  const [loadingDevoluciones, setLoadingDevoluciones] = useState(false);
   const { toast } = useToast();
 
   // Modal de crear proveedor nuevo
@@ -182,6 +185,11 @@ const GastosScanner = ({ navigate }) => {
     contasimple_metodo_pago_id: '495834',
     contasimple_metodo_pago_nombre: 'Efectivo',
     contasimple_tipo_gasto: '600',
+    es_abono: false,
+    tipo_documento_fiscal: 'factura',
+    factura_original_numero: '',
+    motivo_abono: '',
+    devolucion_proveedor_id: '',
   });
   const nuevoProveedorCifValidation = useMemo(
     () => validateSpanishTaxId(nuevoProveedor?.cif),
@@ -190,6 +198,10 @@ const GastosScanner = ({ navigate }) => {
   const cifOcrValidation = useMemo(
     () => validateSpanishTaxId(formData.proveedor_cif_ocr),
     [formData.proveedor_cif_ocr],
+  );
+  const devolucionSeleccionada = useMemo(
+    () => devolucionesPendientes.find((item) => item.id === formData.devolucion_proveedor_id) || null,
+    [devolucionesPendientes, formData.devolucion_proveedor_id],
   );
 
   useEffect(() => {
@@ -214,6 +226,38 @@ const GastosScanner = ({ navigate }) => {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const loadPendingReturns = async () => {
+      if (!formData.es_abono || !formData.proveedor_id) {
+        setDevolucionesPendientes([]);
+        return;
+      }
+      setLoadingDevoluciones(true);
+      const { data, error } = await supabase
+        .from('v_devoluciones_proveedor_pendientes_abono')
+        .select('*')
+        .eq('proveedor_id', formData.proveedor_id)
+        .order('created_at', { ascending: false });
+      if (!active) return;
+      if (error) {
+        console.warn('[Abonos] No se pudieron cargar devoluciones pendientes:', error.message);
+        setDevolucionesPendientes([]);
+      } else {
+        setDevolucionesPendientes(data || []);
+      }
+      setLoadingDevoluciones(false);
+    };
+    loadPendingReturns();
+    return () => { active = false; };
+  }, [formData.es_abono, formData.proveedor_id]);
+
+  useEffect(() => {
+    if (!devolucionSeleccionada?.obra_id) return;
+    setDestinoPrincipal(destinoObra(devolucionSeleccionada.obra_id));
+    setLineas((current) => current.map((linea) => ({ ...linea, asignaciones: [] })));
+  }, [devolucionSeleccionada?.id, devolucionSeleccionada?.obra_id]);
+
   const handleFileSelect = (selectedFile) => {
     if (selectedFile) {
       setFile(selectedFile);
@@ -230,6 +274,11 @@ const GastosScanner = ({ navigate }) => {
         numero_generado: false,
         receptor_nombre_ocr: '',
         receptor_cif_ocr: '',
+        es_abono: false,
+        tipo_documento_fiscal: 'factura',
+        factura_original_numero: '',
+        motivo_abono: '',
+        devolucion_proveedor_id: '',
       }));
     }
   };
@@ -256,6 +305,8 @@ const GastosScanner = ({ navigate }) => {
         recipientName: result.receptor_nombre,
         recipientTaxId: result.receptor_cif,
       });
+      const isCreditNote = Boolean(result.es_abono)
+        || ['abono', 'factura_rectificativa'].includes(result.tipo_documento_fiscal);
       const documentNumber = result.numero_factura || await buildInternalTicketNumber({
         file,
         date: result.fecha,
@@ -285,21 +336,32 @@ const GastosScanner = ({ navigate }) => {
         ...prev,
         numero_factura: documentNumber,
         fecha_emision: result.fecha || new Date().toISOString().split('T')[0],
-        total_con_iva: result.total || '',
+        total_con_iva: result.total == null ? '' : Math.abs(Number(result.total)),
         iva: result.iva_porcentaje ? result.iva_porcentaje / 100 : 0.21,
-        iva_importe: result.iva_importe || '',
-        monto_bruto: result.subtotal || (result.total && result.iva_importe
-          ? (result.total - result.iva_importe).toFixed(2)
-          : (documentClassification.type === PURCHASE_DOCUMENT_TYPES.EXPENSE ? result.total : '')),
+        iva_importe: result.iva_importe == null ? '' : Math.abs(Number(result.iva_importe)),
+        monto_bruto: result.subtotal != null
+          ? Math.abs(Number(result.subtotal))
+          : (result.total != null && result.iva_importe != null
+            ? Math.abs(Number(result.total) - Number(result.iva_importe)).toFixed(2)
+            : (documentClassification.type === PURCHASE_DOCUMENT_TYPES.EXPENSE ? Math.abs(Number(result.total || 0)) : '')),
         proveedor_id: foundProvider ? foundProvider.id : '',
         proveedor_nombre_ocr: result.proveedor_nombre || '',
         proveedor_cif_ocr: result.proveedor_cif || '',
         concepto: result.proveedor_nombre || '',
-        tipo_documento: documentClassification.type,
-        tipo_documento_motivo: documentClassification.reason,
+        tipo_documento: isCreditNote ? PURCHASE_DOCUMENT_TYPES.RECEIVED_INVOICE : documentClassification.type,
+        tipo_documento_motivo: isCreditNote
+          ? 'El OCR ha identificado una factura rectificativa o abono de proveedor.'
+          : documentClassification.reason,
         numero_generado: !result.numero_factura,
         receptor_nombre_ocr: result.receptor_nombre || '',
         receptor_cif_ocr: result.receptor_cif || '',
+        es_abono: isCreditNote,
+        tipo_documento_fiscal: isCreditNote
+          ? (result.tipo_documento_fiscal === 'abono' ? 'abono' : 'factura_rectificativa')
+          : (result.tipo_documento_fiscal || 'factura'),
+        factura_original_numero: result.factura_original_numero || '',
+        motivo_abono: result.motivo_abono || '',
+        devolucion_proveedor_id: '',
       }));
 
       if (foundProvider) {
@@ -330,10 +392,10 @@ const GastosScanner = ({ navigate }) => {
           referencia: l.referencia || '',
           nombre: l.nombre || '',
           categoria: l.categoria || 'materiales',
-          cantidad: l.cantidad || 1,
+          cantidad: Math.abs(Number(l.cantidad || 1)),
           unidad: l.unidad || 'ud',
-          precio_unitario: l.precio_unitario || 0,
-          total_linea: l.total_linea || 0,
+          precio_unitario: Math.abs(Number(l.precio_unitario || 0)),
+          total_linea: Math.abs(Number(l.total_linea || 0)),
         })));
       }
 
@@ -522,16 +584,31 @@ const GastosScanner = ({ navigate }) => {
       return;
     }
 
-    const baseImponible = Number(formData.monto_bruto);
-    const totalFactura = Number(formData.total_con_iva);
-    const ivaImporte = Number(formData.iva_importe || (totalFactura - baseImponible));
+    if (formData.es_abono && lineasConDestino.some((linea) => (
+      linea.asignaciones.some((asignacion) => asignacion.destino_tipo === 'almacen')
+    ))) {
+      toast({
+        variant: "destructive",
+        title: "Salida de almacén pendiente de definir",
+        description: "Por ahora asigna el abono a la obra o a gastos generales. La devolución de stock propio debe registrarse desde el movimiento de almacén.",
+      });
+      return;
+    }
 
-    if (!Number.isFinite(baseImponible) || baseImponible <= 0 || !Number.isFinite(totalFactura) || totalFactura <= 0) {
+    const signoFiscal = formData.es_abono ? -1 : 1;
+    const baseImponibleVisible = Math.abs(Number(formData.monto_bruto));
+    const totalFacturaVisible = Math.abs(Number(formData.total_con_iva));
+    const ivaImporteVisible = Math.abs(Number(formData.iva_importe || (totalFacturaVisible - baseImponibleVisible)));
+    const baseImponible = signoFiscal * baseImponibleVisible;
+    const totalFactura = signoFiscal * totalFacturaVisible;
+    const ivaImporte = signoFiscal * ivaImporteVisible;
+
+    if (!Number.isFinite(baseImponibleVisible) || baseImponibleVisible <= 0 || !Number.isFinite(totalFacturaVisible) || totalFacturaVisible <= 0) {
       toast({ variant: "destructive", title: "Importes incorrectos", description: "Revisa la base imponible y el total." });
       return;
     }
 
-    if (Math.abs((baseImponible + ivaImporte) - totalFactura) > 0.02) {
+    if (Math.abs((baseImponibleVisible + ivaImporteVisible) - totalFacturaVisible) > 0.02) {
       toast({ variant: "destructive", title: "La factura no cuadra", description: "La base imponible más el IVA debe coincidir con el total." });
       return;
     }
@@ -567,9 +644,9 @@ const GastosScanner = ({ navigate }) => {
       if (!urlData?.publicUrl) throw new Error('No se pudo obtener la URL del documento.');
 
       const lineasOcr = lineasConDestino.map((l, index) => {
-        const cantidad = Number(l.cantidad);
+        const cantidad = signoFiscal * Math.abs(Number(l.cantidad));
         const precioUnitario = Number(l.precio_unitario);
-        const baseLinea = Number(l.total_linea || (cantidad * precioUnitario));
+        const baseLinea = signoFiscal * Math.abs(Number(l.total_linea || (Math.abs(cantidad) * precioUnitario)));
         return {
           numero_linea: index + 1,
           referencia: l.referencia.trim(),
@@ -584,12 +661,12 @@ const GastosScanner = ({ navigate }) => {
           asignaciones: l.asignaciones.map((asignacion) => ({
             destino_tipo: asignacion.destino_tipo,
             obra_id: asignacion.destino_tipo === 'obra' ? asignacion.obra_id : null,
-            cantidad: Number(asignacion.cantidad),
+            cantidad: signoFiscal * Math.abs(Number(asignacion.cantidad)),
           })),
         };
       });
 
-      const { data: intakeResult, error: intakeError } = await supabase.rpc('ia360_registrar_factura_distribuida_desde_ocr', {
+      const intakeParams = {
         p_subido_por: currentEmpleadoId,
         p_proveedor_id: formData.proveedor_id,
         p_imagen_url: urlData.publicUrl,
@@ -610,11 +687,24 @@ const GastosScanner = ({ navigate }) => {
           contasimple_metodo_pago_id: Number(formData.contasimple_metodo_pago_id),
           contasimple_metodo_pago_nombre: formData.contasimple_metodo_pago_nombre,
           contasimple_tipo_gasto: Number(formData.contasimple_tipo_gasto),
+          tipo_documento_fiscal: formData.es_abono ? formData.tipo_documento_fiscal : 'factura',
+          es_abono: formData.es_abono,
+          factura_original_numero: formData.factura_original_numero || null,
+          motivo_abono: formData.motivo_abono || null,
+          devolucion_proveedor_id: formData.devolucion_proveedor_id || null,
         },
         p_lineas: lineasOcr,
         p_confianza_ocr: Number(ocrResult?.confianza_ocr || ocrResult?.confianza) || null,
         p_motor_ocr: 'openai_vision',
-      });
+      };
+      const rpcName = formData.es_abono && formData.devolucion_proveedor_id
+        ? 'ia360_registrar_abono_vinculado_desde_ocr'
+        : 'ia360_registrar_factura_distribuida_desde_ocr';
+      if (rpcName === 'ia360_registrar_abono_vinculado_desde_ocr') {
+        intakeParams.p_devolucion_id = formData.devolucion_proveedor_id;
+        intakeParams.p_factura_original_numero = formData.factura_original_numero || null;
+      }
+      const { data: intakeResult, error: intakeError } = await supabase.rpc(rpcName, intakeParams);
       if (intakeError) throw intakeError;
 
       if (!intakeResult?.ok) {
@@ -648,6 +738,11 @@ const GastosScanner = ({ navigate }) => {
         contasimple_metodo_pago_id: '495834',
         contasimple_metodo_pago_nombre: 'Efectivo',
         contasimple_tipo_gasto: '600',
+        es_abono: false,
+        tipo_documento_fiscal: 'factura',
+        factura_original_numero: '',
+        motivo_abono: '',
+        devolucion_proveedor_id: '',
       });
 
     } catch (err) {
@@ -736,6 +831,7 @@ const GastosScanner = ({ navigate }) => {
                       proveedor_id: val,
                       proveedor_nombre_ocr: provider?.nombre || p.proveedor_nombre_ocr,
                       proveedor_cif_ocr: provider?.cif || p.proveedor_cif_ocr,
+                      devolucion_proveedor_id: '',
                     }));
                   }}
                   placeholder={formData.proveedor_nombre_ocr ? `Detectado: ${formData.proveedor_nombre_ocr}` : "Buscar proveedor..."}
@@ -745,6 +841,88 @@ const GastosScanner = ({ navigate }) => {
                   <div className="mt-2 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                     <span><strong>CIF/NIF detectado: {formData.proveedor_cif_ocr}.</strong> {cifOcrValidation.reason}</span>
+                  </div>
+                )}
+              </div>
+              <div className={`rounded-lg border p-3 ${formData.es_abono ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div>
+                    <Label className="text-xs font-semibold">Naturaleza del documento *</Label>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Confirma si aumenta el gasto o devuelve importe y material.</p>
+                  </div>
+                  {formData.es_abono && (
+                    <Badge variant="outline" className="border-amber-300 bg-white text-amber-800">
+                      <RotateCcw className="mr-1 h-3 w-3" />Abono
+                    </Badge>
+                  )}
+                </div>
+                <Select
+                  value={formData.es_abono ? 'abono' : 'factura'}
+                  onValueChange={(value) => setFormData((current) => ({
+                    ...current,
+                    es_abono: value === 'abono',
+                    tipo_documento_fiscal: value === 'abono' ? 'factura_rectificativa' : 'factura',
+                    tipo_documento: value === 'abono' ? PURCHASE_DOCUMENT_TYPES.RECEIVED_INVOICE : current.tipo_documento,
+                    tipo_documento_motivo: value === 'abono'
+                      ? 'Factura rectificativa confirmada manualmente.'
+                      : current.tipo_documento_motivo,
+                    devolucion_proveedor_id: value === 'abono' ? current.devolucion_proveedor_id : '',
+                  }))}
+                >
+                  <SelectTrigger className="h-9 bg-background text-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="factura">Compra / gasto normal</SelectItem>
+                    <SelectItem value="abono">Abono / factura rectificativa</SelectItem>
+                  </SelectContent>
+                </Select>
+                {formData.es_abono && (
+                  <div className="mt-3 space-y-3 border-t border-amber-200 pt-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <Label className="text-xs">Factura original indicada</Label>
+                        <Input
+                          value={formData.factura_original_numero}
+                          onChange={(event) => setFormData((current) => ({ ...current, factura_original_numero: event.target.value }))}
+                          placeholder="Ej. FV-2026-01847"
+                          className="mt-1 h-8 bg-white text-sm"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Motivo del abono</Label>
+                        <Input
+                          value={formData.motivo_abono}
+                          onChange={(event) => setFormData((current) => ({ ...current, motivo_abono: event.target.value }))}
+                          placeholder="Devolución de material"
+                          className="mt-1 h-8 bg-white text-sm"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Devolución pendiente relacionada</Label>
+                      <Select
+                        value={formData.devolucion_proveedor_id || 'sin_vincular'}
+                        onValueChange={(value) => setFormData((current) => ({
+                          ...current,
+                          devolucion_proveedor_id: value === 'sin_vincular' ? '' : value,
+                        }))}
+                        disabled={loadingDevoluciones}
+                      >
+                        <SelectTrigger className="mt-1 h-9 bg-white text-sm"><SelectValue placeholder="Selecciona una devolución" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="sin_vincular">Sin devolución previa — abono directo</SelectItem>
+                          {devolucionesPendientes.map((item) => (
+                            <SelectItem key={item.id} value={item.id}>
+                              {item.obra_nombre} · {item.numero_factura_origen || 'factura sin número'} · {Number(item.importe_base_estimado || 0).toFixed(2)} €
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="mt-1 text-[11px] text-amber-800">
+                        {devolucionSeleccionada
+                          ? 'El abono cerrará esta devolución. La obra no se descontará una segunda vez.'
+                          : 'Si la devolución no se registró antes, distribuye ahora las líneas a las obras afectadas.'}
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>
