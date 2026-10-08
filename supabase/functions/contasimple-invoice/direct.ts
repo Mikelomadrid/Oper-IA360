@@ -313,6 +313,7 @@ Deno.serve(async (request) => {
     if (!Number.isSafeInteger(paymentMethodId) || paymentMethodId <= 0) throw new Error('El método de pago de ContaSimple no es válido.');
     if (!Number.isSafeInteger(expenseClass) || expenseClass <= 0) throw new Error('El tipo contable del gasto no es válido.');
     let paymentMethod: Record<string, unknown> | null = null;
+    let expensePaymentTemplate: Record<string, unknown> | null = null;
     if (isExpense) {
       const invoiceYear = Number(period.slice(0, 4));
       const lookupPeriods = [invoiceYear, invoiceYear - 1]
@@ -323,11 +324,13 @@ Deno.serve(async (request) => {
           accessToken,
           `/accounting/${encodeURIComponent(lookupPeriod)}/expenses?${new URLSearchParams({ startIndex: '0', numRows: '300' })}`,
         ));
-        paymentMethod = knownExpenses
+        expensePaymentTemplate = knownExpenses
           .map((item) => item.expensePayment && typeof item.expensePayment === 'object'
-            ? (item.expensePayment as Record<string, unknown>).paymentMethod
+            ? item.expensePayment as Record<string, unknown>
             : null)
-          .find((item) => item && typeof item === 'object' && Number((item as Record<string, unknown>).id) === paymentMethodId) as Record<string, unknown> | null || null;
+          .find((item) => item?.paymentMethod && typeof item.paymentMethod === 'object'
+            && Number((item.paymentMethod as Record<string, unknown>).id) === paymentMethodId) || null;
+        paymentMethod = expensePaymentTemplate?.paymentMethod as Record<string, unknown> | null || null;
         if (paymentMethod) break;
       }
       if (!paymentMethod) {
@@ -339,6 +342,9 @@ Deno.serve(async (request) => {
       .filter(Boolean)
       .join(' · ')
       .slice(0, 250) || providerName;
+    const paymentTemplate = { ...(expensePaymentTemplate || {}) };
+    delete paymentTemplate.id;
+    delete paymentTemplate.expenseId;
     const expenseBase = {
       number: invoiceNumber,
       date: apiDate(invoiceDate),
@@ -349,6 +355,7 @@ Deno.serve(async (request) => {
       notes: `Registrado directamente desde ERP IA360 · ${facturaId}`,
       expenseClass,
       expensePayment: {
+        ...paymentTemplate,
         date: apiDate(invoiceDate),
         amount: money(invoiceTotal),
         paymentMethodId,
