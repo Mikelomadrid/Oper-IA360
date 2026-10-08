@@ -68,6 +68,63 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
             
             if (error) throw error;
 
+            // Una factura repartida entre obra y almacén se contabiliza con cabecera
+            // general, por lo que su gasto no tiene proyecto_id. Aun así, las líneas
+            // destinadas a esta obra deben aparecer aquí para permitir consultar la
+            // factura y gestionar devoluciones al proveedor.
+            const { data: distributedAssignments, error: distributedAssignmentsError } = await supabase
+                .from('factura_gasto_linea_asignaciones')
+                .select('factura_id, importe_base')
+                .eq('obra_id', projectId)
+                .eq('destino_tipo', 'obra');
+            if (distributedAssignmentsError) throw distributedAssignmentsError;
+
+            const allocatedBaseByInvoice = new Map();
+            (distributedAssignments || []).forEach((assignment) => {
+                allocatedBaseByInvoice.set(
+                    assignment.factura_id,
+                    (allocatedBaseByInvoice.get(assignment.factura_id) || 0) + Number(assignment.importe_base || 0)
+                );
+            });
+
+            const distributedInvoiceIds = [...allocatedBaseByInvoice.keys()];
+            let distributedInvoices = [];
+            if (distributedInvoiceIds.length > 0) {
+                const { data: invoiceRows, error: invoiceRowsError } = await supabase
+                    .from('facturas_gastos')
+                    .select('id, gasto_id, documento_principal_id, documentos_ids')
+                    .in('id', distributedInvoiceIds);
+                if (invoiceRowsError) throw invoiceRowsError;
+                distributedInvoices = invoiceRows || [];
+            }
+
+            const directGastoIds = new Set((data || []).map((gasto) => gasto.id));
+            const distributedGastoIds = [...new Set(
+                distributedInvoices
+                    .map((invoice) => invoice.gasto_id)
+                    .filter((gastoId) => gastoId && !directGastoIds.has(gastoId))
+            )];
+
+            let distributedGastos = [];
+            if (distributedGastoIds.length > 0) {
+                const { data: gastoRows, error: gastoRowsError } = await supabase
+                    .from('gastos')
+                    .select(`
+                        id,
+                        fecha_emision,
+                        numero_factura,
+                        concepto,
+                        monto_neto,
+                        iva,
+                        total_con_iva,
+                        proveedor_id,
+                        proveedor:proveedores(nombre)
+                    `)
+                    .in('id', distributedGastoIds);
+                if (gastoRowsError) throw gastoRowsError;
+                distributedGastos = gastoRows || [];
+            }
+
             const { data: returnSummaries, error: returnSummariesError } = await supabase
                 .from('v_devoluciones_proveedor_resumen_factura')
                 .select('*')
@@ -91,7 +148,7 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
 
             // facturas_gastos puede venir como array u objeto según cómo infiera PostgREST la relación
             // (no hay constraint UNIQUE en gasto_id, así que por defecto es array; se maneja de forma defensiva).
-            return (data || []).map(gasto => {
+            const directRows = (data || []).map(gasto => {
                 const fgRaw = gasto.facturas_gastos;
                 const facturaInfo = Array.isArray(fgRaw) ? (fgRaw[0] || null) : (fgRaw || null);
                 const numDocumentosFactura = Array.isArray(facturaInfo?.documentos_ids) ? facturaInfo.documentos_ids.length : 0;
@@ -106,6 +163,36 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                     devolucion_pendiente: facturaInfo?.id ? pendingReturnByInvoice.get(facturaInfo.id) || null : null,
                 };
             });
+
+            const distributedGastoById = new Map(distributedGastos.map((gasto) => [gasto.id, gasto]));
+            const distributedRows = distributedInvoices.flatMap((facturaInfo) => {
+                const gasto = distributedGastoById.get(facturaInfo.gasto_id);
+                if (!gasto) return [];
+
+                const montoAsignado = Number(allocatedBaseByInvoice.get(facturaInfo.id) || 0);
+                const tipoIva = Number(gasto.iva || 0);
+                const numDocumentosFactura = Array.isArray(facturaInfo.documentos_ids) ? facturaInfo.documentos_ids.length : 0;
+
+                return [{
+                    ...gasto,
+                    id: `distribuida-${facturaInfo.id}-${projectId}`,
+                    gasto_origen_id: gasto.id,
+                    monto_neto: montoAsignado,
+                    total_con_iva: Math.round((montoAsignado * (1 + tipoIva) + Number.EPSILON) * 100) / 100,
+                    concepto: `${gasto.concepto || 'Factura distribuida'} · Parte asignada a esta obra`,
+                    factura_gasto_id: facturaInfo.id,
+                    documento_principal_id: facturaInfo.documento_principal_id || null,
+                    num_documentos_factura: numDocumentosFactura,
+                    tiene_documento_factura: !!facturaInfo.documento_principal_id,
+                    devolucion_proveedor: returnSummaryByInvoice.get(facturaInfo.id) || null,
+                    devolucion_pendiente: pendingReturnByInvoice.get(facturaInfo.id) || null,
+                    solo_lectura_distribuida: true,
+                }];
+            });
+
+            return [...directRows, ...distributedRows].sort((a, b) =>
+                String(b.fecha_emision || '').localeCompare(String(a.fecha_emision || ''))
+            );
         },
         enabled: !!projectId
     });
