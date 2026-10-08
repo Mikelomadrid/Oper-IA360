@@ -312,6 +312,21 @@ Deno.serve(async (request) => {
     const expenseClass = Number(documentMetadata.contasimple_tipo_gasto || 600);
     if (!Number.isSafeInteger(paymentMethodId) || paymentMethodId <= 0) throw new Error('El método de pago de ContaSimple no es válido.');
     if (!Number.isSafeInteger(expenseClass) || expenseClass <= 0) throw new Error('El tipo contable del gasto no es válido.');
+    let paymentMethod: Record<string, unknown> | null = null;
+    if (isExpense) {
+      const recentExpenses = rows(await call(
+        accessToken,
+        `/accounting/${encodeURIComponent(period)}/expenses?${new URLSearchParams({ startIndex: '0', numRows: '50' })}`,
+      ));
+      paymentMethod = recentExpenses
+        .map((item) => item.expensePayment && typeof item.expensePayment === 'object'
+          ? (item.expensePayment as Record<string, unknown>).paymentMethod
+          : null)
+        .find((item) => item && typeof item === 'object' && Number((item as Record<string, unknown>).id) === paymentMethodId) as Record<string, unknown> | null || null;
+      if (!paymentMethod) {
+        throw new Error('ContaSimple no devolvió la definición completa del método de pago seleccionado. No se ha creado ningún gasto.');
+      }
+    }
     const expenseConcept = sourceLines
       .map((line) => String(line.descripcion || '').trim())
       .filter(Boolean)
@@ -330,7 +345,10 @@ Deno.serve(async (request) => {
         date: apiDate(invoiceDate),
         amount: money(invoiceTotal),
         paymentMethodId,
-        paymentMethod: { id: paymentMethodId },
+        paymentMethod,
+        paymentMethodType: paymentMethod?.type,
+        paymentMethodName: paymentMethod?.name,
+        paymentMethodNumber: paymentMethod?.number || '',
       },
     };
 
