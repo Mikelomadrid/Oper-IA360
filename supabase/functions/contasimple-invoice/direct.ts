@@ -330,6 +330,7 @@ Deno.serve(async (request) => {
         date: apiDate(invoiceDate),
         amount: money(invoiceTotal),
         paymentMethodId,
+        paymentMethod: { id: paymentMethodId },
       },
     };
 
