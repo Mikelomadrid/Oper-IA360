@@ -103,6 +103,8 @@ const TestControlHorarioExtras = React.lazy(() => import('@/components/TestContr
 // ── NÓMINAS ──
 const NominasTab = React.lazy(() => import('@/components/NominasTab'));
 
+const NOTIFICATIONS_ENABLED = import.meta.env.VITE_APP_ENV !== 'development';
+
 // --- LAYOUT COMPONENTS ---
 
 const AppHeader = ({ onMenuClick, navigate }) => {
@@ -134,11 +136,13 @@ const AppHeader = ({ onMenuClick, navigate }) => {
         </div>
         <div className="flex items-center gap-2 relative">
 
-          <Button variant="ghost" size="icon" onClick={() => navigate('/inbox')} className="relative">
-            <NotificationBadge count={unreadCount} variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 text-[10px]">
-              <Bell className="w-5 h-5" />
-            </NotificationBadge>
-          </Button>
+          {NOTIFICATIONS_ENABLED && (
+            <Button variant="ghost" size="icon" onClick={() => navigate('/inbox')} className="relative">
+              <NotificationBadge count={unreadCount} variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 text-[10px]">
+                <Bell className="w-5 h-5" />
+              </NotificationBadge>
+            </Button>
+          )}
 
           <button
             onClick={() => setOpenTheme(!openTheme)}
@@ -451,7 +455,7 @@ const AppContent = () => {
             <main className="flex-1 p-0 w-full relative">
               <ErrorBoundary>
                 <Suspense fallback={<ModuleLoader />}>
-                  {user && sessionRole?.loaded && (
+                  {NOTIFICATIONS_ENABLED && user && sessionRole?.loaded && (
                     <Suspense fallback={null}>
                       <NotificationsHandler />
                     </Suspense>

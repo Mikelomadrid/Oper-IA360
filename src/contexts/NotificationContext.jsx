@@ -5,6 +5,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { ToastAction } from '@/components/ui/toast';
 
 const NotificationContext = createContext();
+const NOTIFICATIONS_ENABLED = import.meta.env.VITE_APP_ENV !== 'development';
 
 export const useNotification = () => {
   const context = useContext(NotificationContext);
@@ -21,7 +22,10 @@ export const NotificationProvider = ({ children }) => {
   const { toast } = useToast();
 
   const fetchUnreadCount = useCallback(async () => {
-    if (!sessionRole?.empleadoId) return;
+    if (!NOTIFICATIONS_ENABLED || !sessionRole?.empleadoId) {
+      setUnreadCount(0);
+      return;
+    }
     try {
       // Fetch unread notifications excluyendo las generadas por el propio admin
       const { data: unreadData, error } = await supabase
@@ -44,7 +48,7 @@ export const NotificationProvider = ({ children }) => {
   }, [sessionRole?.empleadoId]);
 
   useEffect(() => {
-    if (!sessionRole?.empleadoId) {
+    if (!NOTIFICATIONS_ENABLED || !sessionRole?.empleadoId) {
         setUnreadCount(0);
         return;
     }
