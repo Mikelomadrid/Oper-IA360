@@ -15,6 +15,40 @@ const reply = (body: Record<string, unknown>, status = 200) => new Response(JSON
 const message = (error: unknown) => error instanceof Error ? error.message : String(error || 'Error desconocido');
 const normalized = (value: unknown) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const DNI_LETTERS = 'TRWAGMYFPDXBNJZSQVHLCKE';
+const CIF_CONTROL_LETTERS = 'JABCDEFGHI';
+
+function validSpanishTaxId(value: unknown) {
+  let taxId = normalized(value);
+  if (taxId.startsWith('ES') && taxId.length === 11) taxId = taxId.slice(2);
+
+  const dni = taxId.match(/^(\d{8})([A-Z])$/);
+  if (dni) return dni[2] === DNI_LETTERS[Number(dni[1]) % 23] ? taxId : null;
+
+  const nie = taxId.match(/^([XYZ])(\d{7})([A-Z])$/);
+  if (nie) {
+    const prefix = { X: '0', Y: '1', Z: '2' }[nie[1] as 'X' | 'Y' | 'Z'];
+    return nie[3] === DNI_LETTERS[Number(`${prefix}${nie[2]}`) % 23] ? taxId : null;
+  }
+
+  const cif = taxId.match(/^([ABCDEFGHJKLMNPQRSUVW])(\d{7})([0-9A-J])$/);
+  if (!cif) return null;
+  const digits = cif[2].split('').map(Number);
+  const evenSum = digits[1] + digits[3] + digits[5];
+  const oddSum = [digits[0], digits[2], digits[4], digits[6]].reduce((sum, digit) => {
+    const doubled = digit * 2;
+    return sum + Math.floor(doubled / 10) + (doubled % 10);
+  }, 0);
+  const controlDigit = (10 - ((evenSum + oddSum) % 10)) % 10;
+  const controlLetter = CIF_CONTROL_LETTERS[controlDigit];
+  const supplied = cif[3];
+  const valid = 'ABEH'.includes(cif[1])
+    ? supplied === String(controlDigit)
+    : 'KPQS'.includes(cif[1])
+      ? supplied === controlLetter
+      : supplied === String(controlDigit) || supplied === controlLetter;
+  return valid ? taxId : null;
+}
 
 function text(value: unknown, label: string) {
   const result = String(value || '').trim();
@@ -168,7 +202,14 @@ Deno.serve(async (request) => {
       return reply({ ok: false, code: 'lines_not_validated', message: 'Todas las líneas deben estar validadas.' }, 409);
     }
 
-    const nif = text(ocr.proveedor_nif, 'el NIF del proveedor');
+    const nif = validSpanishTaxId(text(ocr.proveedor_nif, 'el NIF del proveedor'));
+    if (!nif) {
+      return reply({
+        ok: false,
+        code: 'invalid_provider_tax_id',
+        message: 'El CIF/NIF del proveedor no supera la validación fiscal española. Corrígelo en el ERP antes de enviarlo.',
+      }, 400);
+    }
     const providerName = text(ocr.proveedor_nombre, 'el nombre del proveedor');
     const invoiceNumber = text(ocr.numero_factura, 'el número de factura');
     const invoiceDate = text(ocr.fecha_factura, 'la fecha de factura');

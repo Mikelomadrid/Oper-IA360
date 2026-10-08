@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { ProviderSelect } from '@/components/ProviderSelect';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { validateSpanishTaxId } from '@/lib/spanishTaxId';
 import InvoiceLineDistribution, {
   buildDefaultAssignments,
   DestinationSelect,
@@ -150,6 +151,14 @@ const GastosScanner = ({ navigate }) => {
     total_con_iva: '',
     concepto: '',
   });
+  const nuevoProveedorCifValidation = useMemo(
+    () => validateSpanishTaxId(nuevoProveedor?.cif),
+    [nuevoProveedor?.cif],
+  );
+  const cifOcrValidation = useMemo(
+    () => validateSpanishTaxId(formData.proveedor_cif_ocr),
+    [formData.proveedor_cif_ocr],
+  );
 
   useEffect(() => {
     const fetchData = async () => {
@@ -207,14 +216,15 @@ const GastosScanner = ({ navigate }) => {
       // Intentar match de proveedor
       // Buscar SIEMPRE por CIF primero — normalizar eliminando todo excepto letras y números
       const normalizarCIF = (cif) => cif ? cif.replace(/[^a-zA-Z0-9]/g, '').toUpperCase() : '';
+      const cifValidation = validateSpanishTaxId(result.proveedor_cif);
 
       console.log('[OCR] CIF detectado:', result.proveedor_cif);
       console.log('[OCR] CIF normalizado:', normalizarCIF(result.proveedor_cif));
       console.log('[OCR] Proveedores con CIF:', proveedores.filter(p => p.cif).map(p => ({ nombre: p.nombre, cif: p.cif, normalizado: normalizarCIF(p.cif) })));
 
       let foundProvider = null;
-      if (result.proveedor_cif) {
-        const cifBuscado = normalizarCIF(result.proveedor_cif);
+      if (cifValidation.valid) {
+        const cifBuscado = cifValidation.normalized;
         foundProvider = proveedores.find(p =>
           p.cif && normalizarCIF(p.cif) === cifBuscado
         );
@@ -249,6 +259,14 @@ const GastosScanner = ({ navigate }) => {
         setShowCrearProveedor(true);
       }
 
+      if (!cifValidation.valid) {
+        toast({
+          variant: 'destructive',
+          title: 'CIF/NIF detectado incorrecto',
+          description: `${result.proveedor_cif || 'Sin identificar'} — ${cifValidation.reason}`,
+        });
+      }
+
       // Cargar líneas extraídas
       if (result.lineas && result.lineas.length > 0) {
         setLineas(result.lineas.map(l => ({
@@ -276,11 +294,16 @@ const GastosScanner = ({ navigate }) => {
       toast({ variant: 'destructive', title: 'El nombre es obligatorio' });
       return;
     }
+    const cifValidation = validateSpanishTaxId(nuevoProveedor.cif);
+    if (!cifValidation.valid) {
+      toast({ variant: 'destructive', title: 'CIF/NIF incorrecto', description: cifValidation.reason });
+      return;
+    }
     setCreandoProveedor(true);
     try {
       const { data, error } = await supabase.from('proveedores').insert({
         nombre: nuevoProveedor.nombre.trim(),
-        cif: nuevoProveedor.cif?.trim() || null,
+        cif: cifValidation.normalized,
         email: nuevoProveedor.email?.trim() || null,
         telefono: nuevoProveedor.telefono?.trim() || null,
         direccion: nuevoProveedor.direccion?.trim() || null,
@@ -291,7 +314,12 @@ const GastosScanner = ({ navigate }) => {
 
       // Añadir a la lista local y seleccionarlo
       setProveedores(prev => [...prev, data]);
-      setFormData(prev => ({ ...prev, proveedor_id: data.id }));
+      setFormData(prev => ({
+        ...prev,
+        proveedor_id: data.id,
+        proveedor_nombre_ocr: data.nombre,
+        proveedor_cif_ocr: data.cif,
+      }));
       setShowCrearProveedor(false);
       setNuevoProveedor(null);
       toast({ title: `Proveedor "${data.nombre}" creado`, description: 'Seleccionado automáticamente.' });
@@ -347,6 +375,17 @@ const GastosScanner = ({ navigate }) => {
     }
     if (!formData.proveedor_id) {
       toast({ variant: "destructive", title: "Proveedor requerido", description: "Selecciona un proveedor." });
+      return;
+    }
+    const selectedProvider = proveedores.find((provider) => provider.id === formData.proveedor_id);
+    const providerTaxId = selectedProvider?.cif || formData.proveedor_cif_ocr;
+    const providerTaxIdValidation = validateSpanishTaxId(providerTaxId);
+    if (!providerTaxIdValidation.valid) {
+      toast({
+        variant: 'destructive',
+        title: 'CIF/NIF del proveedor incorrecto',
+        description: providerTaxIdValidation.reason,
+      });
       return;
     }
     if (!currentEmpleadoId) {
@@ -589,10 +628,24 @@ const GastosScanner = ({ navigate }) => {
                 <Label className="text-xs">Proveedor *</Label>
                 <ProviderSelect
                   value={formData.proveedor_id}
-                  onValueChange={(val) => setFormData(p => ({ ...p, proveedor_id: val }))}
+                  onValueChange={(val) => {
+                    const provider = proveedores.find((item) => item.id === val);
+                    setFormData(p => ({
+                      ...p,
+                      proveedor_id: val,
+                      proveedor_nombre_ocr: provider?.nombre || p.proveedor_nombre_ocr,
+                      proveedor_cif_ocr: provider?.cif || p.proveedor_cif_ocr,
+                    }));
+                  }}
                   placeholder={formData.proveedor_nombre_ocr ? `Detectado: ${formData.proveedor_nombre_ocr}` : "Buscar proveedor..."}
                   className="mt-1"
                 />
+                {formData.proveedor_cif_ocr && !cifOcrValidation.valid && (
+                  <div className="mt-2 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span><strong>CIF/NIF detectado: {formData.proveedor_cif_ocr}.</strong> {cifOcrValidation.reason}</span>
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -739,8 +792,17 @@ const GastosScanner = ({ navigate }) => {
                 <Input value={nuevoProveedor?.nombre || ''} onChange={e => setNuevoProveedor(p => ({ ...p, nombre: e.target.value }))} className="mt-1" placeholder="Nombre del proveedor" />
               </div>
               <div>
-                <Label className="text-xs">CIF / NIF</Label>
-                <Input value={nuevoProveedor?.cif || ''} onChange={e => setNuevoProveedor(p => ({ ...p, cif: e.target.value }))} className="mt-1" placeholder="B12345678" />
+                <Label className="text-xs">CIF / NIF *</Label>
+                <Input
+                  value={nuevoProveedor?.cif || ''}
+                  onChange={e => setNuevoProveedor(p => ({ ...p, cif: e.target.value }))}
+                  className={`mt-1 ${nuevoProveedor?.cif && !nuevoProveedorCifValidation.valid ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                  placeholder="B12345678"
+                  aria-invalid={Boolean(nuevoProveedor?.cif && !nuevoProveedorCifValidation.valid)}
+                />
+                {nuevoProveedor?.cif && !nuevoProveedorCifValidation.valid && (
+                  <p className="mt-1 text-xs text-destructive">{nuevoProveedorCifValidation.reason}</p>
+                )}
               </div>
               <div>
                 <Label className="text-xs">Teléfono</Label>
@@ -758,7 +820,10 @@ const GastosScanner = ({ navigate }) => {
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowCrearProveedor(false)}>Seleccionar manualmente</Button>
-            <Button onClick={handleCrearProveedor} disabled={creandoProveedor}>
+            <Button
+              onClick={handleCrearProveedor}
+              disabled={creandoProveedor || !nuevoProveedor?.nombre?.trim() || !nuevoProveedorCifValidation.valid}
+            >
               {creandoProveedor ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
               Crear proveedor
             </Button>
