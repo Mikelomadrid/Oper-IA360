@@ -17,6 +17,11 @@ import { Badge } from '@/components/ui/badge';
 import { ProviderSelect } from '@/components/ProviderSelect';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { validateSpanishTaxId } from '@/lib/spanishTaxId';
+import {
+  PURCHASE_DOCUMENT_TYPES,
+  buildInternalTicketNumber,
+  classifyPurchaseDocument,
+} from '@/lib/purchaseDocumentType';
 import InvoiceLineDistribution, {
   buildDefaultAssignments,
   DestinationSelect,
@@ -150,6 +155,11 @@ const GastosScanner = ({ navigate }) => {
     iva_importe: '',
     total_con_iva: '',
     concepto: '',
+    tipo_documento: PURCHASE_DOCUMENT_TYPES.REVIEW,
+    tipo_documento_motivo: 'Pendiente de analizar.',
+    numero_generado: false,
+    receptor_nombre_ocr: '',
+    receptor_cif_ocr: '',
   });
   const nuevoProveedorCifValidation = useMemo(
     () => validateSpanishTaxId(nuevoProveedor?.cif),
@@ -190,7 +200,15 @@ const GastosScanner = ({ navigate }) => {
       setLineas([]);
       setOcrResult(null);
       setDistribucionActiva(false);
-      setFormData(prev => ({ ...prev, numero_factura: '', fecha_emision: '', total_con_iva: '', iva: '', monto_bruto: '', concepto: '' }));
+      setFormData(prev => ({
+        ...prev,
+        numero_factura: '', fecha_emision: '', total_con_iva: '', iva: '', monto_bruto: '', concepto: '',
+        tipo_documento: PURCHASE_DOCUMENT_TYPES.REVIEW,
+        tipo_documento_motivo: 'Pendiente de analizar.',
+        numero_generado: false,
+        receptor_nombre_ocr: '',
+        receptor_cif_ocr: '',
+      }));
     }
   };
 
@@ -212,6 +230,16 @@ const GastosScanner = ({ navigate }) => {
     try {
       const result = await analyzeInvoice(file);
       setOcrResult(result);
+      const documentClassification = classifyPurchaseDocument({
+        recipientName: result.receptor_nombre,
+        recipientTaxId: result.receptor_cif,
+      });
+      const documentNumber = result.numero_factura || await buildInternalTicketNumber({
+        file,
+        date: result.fecha,
+        providerTaxId: result.proveedor_cif,
+        total: result.total,
+      });
 
       // Intentar match de proveedor
       // Buscar SIEMPRE por CIF primero — normalizar eliminando todo excepto letras y números
@@ -233,7 +261,7 @@ const GastosScanner = ({ navigate }) => {
 
       setFormData(prev => ({
         ...prev,
-        numero_factura: result.numero_factura || '',
+        numero_factura: documentNumber,
         fecha_emision: result.fecha || new Date().toISOString().split('T')[0],
         total_con_iva: result.total || '',
         iva: result.iva_porcentaje ? result.iva_porcentaje / 100 : 0.21,
@@ -243,6 +271,11 @@ const GastosScanner = ({ navigate }) => {
         proveedor_nombre_ocr: result.proveedor_nombre || '',
         proveedor_cif_ocr: result.proveedor_cif || '',
         concepto: result.proveedor_nombre || '',
+        tipo_documento: documentClassification.type,
+        tipo_documento_motivo: documentClassification.reason,
+        numero_generado: !result.numero_factura,
+        receptor_nombre_ocr: result.receptor_nombre || '',
+        receptor_cif_ocr: result.receptor_cif || '',
       }));
 
       if (foundProvider) {
@@ -281,6 +314,12 @@ const GastosScanner = ({ navigate }) => {
       }
 
       toast({ title: "Análisis completado", description: `Se han extraído ${result.lineas?.length || 0} líneas de producto.` });
+      if (!result.numero_factura) {
+        toast({
+          title: 'Referencia interna generada',
+          description: `${documentNumber} — el documento no contiene un número legible.`,
+        });
+      }
     } catch (error) {
       console.error(error);
       toast({ variant: "destructive", title: "Error en el análisis", description: error.message });
@@ -369,6 +408,14 @@ const GastosScanner = ({ navigate }) => {
   }, [lineasConDestino]);
 
   const handleSave = async () => {
+    if (formData.tipo_documento === PURCHASE_DOCUMENT_TYPES.REVIEW) {
+      toast({
+        variant: 'destructive',
+        title: 'Clasificación pendiente',
+        description: 'Confirma si el documento es una factura recibida o un gasto/ticket antes de guardarlo.',
+      });
+      return;
+    }
     if (!formData.numero_factura || !formData.total_con_iva) {
       toast({ variant: "destructive", title: "Faltan datos", description: "Verifica el número de factura y el total." });
       return;
@@ -520,7 +567,14 @@ const GastosScanner = ({ navigate }) => {
         p_base_imponible: baseImponible,
         p_iva_importe: ivaImporte,
         p_total: totalFactura,
-        p_json_ocr: ocrResult || {},
+        p_json_ocr: {
+          ...(ocrResult || {}),
+          tipo_documento_erp: formData.tipo_documento,
+          tipo_documento_motivo: formData.tipo_documento_motivo,
+          numero_documento_generado: formData.numero_generado,
+          receptor_nombre: formData.receptor_nombre_ocr || ocrResult?.receptor_nombre || null,
+          receptor_cif: formData.receptor_cif_ocr || ocrResult?.receptor_cif || null,
+        },
         p_lineas: lineasOcr,
         p_confianza_ocr: Number(ocrResult?.confianza_ocr || ocrResult?.confianza) || null,
         p_motor_ocr: 'openai_vision',
@@ -547,7 +601,15 @@ const GastosScanner = ({ navigate }) => {
       // Reset
       setFile(null); setPreview(null); setLineas([]); setOcrResult(null);
       setDestinoPrincipal(''); setDistribucionActiva(false);
-      setFormData({ proveedor_id: '', proveedor_nombre_ocr: '', proveedor_cif_ocr: '', numero_factura: '', fecha_emision: '', monto_bruto: '', iva: 0.21, iva_importe: '', total_con_iva: '', concepto: '' });
+      setFormData({
+        proveedor_id: '', proveedor_nombre_ocr: '', proveedor_cif_ocr: '', numero_factura: '',
+        fecha_emision: '', monto_bruto: '', iva: 0.21, iva_importe: '', total_con_iva: '', concepto: '',
+        tipo_documento: PURCHASE_DOCUMENT_TYPES.REVIEW,
+        tipo_documento_motivo: 'Pendiente de analizar.',
+        numero_generado: false,
+        receptor_nombre_ocr: '',
+        receptor_cif_ocr: '',
+      });
 
     } catch (err) {
       console.error(err);
@@ -649,8 +711,9 @@ const GastosScanner = ({ navigate }) => {
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <Label className="text-xs">Nº Factura *</Label>
+                  <Label className="text-xs">Nº documento *</Label>
                   <Input value={formData.numero_factura} onChange={e => setFormData(p => ({ ...p, numero_factura: e.target.value }))} className="h-8 text-sm mt-1" />
+                  {formData.numero_generado && <p className="mt-1 text-[10px] text-amber-700">Referencia interna generada automáticamente.</p>}
                 </div>
                 <div>
                   <Label className="text-xs">Fecha</Label>
@@ -674,6 +737,36 @@ const GastosScanner = ({ navigate }) => {
                   <Label className="text-xs">Total (€) *</Label>
                   <Input type="number" value={formData.total_con_iva} onChange={e => setFormData(p => ({ ...p, total_con_iva: e.target.value }))} className="h-8 text-sm mt-1" />
                 </div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div>
+                    <Label className="text-xs font-semibold">Registro en ContaSimple *</Label>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Se determina por los datos del destinatario, no por el número del ticket.</p>
+                  </div>
+                  <Badge variant="outline" className={formData.tipo_documento === PURCHASE_DOCUMENT_TYPES.REVIEW ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-blue-200 bg-blue-50 text-blue-700'}>
+                    {formData.tipo_documento === PURCHASE_DOCUMENT_TYPES.RECEIVED_INVOICE ? 'Factura recibida' : formData.tipo_documento === PURCHASE_DOCUMENT_TYPES.EXPENSE ? 'Gasto / ticket' : 'Revisar'}
+                  </Badge>
+                </div>
+                <Select
+                  value={formData.tipo_documento}
+                  onValueChange={(value) => setFormData((current) => ({
+                    ...current,
+                    tipo_documento: value,
+                    tipo_documento_motivo: 'Clasificación confirmada manualmente.',
+                  }))}
+                >
+                  <SelectTrigger className="h-9 bg-background text-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={PURCHASE_DOCUMENT_TYPES.RECEIVED_INVOICE}>Factura recibida — aparecen los datos de ORKALED</SelectItem>
+                    <SelectItem value={PURCHASE_DOCUMENT_TYPES.EXPENSE}>Gasto / ticket — no aparecen los datos de ORKALED</SelectItem>
+                    <SelectItem value={PURCHASE_DOCUMENT_TYPES.REVIEW}>Necesita revisión</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="mt-2 text-[11px] text-muted-foreground">{formData.tipo_documento_motivo}</p>
+                {(formData.receptor_nombre_ocr || formData.receptor_cif_ocr) && (
+                  <p className="mt-1 text-[11px] text-slate-600">Destinatario leído: {formData.receptor_nombre_ocr || 'sin nombre'}{formData.receptor_cif_ocr ? ` · ${formData.receptor_cif_ocr}` : ''}</p>
+                )}
               </div>
               <div className="rounded-lg border border-primary/15 bg-primary/[0.035] p-3">
                 <div className="mb-2 flex items-start justify-between gap-3">

@@ -109,6 +109,8 @@ Deno.serve(async (req) => {
               text: [
                 'Extrae esta factura de proveedor española.',
                 'No inventes referencias ni importes: usa null o cadena vacía cuando no sean legibles.',
+                'Distingue emisor/proveedor y receptor/destinatario. El receptor es quien compra; extrae su nombre y NIF/CIF solo si aparecen expresamente.',
+                'El número del documento puede figurar como número de factura, factura simplificada, ticket, recibo u operación; conserva el texto impreso y usa null si no existe.',
                 'Separa cada artículo o material en una línea y conserva sus unidades reales.',
                 'Si el concepto indica un envase de compra como palé, saco, caja, rollo o pack, usa ese envase como unidad; no lo conviertas a ud aunque el texto indique cuántas piezas contiene.',
                 'Los importes de cabecera y línea deben ser números, sin símbolos monetarios.',
@@ -126,12 +128,14 @@ Deno.serve(async (req) => {
               type: 'object',
               additionalProperties: false,
               required: [
-                'proveedor_nombre', 'proveedor_cif', 'numero_factura', 'fecha',
+                'proveedor_nombre', 'proveedor_cif', 'receptor_nombre', 'receptor_cif', 'numero_factura', 'fecha',
                 'subtotal', 'iva_importe', 'iva_porcentaje', 'total', 'confianza_ocr', 'lineas',
               ],
               properties: {
                 proveedor_nombre: { type: ['string', 'null'] },
                 proveedor_cif: { type: ['string', 'null'] },
+                receptor_nombre: { type: ['string', 'null'] },
+                receptor_cif: { type: ['string', 'null'] },
                 numero_factura: { type: ['string', 'null'] },
                 fecha: { type: ['string', 'null'], description: 'Fecha YYYY-MM-DD' },
                 subtotal: { type: ['number', 'null'] },

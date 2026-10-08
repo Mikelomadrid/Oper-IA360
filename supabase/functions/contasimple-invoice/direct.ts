@@ -184,7 +184,7 @@ Deno.serve(async (request) => {
 
     const [invoiceResult, ocrResult, controlResult, linesResult] = await Promise.all([
       admin.from('facturas_gastos').select('id, proveedor_id, estado_contabilidad').eq('id', facturaId).maybeSingle(),
-      admin.from('facturas_gastos_ocr').select('proveedor_nombre, proveedor_nif, numero_factura, fecha_factura, total, validacion_estado').eq('factura_id', facturaId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      admin.from('facturas_gastos_ocr').select('proveedor_nombre, proveedor_nif, numero_factura, fecha_factura, total, validacion_estado, json_ocr').eq('factura_id', facturaId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
       admin.from('facturas_gastos_contasimple_control').select('*').eq('factura_id', facturaId).maybeSingle(),
       admin.from('facturas_gastos_lineas_ocr').select('numero_linea, referencia, descripcion, cantidad, unidad, precio_unitario, base_linea, iva_porcentaje, iva_importe, validacion_estado').eq('factura_id', facturaId).order('numero_linea'),
     ]);
@@ -200,6 +200,26 @@ Deno.serve(async (request) => {
     if (ocr.validacion_estado !== 'validado') return reply({ ok: false, code: 'invoice_not_validated', message: 'La factura debe estar validada.' }, 409);
     if (sourceLines.some((line) => !['validada', 'no_material'].includes(String(line.validacion_estado)))) {
       return reply({ ok: false, code: 'lines_not_validated', message: 'Todas las líneas deben estar validadas.' }, 409);
+    }
+
+    const documentMetadata = ocr.json_ocr && typeof ocr.json_ocr === 'object'
+      ? ocr.json_ocr as Record<string, unknown>
+      : {};
+    const purchaseDocumentType = String(documentMetadata.tipo_documento_erp || 'factura_recibida');
+    if (purchaseDocumentType === 'revisar') {
+      return reply({
+        ok: false,
+        code: 'document_type_review_required',
+        message: 'Confirma en el ERP si el documento es una factura recibida o un gasto/ticket.',
+      }, 409);
+    }
+    if (purchaseDocumentType === 'gasto') {
+      return reply({
+        ok: false,
+        code: 'expense_flow_not_ready',
+        message: 'El documento está clasificado como gasto/ticket y no se enviará como factura recibida. Usa el circuito de Gastos de ContaSimple.',
+        documentType: purchaseDocumentType,
+      }, 409);
     }
 
     const nif = validSpanishTaxId(text(ocr.proveedor_nif, 'el NIF del proveedor'));
