@@ -68,7 +68,7 @@ const estadoInfo = (value) =>
   ESTADOS.find(e => e.value === value) || { value, label: value || 'Pendiente', classes: 'bg-slate-100 text-slate-600 border-slate-200', dot: 'bg-slate-400' };
 
 const CONTASIMPLE_ESTADOS = {
-  lista_para_contasimple: { label: 'Preparada para enviar', classes: 'bg-amber-50 text-amber-800 border-amber-200' },
+  lista_para_contasimple: { label: 'Preparada para registrar', classes: 'bg-amber-50 text-amber-800 border-amber-200' },
   enviada_ocr_contasimple: { label: 'Envío OCR antiguo', classes: 'bg-blue-50 text-blue-700 border-blue-200' },
   procesando_contasimple: { label: 'OCR antiguo en proceso', classes: 'bg-blue-50 text-blue-700 border-blue-200' },
   creada_en_contasimple: { label: 'Creada en ContaSimple', classes: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
@@ -234,7 +234,7 @@ const AccionesBotones = ({ f, isBusy, onAction, onEliminar, onEnviar }) => {
           onClick={() => onEnviar(f)}
         >
           {isBusy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-          Enviar a ContaSimple
+          Registrar en ContaSimple
         </Button>
         <Button
           variant="outline"
