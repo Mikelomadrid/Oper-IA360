@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
+import { useLocation } from 'react-router-dom';
 import {
   Loader2, Save, Scan, ArrowLeft, UploadCloud, Camera,
   Trash2, FileText, Plus, Pencil, Check, X, Package, AlertCircle,
@@ -17,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { ProviderSelect } from '@/components/ProviderSelect';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { validateSpanishTaxId } from '@/lib/spanishTaxId';
+import { createReceivedInvoice } from '@/services/contasimpleInvoiceService';
 import {
   PURCHASE_DOCUMENT_TYPES,
   buildInternalTicketNumber,
@@ -144,6 +146,10 @@ const LineaEditable = ({
 };
 
 const GastosScanner = ({ navigate }) => {
+  const location = useLocation();
+  const routeParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const contextualReturnId = routeParams.get('devolucionProveedorId') || '';
+  const returnTo = routeParams.get('returnTo') || '';
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -158,6 +164,9 @@ const GastosScanner = ({ navigate }) => {
   const [distribucionActiva, setDistribucionActiva] = useState(false);
   const [devolucionesPendientes, setDevolucionesPendientes] = useState([]);
   const [loadingDevoluciones, setLoadingDevoluciones] = useState(false);
+  const [devolucionContext, setDevolucionContext] = useState(null);
+  const [loadingDevolucionContext, setLoadingDevolucionContext] = useState(Boolean(contextualReturnId));
+  const [abonoProviderMismatch, setAbonoProviderMismatch] = useState(false);
   const { toast } = useToast();
 
   // Modal de crear proveedor nuevo
@@ -228,6 +237,51 @@ const GastosScanner = ({ navigate }) => {
 
   useEffect(() => {
     let active = true;
+    const loadReturnContext = async () => {
+      if (!contextualReturnId) {
+        setLoadingDevolucionContext(false);
+        return;
+      }
+      setLoadingDevolucionContext(true);
+      const { data, error } = await supabase
+        .from('v_devoluciones_proveedor_pendientes_abono')
+        .select('*')
+        .eq('id', contextualReturnId)
+        .maybeSingle();
+      if (!active) return;
+      if (error || !data) {
+        toast({
+          variant: 'destructive',
+          title: 'Devolución no disponible',
+          description: error?.message || 'La devolución ya no está pendiente de abono.',
+        });
+        setLoadingDevolucionContext(false);
+        return;
+      }
+      setDevolucionContext(data);
+      setDevolucionesPendientes([data]);
+      setDestinoPrincipal(destinoObra(data.obra_id));
+      setFormData((current) => ({
+        ...current,
+        proveedor_id: data.proveedor_id || '',
+        proveedor_nombre_ocr: data.proveedor_nombre || '',
+        proveedor_cif_ocr: data.proveedor_cif || '',
+        tipo_documento: PURCHASE_DOCUMENT_TYPES.RECEIVED_INVOICE,
+        tipo_documento_motivo: 'Abono iniciado desde una devolución pendiente.',
+        es_abono: true,
+        tipo_documento_fiscal: 'factura_rectificativa',
+        factura_original_numero: data.numero_factura_origen || '',
+        motivo_abono: data.motivo || '',
+        devolucion_proveedor_id: data.id,
+      }));
+      setLoadingDevolucionContext(false);
+    };
+    loadReturnContext();
+    return () => { active = false; };
+  }, [contextualReturnId, toast]);
+
+  useEffect(() => {
+    let active = true;
     const loadPendingReturns = async () => {
       if (!formData.es_abono || !formData.proveedor_id) {
         setDevolucionesPendientes([]);
@@ -265,25 +319,26 @@ const GastosScanner = ({ navigate }) => {
       setPreview(URL.createObjectURL(selectedFile));
       setLineas([]);
       setOcrResult(null);
+      setAbonoProviderMismatch(false);
       setDistribucionActiva(false);
       setFormData(prev => ({
         ...prev,
         numero_factura: '', fecha_emision: '', total_con_iva: '', iva: '', monto_bruto: '', concepto: '',
-        tipo_documento: PURCHASE_DOCUMENT_TYPES.REVIEW,
-        tipo_documento_motivo: 'Pendiente de analizar.',
+        tipo_documento: contextualReturnId ? PURCHASE_DOCUMENT_TYPES.RECEIVED_INVOICE : PURCHASE_DOCUMENT_TYPES.REVIEW,
+        tipo_documento_motivo: contextualReturnId ? 'Abono iniciado desde una devolución pendiente.' : 'Pendiente de analizar.',
         numero_generado: false,
         receptor_nombre_ocr: '',
         receptor_cif_ocr: '',
-        es_abono: false,
-        tipo_documento_fiscal: 'factura',
-        factura_original_numero: '',
-        motivo_abono: '',
-        devolucion_proveedor_id: '',
+        es_abono: Boolean(contextualReturnId),
+        tipo_documento_fiscal: contextualReturnId ? 'factura_rectificativa' : 'factura',
+        factura_original_numero: contextualReturnId ? (devolucionContext?.numero_factura_origen || prev.factura_original_numero) : '',
+        motivo_abono: contextualReturnId ? (devolucionContext?.motivo || prev.motivo_abono) : '',
+        devolucion_proveedor_id: contextualReturnId || '',
       }));
     }
   };
 
-  const onDrop = useCallback((acceptedFiles) => handleFileSelect(acceptedFiles[0]), [preview]);
+  const onDrop = (acceptedFiles) => handleFileSelect(acceptedFiles[0]);
   const onCameraCapture = (e) => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]); };
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
@@ -305,8 +360,9 @@ const GastosScanner = ({ navigate }) => {
         recipientName: result.receptor_nombre,
         recipientTaxId: result.receptor_cif,
       });
-      const isCreditNote = Boolean(result.es_abono)
+      const ocrDetectedCreditNote = Boolean(result.es_abono)
         || ['abono', 'factura_rectificativa'].includes(result.tipo_documento_fiscal);
+      const isCreditNote = Boolean(contextualReturnId) || ocrDetectedCreditNote;
       const documentNumber = result.numero_factura || await buildInternalTicketNumber({
         file,
         date: result.fecha,
@@ -344,9 +400,9 @@ const GastosScanner = ({ navigate }) => {
           : (result.total != null && result.iva_importe != null
             ? Math.abs(Number(result.total) - Number(result.iva_importe)).toFixed(2)
             : (documentClassification.type === PURCHASE_DOCUMENT_TYPES.EXPENSE ? Math.abs(Number(result.total || 0)) : '')),
-        proveedor_id: foundProvider ? foundProvider.id : '',
-        proveedor_nombre_ocr: result.proveedor_nombre || '',
-        proveedor_cif_ocr: result.proveedor_cif || '',
+        proveedor_id: contextualReturnId ? (devolucionContext?.proveedor_id || prev.proveedor_id) : (foundProvider ? foundProvider.id : ''),
+        proveedor_nombre_ocr: contextualReturnId ? (devolucionContext?.proveedor_nombre || prev.proveedor_nombre_ocr) : (result.proveedor_nombre || ''),
+        proveedor_cif_ocr: contextualReturnId ? (devolucionContext?.proveedor_cif || prev.proveedor_cif_ocr) : (result.proveedor_cif || ''),
         concepto: result.proveedor_nombre || '',
         tipo_documento: isCreditNote ? PURCHASE_DOCUMENT_TYPES.RECEIVED_INVOICE : documentClassification.type,
         tipo_documento_motivo: isCreditNote
@@ -359,12 +415,34 @@ const GastosScanner = ({ navigate }) => {
         tipo_documento_fiscal: isCreditNote
           ? (result.tipo_documento_fiscal === 'abono' ? 'abono' : 'factura_rectificativa')
           : (result.tipo_documento_fiscal || 'factura'),
-        factura_original_numero: result.factura_original_numero || '',
-        motivo_abono: result.motivo_abono || '',
-        devolucion_proveedor_id: '',
+        factura_original_numero: contextualReturnId
+          ? (devolucionContext?.numero_factura_origen || prev.factura_original_numero)
+          : (result.factura_original_numero || ''),
+        motivo_abono: result.motivo_abono || devolucionContext?.motivo || '',
+        devolucion_proveedor_id: contextualReturnId || '',
       }));
 
-      if (foundProvider) {
+      if (contextualReturnId) {
+        const expectedTaxId = validateSpanishTaxId(devolucionContext?.proveedor_cif).normalized;
+        if (cifValidation.valid && expectedTaxId && cifValidation.normalized !== expectedTaxId) {
+          setAbonoProviderMismatch(true);
+          toast({
+            variant: 'destructive',
+            title: 'El proveedor del abono no coincide',
+            description: `El OCR ha leído ${result.proveedor_cif}; la devolución pertenece a ${devolucionContext?.proveedor_cif}. Revisa el documento.`,
+          });
+        } else {
+          setAbonoProviderMismatch(false);
+          toast({ title: `Abono de ${devolucionContext?.proveedor_nombre || 'proveedor'} identificado`, description: 'La devolución y la obra permanecen bloqueadas.' });
+        }
+        if (!ocrDetectedCreditNote) {
+          toast({
+            variant: 'destructive',
+            title: 'El OCR no confirma que sea un abono',
+            description: 'Comprueba que el documento sea una factura rectificativa antes de guardarlo.',
+          });
+        }
+      } else if (foundProvider) {
         toast({ title: `Proveedor identificado: ${foundProvider.nombre}`, description: 'Coincidencia por CIF.' });
       } else {
         // No encontrado — mostrar modal para crear
@@ -494,6 +572,14 @@ const GastosScanner = ({ navigate }) => {
   }, [lineasConDestino]);
 
   const handleSave = async () => {
+    if (abonoProviderMismatch) {
+      toast({
+        variant: 'destructive',
+        title: 'Proveedor incompatible',
+        description: 'No se puede vincular este documento: su CIF no coincide con el proveedor de la devolución.',
+      });
+      return;
+    }
     if (formData.tipo_documento === PURCHASE_DOCUMENT_TYPES.REVIEW) {
       toast({
         variant: 'destructive',
@@ -719,10 +805,34 @@ const GastosScanner = ({ navigate }) => {
         throw new Error(intakeResult?.error || 'No se pudo registrar la factura.');
       }
 
-      toast({
-        title: "Factura distribuida y contabilizada",
-        description: `${intakeResult.asignaciones_creadas || lineas.length} destinos internos guardados; la factura queda preparada una sola vez para Contasimple.`,
-      });
+      let contasimpleResult = null;
+      let contasimpleError = null;
+      if (contextualReturnId) {
+        try {
+          contasimpleResult = await createReceivedInvoice(intakeResult.factura_id);
+        } catch (error) {
+          contasimpleError = error;
+          console.error('[Abono] No se pudo enviar a ContaSimple:', error);
+        }
+      }
+
+      if (contextualReturnId && contasimpleResult) {
+        toast({
+          title: "Abono registrado y enviado",
+          description: `La devolución queda abonada y ContaSimple ha creado el documento ${contasimpleResult.documentNumber || formData.numero_factura}.`,
+        });
+      } else if (contextualReturnId && contasimpleError) {
+        toast({
+          variant: "destructive",
+          title: "Abono guardado; envío pendiente",
+          description: `${contasimpleError.message} El abono no se ha perdido y podrá reenviarse desde la bandeja de ContaSimple.`,
+        });
+      } else {
+        toast({
+          title: "Factura distribuida y contabilizada",
+          description: `${intakeResult.asignaciones_creadas || lineas.length} destinos internos guardados; la factura queda preparada una sola vez para ContaSimple.`,
+        });
+      }
 
       // Reset
       setFile(null); setPreview(null); setLineas([]); setOcrResult(null);
@@ -744,6 +854,7 @@ const GastosScanner = ({ navigate }) => {
         motivo_abono: '',
         devolucion_proveedor_id: '',
       });
+      if (contextualReturnId && returnTo) navigate(returnTo);
 
     } catch (err) {
       console.error(err);
@@ -760,12 +871,35 @@ const GastosScanner = ({ navigate }) => {
     <div className="max-w-4xl mx-auto p-4 space-y-4">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => navigate && navigate(-1)}><ArrowLeft className="w-5 h-5" /></Button>
+        <Button variant="ghost" size="icon" onClick={() => navigate && navigate(returnTo || -1)}><ArrowLeft className="w-5 h-5" /></Button>
         <div>
-          <h1 className="text-2xl font-bold">Escáner de Facturas</h1>
-          <p className="text-sm text-muted-foreground">Sube una foto, ticket o PDF — la IA extraerá proveedor, referencias, unidades e importes</p>
+          <h1 className="text-2xl font-bold">{contextualReturnId ? 'Registrar factura de abono' : 'Escáner de Facturas'}</h1>
+          <p className="text-sm text-muted-foreground">
+            {contextualReturnId
+              ? 'Adjunta el abono recibido para cerrar esta devolución y prepararlo para ContaSimple.'
+              : 'Sube una foto, ticket o PDF — la IA extraerá proveedor, referencias, unidades e importes'}
+          </p>
         </div>
       </div>
+
+      {contextualReturnId && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+            <span className="text-emerald-700">Compra registrada</span>
+            <span className="text-slate-400">→</span>
+            <span className="text-emerald-700">Material devuelto</span>
+            <span className="text-slate-400">→</span>
+            <span className="rounded-full border border-amber-300 bg-white px-2 py-0.5 text-amber-800">Subir abono</span>
+            <span className="text-slate-400">→</span>
+            <span className="text-slate-500">Enviar a ContaSimple</span>
+          </div>
+          <p className="mt-2 text-xs text-slate-700">
+            {loadingDevolucionContext
+              ? 'Cargando la devolución…'
+              : `${devolucionContext?.obra_nombre || 'Obra'} · factura original ${devolucionContext?.numero_factura_origen || 'sin número'} · ${Number(devolucionContext?.importe_base_estimado || 0).toFixed(2)} € pendientes de abono`}
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
@@ -822,21 +956,34 @@ const GastosScanner = ({ navigate }) => {
             <CardContent className="space-y-3">
               <div>
                 <Label className="text-xs">Proveedor *</Label>
-                <ProviderSelect
-                  value={formData.proveedor_id}
-                  onValueChange={(val) => {
-                    const provider = proveedores.find((item) => item.id === val);
-                    setFormData(p => ({
-                      ...p,
-                      proveedor_id: val,
-                      proveedor_nombre_ocr: provider?.nombre || p.proveedor_nombre_ocr,
-                      proveedor_cif_ocr: provider?.cif || p.proveedor_cif_ocr,
-                      devolucion_proveedor_id: '',
-                    }));
-                  }}
-                  placeholder={formData.proveedor_nombre_ocr ? `Detectado: ${formData.proveedor_nombre_ocr}` : "Buscar proveedor..."}
-                  className="mt-1"
-                />
+                {contextualReturnId ? (
+                  <div className="mt-1 rounded-md border border-amber-200 bg-amber-50/70 px-3 py-2">
+                    <p className="text-sm font-medium text-slate-900">{devolucionContext?.proveedor_nombre || formData.proveedor_nombre_ocr || 'Cargando proveedor…'}</p>
+                    <p className="text-[11px] text-slate-600">CIF: {devolucionContext?.proveedor_cif || formData.proveedor_cif_ocr || '—'} · fijado por la devolución</p>
+                  </div>
+                ) : (
+                  <ProviderSelect
+                    value={formData.proveedor_id}
+                    onValueChange={(val) => {
+                      const provider = proveedores.find((item) => item.id === val);
+                      setFormData(p => ({
+                        ...p,
+                        proveedor_id: val,
+                        proveedor_nombre_ocr: provider?.nombre || p.proveedor_nombre_ocr,
+                        proveedor_cif_ocr: provider?.cif || p.proveedor_cif_ocr,
+                        devolucion_proveedor_id: '',
+                      }));
+                    }}
+                    placeholder={formData.proveedor_nombre_ocr ? `Detectado: ${formData.proveedor_nombre_ocr}` : "Buscar proveedor..."}
+                    className="mt-1"
+                  />
+                )}
+                {abonoProviderMismatch && (
+                  <div className="mt-2 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>El CIF leído en el documento no coincide con el proveedor de esta devolución.</span>
+                  </div>
+                )}
                 {formData.proveedor_cif_ocr && !cifOcrValidation.valid && (
                   <div className="mt-2 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -858,6 +1005,7 @@ const GastosScanner = ({ navigate }) => {
                 </div>
                 <Select
                   value={formData.es_abono ? 'abono' : 'factura'}
+                  disabled={Boolean(contextualReturnId)}
                   onValueChange={(value) => setFormData((current) => ({
                     ...current,
                     es_abono: value === 'abono',
@@ -884,6 +1032,7 @@ const GastosScanner = ({ navigate }) => {
                           value={formData.factura_original_numero}
                           onChange={(event) => setFormData((current) => ({ ...current, factura_original_numero: event.target.value }))}
                           placeholder="Ej. FV-2026-01847"
+                          readOnly={Boolean(contextualReturnId)}
                           className="mt-1 h-8 bg-white text-sm"
                         />
                       </div>
@@ -905,7 +1054,7 @@ const GastosScanner = ({ navigate }) => {
                           ...current,
                           devolucion_proveedor_id: value === 'sin_vincular' ? '' : value,
                         }))}
-                        disabled={loadingDevoluciones}
+                        disabled={loadingDevoluciones || Boolean(contextualReturnId)}
                       >
                         <SelectTrigger className="mt-1 h-9 bg-white text-sm"><SelectValue placeholder="Selecciona una devolución" /></SelectTrigger>
                         <SelectContent>
@@ -1032,12 +1181,20 @@ const GastosScanner = ({ navigate }) => {
                   </div>
                   {destinoPrincipal && <Badge variant="outline" className="border-green-200 bg-green-50 text-green-700">Asignado</Badge>}
                 </div>
-                <DestinationSelect
-                  value={destinoPrincipal}
-                  onValueChange={setDestinoPrincipal}
-                  proyectos={proyectos}
-                  className="h-9 bg-background text-sm"
-                />
+                {contextualReturnId ? (
+                  <div className="flex h-9 items-center gap-2 rounded-md border border-amber-200 bg-amber-50/70 px-3 text-sm font-medium text-slate-800">
+                    <Building2 className="h-4 w-4 text-amber-700" />
+                    {devolucionContext?.obra_nombre || 'Cargando obra…'}
+                    <span className="ml-auto text-[10px] font-normal text-slate-500">Fijada por la devolución</span>
+                  </div>
+                ) : (
+                  <DestinationSelect
+                    value={destinoPrincipal}
+                    onValueChange={setDestinoPrincipal}
+                    proyectos={proyectos}
+                    className="h-9 bg-background text-sm"
+                  />
+                )}
               </div>
             </CardContent>
           </Card>
@@ -1055,7 +1212,7 @@ const GastosScanner = ({ navigate }) => {
                   <CardDescription className="text-xs">Referencia y unidad son obligatorias para comparar con el presupuesto</CardDescription>
                 </div>
                 <div className="flex flex-wrap justify-end gap-2">
-                  {lineas.length > 0 && (
+                  {lineas.length > 0 && !contextualReturnId && (
                     <Button
                       type="button"
                       size="sm"
@@ -1116,8 +1273,10 @@ const GastosScanner = ({ navigate }) => {
           </Card>
 
           {/* Botón guardar */}
-          <Button className="w-full" size="lg" onClick={handleSave} disabled={isSaving || !formData.numero_factura || !formData.total_con_iva}>
-            {isSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Contabilizando...</> : <><Save className="mr-2 h-4 w-4" />Guardar factura y distribución</>}
+          <Button className="w-full" size="lg" onClick={handleSave} disabled={isSaving || loadingDevolucionContext || !formData.numero_factura || !formData.total_con_iva}>
+            {isSaving
+              ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{contextualReturnId ? 'Registrando y enviando…' : 'Contabilizando…'}</>
+              : <><Save className="mr-2 h-4 w-4" />{contextualReturnId ? 'Confirmar abono y enviar a ContaSimple' : 'Guardar factura y distribución'}</>}
           </Button>
         </div>
       </div>

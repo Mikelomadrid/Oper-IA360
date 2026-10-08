@@ -8,7 +8,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Edit, Trash2, FileText, PackageX, Eye, RotateCcw } from "lucide-react";
+import { Edit, Trash2, FileText, PackageX, Eye, RotateCcw, FileUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useFacturaViewer } from '@/hooks/useFacturaViewer';
 import FacturaViewerModal from '@/components/FacturaViewerModal';
@@ -30,7 +30,7 @@ const formatDate = (dateString) => {
     });
 };
 
-const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onReturnToProvider, canManage = false }) => {
+const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onReturnToProvider, onUploadCreditNote, canManage = false }) => {
   const { visorFactura, abrirFacturaEscaneada, cerrarVisor, paginaSiguiente, paginaAnterior, irAPagina } = useFacturaViewer();
 
   if (!gastos || gastos.length === 0) {
@@ -67,9 +67,18 @@ const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onReturnToProvi
               <TableCell className="text-xs font-mono text-muted-foreground">
                 <span className="block">{gasto.numero_factura || '-'}</span>
                 {number(gasto.devolucion_proveedor?.devoluciones_pendientes) > 0 && (
-                  <Badge className="mt-1 border-amber-300 bg-amber-50 px-1.5 py-0 text-[10px] font-sans text-amber-800 hover:bg-amber-50">
-                    Abono pendiente · {formatCurrency(gasto.devolucion_proveedor?.importe_pendiente_abono)}
-                  </Badge>
+                  <div className="mt-1 space-y-1 font-sans">
+                    <Badge className="border-amber-300 bg-amber-50 px-1.5 py-0 text-[10px] text-amber-800 hover:bg-amber-50">
+                      Abono pendiente · {formatCurrency(gasto.devolucion_proveedor?.importe_pendiente_abono)}
+                    </Badge>
+                    <div className="flex items-center gap-1 text-[9px] font-medium text-slate-500" title="Compra registrada → material devuelto → esperando factura de abono">
+                      <span className="text-emerald-700">Compra</span>
+                      <span>→</span>
+                      <span className="text-emerald-700">Devuelto</span>
+                      <span>→</span>
+                      <span className="text-amber-700">Abono</span>
+                    </div>
+                  </div>
                 )}
                 {number(gasto.devolucion_proveedor?.devoluciones_pendientes) === 0 && number(gasto.devolucion_proveedor?.devoluciones_abonadas) > 0 && (
                   <Badge className="mt-1 border-emerald-300 bg-emerald-50 px-1.5 py-0 text-[10px] font-sans text-emerald-800 hover:bg-emerald-50">
@@ -116,6 +125,18 @@ const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onReturnToProvi
                       title="Devolver materiales al proveedor"
                     >
                       <RotateCcw className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {canManage && gasto.devolucion_pendiente?.id && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1 border-amber-300 bg-amber-50 px-2 text-[11px] text-amber-900 hover:bg-amber-100 hover:text-amber-950"
+                      onClick={() => onUploadCreditNote?.(gasto)}
+                      title="Subir la factura de abono de esta devolución"
+                    >
+                      <FileUp className="h-3.5 w-3.5" />
+                      <span className="hidden xl:inline">Subir abono</span>
                     </Button>
                   )}
                   <Button 

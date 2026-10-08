@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/customSupabaseClient';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Loader2, Plus, Search } from 'lucide-react';
@@ -35,6 +36,7 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
     const [providerReturnExpense, setProviderReturnExpense] = useState(null);
     const queryClient = useQueryClient();
+    const navigate = useNavigate();
 
     // Fetch Expenses
     const { data: gastos, isLoading, error, refetch } = useQuery({
@@ -73,6 +75,20 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
             if (returnSummariesError) throw returnSummariesError;
             const returnSummaryByInvoice = new Map((returnSummaries || []).map((summary) => [summary.factura_id, summary]));
 
+            const { data: pendingReturns, error: pendingReturnsError } = await supabase
+                .from('devoluciones_proveedor')
+                .select('id, factura_origen_id, obra_id, motivo, importe_base_estimado, created_at')
+                .eq('obra_id', projectId)
+                .eq('estado', 'pendiente_abono')
+                .order('created_at', { ascending: false });
+            if (pendingReturnsError) throw pendingReturnsError;
+            const pendingReturnByInvoice = new Map();
+            (pendingReturns || []).forEach((item) => {
+                if (!pendingReturnByInvoice.has(item.factura_origen_id)) {
+                    pendingReturnByInvoice.set(item.factura_origen_id, item);
+                }
+            });
+
             // facturas_gastos puede venir como array u objeto según cómo infiera PostgREST la relación
             // (no hay constraint UNIQUE en gasto_id, así que por defecto es array; se maneja de forma defensiva).
             return (data || []).map(gasto => {
@@ -87,6 +103,7 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                     num_documentos_factura: numDocumentosFactura,
                     tiene_documento_factura: !!facturaInfo?.documento_principal_id,
                     devolucion_proveedor: facturaInfo?.id ? returnSummaryByInvoice.get(facturaInfo.id) || null : null,
+                    devolucion_pendiente: facturaInfo?.id ? pendingReturnByInvoice.get(facturaInfo.id) || null : null,
                 };
             });
         },
@@ -157,6 +174,13 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
             queryClient.invalidateQueries({ queryKey: ['obra_materiales_devolucion_disponible', projectId] }),
             queryClient.invalidateQueries({ queryKey: ['obra_materiales_control', projectId] }),
         ]);
+    };
+
+    const handleUploadCreditNote = (gasto) => {
+        const returnId = gasto?.devolucion_pendiente?.id;
+        if (!returnId) return;
+        const returnTo = `/gestion/obras/${projectId}?tab=materiales`;
+        navigate(`/administracion/gastos/scanner?devolucionProveedorId=${encodeURIComponent(returnId)}&returnTo=${encodeURIComponent(returnTo)}`);
     };
 
     if (isLoading) {
@@ -234,6 +258,7 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                         onEdit={handleEdit} 
                         onDelete={handleDeleteClick} 
                         onReturnToProvider={setProviderReturnExpense}
+                        onUploadCreditNote={handleUploadCreditNote}
                         canManage={canManage}
                     />
                 </CardContent>
