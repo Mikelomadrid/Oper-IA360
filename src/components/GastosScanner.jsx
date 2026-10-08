@@ -469,15 +469,23 @@ const GastosScanner = ({ navigate }) => {
 
       // Cargar líneas extraídas
       if (result.lineas && result.lineas.length > 0) {
-        setLineas(result.lineas.map(l => ({
-          referencia: l.referencia || '',
-          nombre: l.nombre || '',
-          categoria: l.categoria || 'materiales',
-          cantidad: Math.abs(Number(l.cantidad || 1)),
-          unidad: l.unidad || 'ud',
-          precio_unitario: Math.abs(Number(l.precio_unitario || 0)),
-          total_linea: Math.abs(Number(l.total_linea || 0)),
-        })));
+        setLineas(result.lineas.map((l) => {
+          const rawQuantity = Number(l.cantidad || 1);
+          const rawUnitPrice = Number(l.precio_unitario || 0);
+          const rawLineTotal = Number(l.total_linea || (rawQuantity * rawUnitPrice));
+          const negativeConcept = /\b(abono|devoluci[oó]n|descuento)\b/i.test(l.nombre || '');
+          const lineSign = rawQuantity < 0 || rawUnitPrice < 0 || rawLineTotal < 0 || negativeConcept ? -1 : 1;
+
+          return {
+            referencia: l.referencia || '',
+            nombre: l.nombre || '',
+            categoria: l.categoria || 'materiales',
+            cantidad: lineSign * Math.abs(rawQuantity || 1),
+            unidad: l.unidad || 'ud',
+            precio_unitario: Math.abs(rawUnitPrice),
+            total_linea: lineSign * Math.abs(rawLineTotal),
+          };
+        }));
       }
 
       toast({ title: "Análisis completado", description: `Se han extraído ${result.lineas?.length || 0} líneas de producto.` });
@@ -673,13 +681,16 @@ const GastosScanner = ({ navigate }) => {
       return;
     }
 
-    if (formData.es_abono && lineasConDestino.some((linea) => (
-      linea.asignaciones.some((asignacion) => asignacion.destino_tipo === 'almacen')
+    if (lineasConDestino.some((linea) => (
+      linea.asignaciones.some((asignacion) => (
+        asignacion.destino_tipo === 'almacen'
+        && (formData.es_abono || Number(asignacion.cantidad) < 0)
+      ))
     ))) {
       toast({
         variant: "destructive",
         title: "Salida de almacén pendiente de definir",
-        description: "Por ahora asigna el abono a la obra o a gastos generales. La devolución de stock propio debe registrarse desde el movimiento de almacén.",
+        description: "Asigna las líneas negativas a una obra o a gastos generales. Las salidas de stock propio deben registrarse desde el movimiento de almacén.",
       });
       return;
     }
@@ -733,9 +744,11 @@ const GastosScanner = ({ navigate }) => {
       if (!urlData?.publicUrl) throw new Error('No se pudo obtener la URL del documento.');
 
       const lineasOcr = lineasConDestino.map((l, index) => {
-        const cantidad = signoFiscal * Math.abs(Number(l.cantidad));
+        const cantidadCapturada = Number(l.cantidad);
+        const cantidad = formData.es_abono ? -Math.abs(cantidadCapturada) : cantidadCapturada;
         const precioUnitario = Number(l.precio_unitario);
-        const baseLinea = signoFiscal * Math.abs(Number(l.total_linea || (Math.abs(cantidad) * precioUnitario)));
+        const totalCapturado = Number(l.total_linea || (cantidadCapturada * precioUnitario));
+        const baseLinea = formData.es_abono ? -Math.abs(totalCapturado) : totalCapturado;
         return {
           numero_linea: index + 1,
           referencia: l.referencia.trim(),
@@ -750,7 +763,9 @@ const GastosScanner = ({ navigate }) => {
           asignaciones: l.asignaciones.map((asignacion) => ({
             destino_tipo: asignacion.destino_tipo,
             obra_id: asignacion.destino_tipo === 'obra' ? asignacion.obra_id : null,
-            cantidad: signoFiscal * Math.abs(Number(asignacion.cantidad)),
+            cantidad: formData.es_abono
+              ? -Math.abs(Number(asignacion.cantidad))
+              : Number(asignacion.cantidad),
           })),
         };
       });
