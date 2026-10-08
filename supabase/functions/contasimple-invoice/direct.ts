@@ -319,6 +319,7 @@ Deno.serve(async (request) => {
       .slice(0, 250) || providerName;
     const expenseBase = {
       number: invoiceNumber,
+      date: apiDate(invoiceDate),
       expenseDate: apiDate(invoiceDate),
       amount: money(invoiceTotal),
       computablePercentage: 100,
