@@ -27,10 +27,10 @@ async function invoke(action, facturaId) {
   return data;
 }
 
-export function uploadReceivedInvoice(facturaId) {
-  return invoke('upload', facturaId);
+export function previewReceivedInvoice(facturaId) {
+  return invoke('preview', facturaId);
 }
 
-export function refreshReceivedInvoiceStatus(facturaId) {
-  return invoke('status', facturaId);
+export function createReceivedInvoice(facturaId) {
+  return invoke('create', facturaId);
 }

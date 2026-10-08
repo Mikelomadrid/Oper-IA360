@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import './direct.ts';
 
 const CONTASIMPLE_API_BASE = 'https://api.contasimple.com/api/v2';
 const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
@@ -137,7 +138,7 @@ async function callContasimple(token: string, endpoint: string, init: RequestIni
   return payload;
 }
 
-Deno.serve(async (request) => {
+export const legacyContasimpleInvoiceHandler = async (request: Request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (request.method !== 'POST') {
     return json({ ok: false, code: 'method_not_allowed', message: 'Método no permitido.' }, 405);
@@ -384,4 +385,4 @@ Deno.serve(async (request) => {
     console.error('contasimple-invoice:', errorMessage(error));
     return json({ ok: false, code: 'internal_error', message: errorMessage(error) }, 500);
   }
-});
+};

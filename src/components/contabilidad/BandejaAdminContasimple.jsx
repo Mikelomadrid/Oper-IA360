@@ -2,15 +2,15 @@
 //
 // Subsección "Bandeja administración" dentro de la pestaña Contasimple.
 //
-// Cola fiscal de facturas recibidas. Permite revisar, confirmar el envío al OCR
-// de ContaSimple, consultar su procesamiento y cerrar el asiento en el ERP.
+// Cola fiscal de facturas recibidas. Permite revisar y crear la factura recibida
+// directamente por API en ContaSimple, sin subir archivos ni usar su OCR.
 //
 // Lee EXCLUSIVAMENTE:
 //   v_contasimple_admin_resumen_facturas -> cards por estado (pendiente / contabilizada / rechazada_no_contabilizable)
 //   v_contasimple_admin_bandeja_facturas -> tabla filtrable y paginada
 //
 // Acciones manuales: RPC flopy_marcar_factura_contasimple_estado.
-// Envío/consulta remotos: Edge Function contasimple-invoice.
+// Vista previa/registro remoto: Edge Function contasimple-invoice.
 //
 // El comparador ERP vs Contasimple sigue viviendo en su propia pestaña
 // (ComparadorContasimple.jsx) y no se toca desde aquí.
@@ -18,7 +18,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   RefreshCw, AlertTriangle, Search, Paperclip, ChevronDown, ChevronUp, ChevronRight,
-  Inbox, CheckCircle2, XCircle, Lock, Trash2, Send, Clock3, FileCheck2
+  Inbox, CheckCircle2, XCircle, Lock, Trash2, Send, FileCheck2
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -34,8 +34,8 @@ import {
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/customSupabaseClient';
 import {
-  uploadReceivedInvoice,
-  refreshReceivedInvoiceStatus,
+  createReceivedInvoice,
+  previewReceivedInvoice,
 } from '@/services/contasimpleInvoiceService';
 
 const PAGE_SIZE = 100;
@@ -69,8 +69,8 @@ const estadoInfo = (value) =>
 
 const CONTASIMPLE_ESTADOS = {
   lista_para_contasimple: { label: 'Preparada para enviar', classes: 'bg-amber-50 text-amber-800 border-amber-200' },
-  enviada_ocr_contasimple: { label: 'Enviada al OCR', classes: 'bg-blue-50 text-blue-700 border-blue-200' },
-  procesando_contasimple: { label: 'Procesando en ContaSimple', classes: 'bg-blue-50 text-blue-700 border-blue-200' },
+  enviada_ocr_contasimple: { label: 'Envío OCR antiguo', classes: 'bg-blue-50 text-blue-700 border-blue-200' },
+  procesando_contasimple: { label: 'OCR antiguo en proceso', classes: 'bg-blue-50 text-blue-700 border-blue-200' },
   creada_en_contasimple: { label: 'Creada en ContaSimple', classes: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
   posible_duplicado_contasimple: { label: 'Posible duplicado', classes: 'bg-orange-50 text-orange-800 border-orange-200' },
   error_contasimple: { label: 'Error de ContaSimple', classes: 'bg-red-50 text-red-700 border-red-200' },
@@ -170,8 +170,8 @@ const DetalleFactura = ({ f }) => (
     <div><span className="text-muted-foreground">Contabilizada el:</span> <span className="text-slate-700">{formatDateEs(f.contabilizado_at)}</span></div>
     <div><span className="text-muted-foreground">Flujo ContaSimple:</span> <ContaSimpleBadge value={f.estado_contasimple} /></div>
     <div><span className="text-muted-foreground">Periodo:</span> <span className="text-slate-700">{f.contasimple_periodo || '—'}</span></div>
-    <div><span className="text-muted-foreground">Solicitud OCR:</span> <span className="font-mono text-slate-600">{f.contasimple_ocr_request_id || '—'}</span></div>
-    <div><span className="text-muted-foreground">Estado OCR:</span> <span className="text-slate-700">{f.contasimple_ocr_status || '—'}</span></div>
+    <div><span className="text-muted-foreground">Solicitud OCR antigua:</span> <span className="font-mono text-slate-600">{f.contasimple_ocr_request_id || '—'}</span></div>
+    <div><span className="text-muted-foreground">Estado OCR antiguo:</span> <span className="text-slate-700">{f.contasimple_ocr_status || '—'}</span></div>
     <div><span className="text-muted-foreground">Documento ContaSimple:</span> <span className="font-mono text-slate-600">{f.contasimple_documento_id || f.contasimple_id || '—'}</span></div>
     <div className="sm:col-span-2 lg:col-span-3">
       <span className="text-muted-foreground">Documento:</span>{' '}
@@ -198,7 +198,7 @@ const DetalleFactura = ({ f }) => (
 
 // ---------- Acciones (según estado) ----------
 
-const AccionesBotones = ({ f, isBusy, onAction, onEliminar, onEnviar, onConsultar }) => {
+const AccionesBotones = ({ f, isBusy, onAction, onEliminar, onEnviar }) => {
   const estado = f.estado;
 
   if (estado === 'contabilizada') {
@@ -251,16 +251,9 @@ const AccionesBotones = ({ f, isBusy, onAction, onEliminar, onEnviar, onConsulta
 
   if (['enviada_ocr_contasimple', 'procesando_contasimple'].includes(f.estado_contasimple)) {
     return (
-      <Button
-        variant="outline"
-        size="sm"
-        className="h-7 px-2 text-[11px] gap-1 text-blue-700 hover:text-blue-700 hover:bg-blue-50 border-blue-200"
-        disabled={isBusy}
-        onClick={() => onConsultar(f)}
-      >
-        {isBusy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Clock3 className="w-3.5 h-3.5" />}
-        Consultar estado
-      </Button>
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] font-semibold bg-blue-50 text-blue-700 border-blue-200">
+        Flujo OCR anterior
+      </span>
     );
   }
 
@@ -359,6 +352,9 @@ export default function BandejaAdminContasimple() {
   const [deleteDialog, setDeleteDialog] = useState(null); // factura | null
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [sendDialog, setSendDialog] = useState(null);
+  const [sendPreview, setSendPreview] = useState(null);
+  const [sendPreviewLoading, setSendPreviewLoading] = useState(false);
+  const [sendPreviewError, setSendPreviewError] = useState(null);
   const [contasimpleLoadingId, setContasimpleLoadingId] = useState(null);
 
   useEffect(() => {
@@ -536,14 +532,18 @@ export default function BandejaAdminContasimple() {
 
   const confirmEnviarContasimple = async () => {
     if (!sendDialog) return;
+    if (!sendPreview || sendPreviewError) {
+      toast({ variant: 'destructive', title: 'Validación pendiente', description: 'Primero deben validarse los datos que se enviarán a ContaSimple.' });
+      return;
+    }
     setContasimpleLoadingId(sendDialog.factura_id);
     try {
-      const result = await uploadReceivedInvoice(sendDialog.factura_id);
+      const result = await createReceivedInvoice(sendDialog.factura_id);
       toast({
-        title: 'Factura enviada al OCR de ContaSimple',
-        description: result?.requestId
-          ? `Solicitud ${result.requestId}. Puedes consultar el estado desde esta bandeja.`
-          : 'La solicitud se ha registrado correctamente.',
+        title: 'Factura registrada en ContaSimple',
+        description: result?.documentNumber || result?.documentId
+          ? `Documento ${result.documentNumber || result.documentId} creado directamente, sin OCR.`
+          : 'La factura se ha creado directamente, sin subir el archivo.',
       });
       setSendDialog(null);
       await refrescarTrasAccion();
@@ -560,23 +560,19 @@ export default function BandejaAdminContasimple() {
     }
   };
 
-  const consultarEstadoContasimple = async (factura) => {
-    setContasimpleLoadingId(factura.factura_id);
+  const openSendDialog = async (factura) => {
+    setSendDialog(factura);
+    setSendPreview(null);
+    setSendPreviewError(null);
+    setSendPreviewLoading(true);
     try {
-      const result = await refreshReceivedInvoiceStatus(factura.factura_id);
-      const done = result?.status === 'Done' || result?.state === 'creada_en_contasimple';
-      toast({
-        title: done ? 'Factura creada en ContaSimple' : 'Estado actualizado',
-        description: done
-          ? `Documento ${result?.documentNumber || result?.documentId || 'creado correctamente'}.`
-          : `Estado actual: ${result?.status || 'procesando'}.`,
-      });
-      await refrescarTrasAccion();
+      const preview = await previewReceivedInvoice(factura.factura_id);
+      setSendPreview(preview);
     } catch (err) {
-      console.error('Error consultando estado de ContaSimple:', err);
-      toast({ variant: 'destructive', title: 'No se pudo consultar el estado', description: err?.message || 'Inténtalo de nuevo.' });
+      console.error('Error validando factura para ContaSimple:', err);
+      setSendPreviewError(err?.message || 'No se pudieron validar los datos de la factura.');
     } finally {
-      setContasimpleLoadingId(null);
+      setSendPreviewLoading(false);
     }
   };
 
@@ -592,7 +588,7 @@ export default function BandejaAdminContasimple() {
       <div>
         <h3 className="text-base font-bold text-slate-900">Bandeja administración</h3>
         <p className="text-xs text-muted-foreground">
-          Revisa las facturas y envíalas de forma controlada al OCR de ContaSimple. El ERP conserva el estado y evita reenvíos accidentales.
+          Revisa las facturas y regístralas directamente en ContaSimple. El ERP envía los datos ya validados, sin subir imágenes y sin consumir OCR de ContaSimple.
         </p>
       </div>
 
@@ -687,7 +683,7 @@ export default function BandejaAdminContasimple() {
                       {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                       {expanded ? 'Ocultar detalle' : 'Ver detalle'}
                     </button>
-                    <AccionesBotones f={f} isBusy={isBusy} onAction={openAction} onEliminar={(fila) => setDeleteDialog(fila)} onEnviar={setSendDialog} onConsultar={consultarEstadoContasimple} />
+                    <AccionesBotones f={f} isBusy={isBusy} onAction={openAction} onEliminar={(fila) => setDeleteDialog(fila)} onEnviar={openSendDialog} />
                   </div>
                   {expanded && (
                     <div className="pt-2 border-t">
@@ -755,7 +751,7 @@ export default function BandejaAdminContasimple() {
                           <TableCell className="text-slate-600 whitespace-nowrap">{formatDateEs(f.fecha_factura)}</TableCell>
                           <TableCell className="text-right font-semibold whitespace-nowrap">{formatCurrency(f.total)}</TableCell>
                           <TableCell onClick={(e) => e.stopPropagation()}>
-                            <AccionesBotones f={f} isBusy={isBusy} onAction={openAction} onEliminar={(fila) => setDeleteDialog(fila)} onEnviar={setSendDialog} onConsultar={consultarEstadoContasimple} />
+                            <AccionesBotones f={f} isBusy={isBusy} onAction={openAction} onEliminar={(fila) => setDeleteDialog(fila)} onEnviar={openSendDialog} />
                           </TableCell>
                         </TableRow>
                         {expanded && (
@@ -813,12 +809,12 @@ export default function BandejaAdminContasimple() {
       </Dialog>
 
       {/* ---------- Confirmación de envío real a ContaSimple ---------- */}
-      <Dialog open={!!sendDialog} onOpenChange={(open) => { if (!open && !contasimpleLoadingId) setSendDialog(null); }}>
+      <Dialog open={!!sendDialog} onOpenChange={(open) => { if (!open && !contasimpleLoadingId) { setSendDialog(null); setSendPreview(null); setSendPreviewError(null); } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Enviar factura a ContaSimple</DialogTitle>
+            <DialogTitle>Registrar factura en ContaSimple</DialogTitle>
             <DialogDescription>
-              Se subirá el documento al OCR de la cuenta de ORKALED INSTALACIONES SLU. Antes del envío se comprobará si ya existe una factura con el mismo número, NIF e importe.
+              Se crearán directamente el proveedor (solo si no existe) y la factura recibida con los datos validados por el ERP. No se subirá la imagen y no se utilizará ni cobrará el OCR de ContaSimple.
             </DialogDescription>
           </DialogHeader>
           <div className="rounded-lg border bg-slate-50 p-4 text-sm space-y-2">
@@ -827,12 +823,30 @@ export default function BandejaAdminContasimple() {
             <div className="flex justify-between gap-4"><span className="text-muted-foreground">Fecha</span><span className="font-medium">{formatDateEs(sendDialog?.fecha_factura)}</span></div>
             <div className="flex justify-between gap-4 border-t pt-2"><span className="text-muted-foreground">Total</span><span className="font-bold">{formatCurrency(sendDialog?.total)}</span></div>
           </div>
-          <p className="text-xs text-amber-700">El botón enviará realmente la factura a ContaSimple. No cierres esta ventana hasta recibir la confirmación.</p>
+          {sendPreviewLoading && (
+            <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">
+              <RefreshCw className="h-4 w-4 animate-spin" /> Validando proveedor, líneas, importes y posibles duplicados…
+            </div>
+          )}
+          {sendPreviewError && (
+            <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {sendPreviewError}
+            </div>
+          )}
+          {sendPreview && !sendPreviewLoading && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800 space-y-1">
+              <p className="font-semibold">Datos listos para registro directo</p>
+              <p>{sendPreview.invoice?.lines?.length || 0} líneas · Base {formatCurrency(sendPreview.totals?.base)} · IVA {formatCurrency(sendPreview.totals?.vat)}</p>
+              <p>Proveedor: {sendPreview.provider?.action === 'create' ? 'se creará en ContaSimple' : 'se reutilizará el existente'}.</p>
+              <p>Archivo: no se envía · OCR de ContaSimple: no se utiliza.</p>
+            </div>
+          )}
+          <p className="text-xs text-amber-700">El botón creará realmente la factura recibida en ContaSimple. Antes se comprobarán duplicados por NIF, número e importe.</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSendDialog(null)} disabled={!!contasimpleLoadingId}>Cancelar</Button>
-            <Button onClick={confirmEnviarContasimple} disabled={!!contasimpleLoadingId}>
+            <Button onClick={confirmEnviarContasimple} disabled={!!contasimpleLoadingId || sendPreviewLoading || !sendPreview || !!sendPreviewError}>
               {contasimpleLoadingId ? <RefreshCw className="w-4 h-4 animate-spin mr-1.5" /> : <Send className="w-4 h-4 mr-1.5" />}
-              Enviar al OCR
+              Registrar sin OCR
             </Button>
           </DialogFooter>
         </DialogContent>
