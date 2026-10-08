@@ -321,7 +321,7 @@ Deno.serve(async (request) => {
       for (const lookupPeriod of lookupPeriods) {
         const knownExpenses = rows(await call(
           accessToken,
-          `/accounting/${encodeURIComponent(lookupPeriod)}/expenses?${new URLSearchParams({ startIndex: '0', numRows: '1000' })}`,
+          `/accounting/${encodeURIComponent(lookupPeriod)}/expenses?${new URLSearchParams({ startIndex: '0', numRows: '300' })}`,
         ));
         paymentMethod = knownExpenses
           .map((item) => item.expensePayment && typeof item.expensePayment === 'object'
