@@ -61,6 +61,38 @@ const statusLabels = {
 
 const GESTION_STATUSES = ['gestionada', 'entregada', 'recibido'];
 
+const groupRequestRows = (rows = []) => Object.values(rows.reduce((acc, req) => {
+    if (!acc[req.solicitud_id]) {
+        acc[req.solicitud_id] = {
+            header: {
+                solicitud_id: req.solicitud_id,
+                fecha_solicitud: req.fecha_solicitud,
+                tipo: req.tipo,
+                estado_solicitud: req.estado_solicitud,
+                notas: req.notas,
+                proyecto_id: req.proyecto_id,
+                proyecto_nombre: req.proyecto_nombre,
+                parte_id: req.parte_id,
+                parte_custom_id: req.parte_custom_id,
+                parte_cliente_nombre: req.parte_cliente_nombre,
+                empleado_solicitante_id: req.empleado_solicitante_id,
+                empleado_nombre: req.empleado_nombre,
+            },
+            items: [],
+        };
+    }
+    acc[req.solicitud_id].items.push({
+        detalle_id: req.detalle_id,
+        descripcion: req.descripcion,
+        cantidad: req.cantidad,
+        unidad: req.unidad,
+        referencia_interna: req.referencia_interna,
+        preparada: req.preparada,
+        material_id: req.material_id,
+    });
+    return acc;
+}, {}));
+
 const getDestinationLabel = (req) => {
     if (req.header.parte_id) {
         return (
@@ -299,20 +331,23 @@ const MaterialRequests = ({ onUpdate }) => {
 
             setRequests(data || []);
             setError(null);
+            return data || [];
         } catch (error) {
             console.error("Error fetching requests:", error);
             setError(error.message);
             toast({ variant: 'destructive', title: 'Error al cargar solicitudes', description: error.message });
+            return null;
         } finally {
             setLoading(false);
         }
     }, [filters, _REQUESTS_V2_VIEW_QUERY_BASE, canManage, sessionRole.empleadoId]);
     
-    const refreshAll = useCallback(() => {
-        fetchRequests();
+    const refreshAll = useCallback(async () => {
+        const freshRequests = await fetchRequests();
         if (onUpdate && canManage) {
-            onUpdate();
+            await onUpdate();
         }
+        return freshRequests;
     }, [fetchRequests, onUpdate, canManage]);
 
     useEffect(() => {
@@ -336,39 +371,9 @@ const MaterialRequests = ({ onUpdate }) => {
         fetchFilterData();
     }, []);
 
-    const groupedRequests = useMemo(() => {
-        return requests.reduce((acc, req) => {
-            if (!acc[req.solicitud_id]) {
-                acc[req.solicitud_id] = {
-                    header: {
-                        solicitud_id: req.solicitud_id,
-                        fecha_solicitud: req.fecha_solicitud,
-                        tipo: req.tipo,
-                        estado_solicitud: req.estado_solicitud,
-                        notas: req.notas,
-                        proyecto_id: req.proyecto_id,
-                        proyecto_nombre: req.proyecto_nombre,
-                        parte_id: req.parte_id,
-                        parte_custom_id: req.parte_custom_id,
-                        parte_cliente_nombre: req.parte_cliente_nombre,
-                        empleado_solicitante_id: req.empleado_solicitante_id,
-                        empleado_nombre: req.empleado_nombre,
-                    },
-                    items: [],
-                };
-            }
-            acc[req.solicitud_id].items.push({
-                detalle_id: req.detalle_id,
-                descripcion: req.descripcion,
-                cantidad: req.cantidad,
-                unidad: req.unidad,
-                referencia_interna: req.referencia_interna,
-                preparada: req.preparada,
-                material_id: req.material_id, // include material_id
-            });
-            return acc;
-        }, {});
-    }, [requests]);
+    const groupedRequests = useMemo(() => Object.fromEntries(
+        groupRequestRows(requests).map(request => [request.header.solicitud_id, request])
+    ), [requests]);
 
     const filteredGroupedRequests = useMemo(() => {
         let result = Object.values(groupedRequests);
@@ -402,13 +407,14 @@ const MaterialRequests = ({ onUpdate }) => {
         setViewMode('split'); // Switch to split view when a request is selected from the list
     };
     
-    const handleRequestUpdated = () => {
-        refreshAll();
+    const handleRequestUpdated = async () => {
+        const selectedRequestId = selectedRequest?.header.solicitud_id;
+        const freshRows = await refreshAll();
         // If the current view is 'split' and the selected request was updated, re-select it to refresh its details
         // Otherwise, clear selection if in 'list' mode or if selected request was deleted
-        if (viewMode === 'split' && selectedRequest && requests.some(r => r.solicitud_id === selectedRequest.header.solicitud_id)) {
-             // Re-fetch details for the specific request if still exists
-            const updatedRequest = filteredGroupedRequests.find(r => r.header.solicitud_id === selectedRequest.header.solicitud_id);
+        if (viewMode === 'split' && selectedRequestId && freshRows) {
+            const updatedRequest = groupRequestRows(freshRows)
+                .find(request => request.header.solicitud_id === selectedRequestId);
             if (updatedRequest) {
                 setSelectedRequest(updatedRequest);
             } else {

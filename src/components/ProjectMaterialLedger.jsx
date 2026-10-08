@@ -60,25 +60,36 @@ const ProjectMaterialLedger = ({ projectId, canManage = false }) => {
     ));
   }, [availableQuery.data, returnRow]);
 
-  const selectedAssignment = candidates.find((item) => item.asignacion_id === assignmentId) || null;
+  const selectedAssignment = candidates.find((item) => item.origen_id === assignmentId) || null;
 
   const refresh = async () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ['obra_materiales_balance', projectId] }),
     queryClient.invalidateQueries({ queryKey: ['obra_materiales_devolucion_disponible', projectId] }),
     queryClient.invalidateQueries({ queryKey: ['obra_materiales_control', projectId] }),
+    queryClient.invalidateQueries({ queryKey: ['project_material_expenses', projectId] }),
   ]);
 
   const returnMutation = useMutation({
     mutationFn: async () => {
       const amount = Number(returnQuantity);
-      if (!assignmentId) throw new Error('Selecciona la compra de origen.');
+      if (!assignmentId) throw new Error('Selecciona el origen del material.');
       if (!Number.isFinite(amount) || amount <= 0) throw new Error('Indica una cantidad válida.');
       if (amount > number(selectedAssignment?.cantidad_disponible)) throw new Error('La cantidad supera las unidades disponibles de esa compra.');
-      const { data, error } = await supabase.rpc('ia360_devolver_material_obra_almacen', {
-        p_asignacion_id: assignmentId,
-        p_cantidad: amount,
-        p_observaciones: notes.trim() || null,
-      });
+      const isWarehouseExit = selectedAssignment?.origen_tipo === 'almacen';
+      const { data, error } = await supabase.rpc(
+        isWarehouseExit ? 'ia360_devolver_salida_obra_almacen' : 'ia360_devolver_material_obra_almacen',
+        isWarehouseExit
+          ? {
+              p_movimiento_salida_id: assignmentId,
+              p_cantidad: amount,
+              p_observaciones: notes.trim() || null,
+            }
+          : {
+              p_asignacion_id: assignmentId,
+              p_cantidad: amount,
+              p_observaciones: notes.trim() || null,
+            },
+      );
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error || 'No se pudo registrar la devolución.');
       return data;
@@ -101,7 +112,7 @@ const ProjectMaterialLedger = ({ projectId, canManage = false }) => {
       || (item.descripcion === row.descripcion && item.unidad === row.unidad)
     ));
     setReturnRow(row);
-    setAssignmentId(matching[0]?.asignacion_id || '');
+    setAssignmentId(matching[0]?.origen_id || '');
     setReturnQuantity('');
     setNotes('');
   };
@@ -145,7 +156,7 @@ const ProjectMaterialLedger = ({ projectId, canManage = false }) => {
           <DialogHeader><DialogTitle>Devolver material al almacén</DialogTitle><DialogDescription>Se descontarán las unidades y el coste de esta obra y aumentará el stock del almacén. La factura y el gasto fiscal no se modifican.</DialogDescription></DialogHeader>
           <div className="space-y-4 py-2">
             <div><Label>Material</Label><p className="mt-1 rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-sm font-medium">{returnRow?.descripcion}</p></div>
-            <div><Label>Compra de origen</Label><Select value={assignmentId} onValueChange={setAssignmentId}><SelectTrigger><SelectValue placeholder="Selecciona la factura" /></SelectTrigger><SelectContent>{candidates.map((item) => <SelectItem key={item.asignacion_id} value={item.asignacion_id}>{item.proveedor_nombre || 'Proveedor'} · {item.numero_factura || 'Sin número'} · quedan {quantity(item.cantidad_disponible)} {item.unidad}</SelectItem>)}</SelectContent></Select></div>
+            <div><Label>Origen del material</Label><Select value={assignmentId} onValueChange={setAssignmentId}><SelectTrigger><SelectValue placeholder="Selecciona el origen" /></SelectTrigger><SelectContent>{candidates.map((item) => <SelectItem key={`${item.origen_tipo}:${item.origen_id}`} value={item.origen_id}>{item.proveedor_nombre || 'Proveedor'} · {item.numero_factura || 'Sin número'} · quedan {quantity(item.cantidad_disponible)} {item.unidad}</SelectItem>)}</SelectContent></Select></div>
             <div><Label htmlFor="return-quantity">Cantidad a devolver ({selectedAssignment?.unidad || returnRow?.unidad})</Label><Input id="return-quantity" type="number" min="0" step="0.001" max={selectedAssignment?.cantidad_disponible || undefined} value={returnQuantity} onChange={(event) => setReturnQuantity(event.target.value)} /></div>
             <div><Label htmlFor="return-notes">Observación</Label><Input id="return-notes" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Ej. sobrante al finalizar instalación" /></div>
           </div>
