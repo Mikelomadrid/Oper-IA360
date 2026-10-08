@@ -148,6 +148,10 @@ Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (request.method !== 'POST') return reply({ ok: false, code: 'method_not_allowed', message: 'Método no permitido.' }, 405);
 
+  let recoveryAdmin: any = null;
+  let claimedFacturaId = '';
+  let remoteMutationStarted = false;
+
   try {
     const authorization = request.headers.get('Authorization');
     if (!authorization?.startsWith('Bearer ')) return reply({ ok: false, code: 'unauthorized', message: 'Sesión requerida.' }, 401);
@@ -164,6 +168,7 @@ Deno.serve(async (request) => {
       global: { headers: { Authorization: authorization } }, auth: { persistSession: false },
     });
     const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+    recoveryAdmin = admin;
     const { data: authData, error: authError } = await userClient.auth.getUser(authorization.slice(7));
     if (authError || !authData.user) return reply({ ok: false, code: 'invalid_session', message: 'La sesión no es válida.' }, 401);
 
@@ -355,14 +360,33 @@ Deno.serve(async (request) => {
       uploadsFile: false, usesContasimpleOcr: false,
     });
 
+    const claim = await admin.rpc('flopy_reclamar_envio_directo_contasimple', {
+      p_factura_id: facturaId,
+      p_usuario_id: employee.id,
+    });
+    if (claim.error) throw claim.error;
+    if (claim.data?.ok !== true) {
+      return reply({
+        ok: false,
+        code: claim.data?.error === 'envio_ya_en_proceso' ? 'send_in_progress' : 'invalid_state',
+        message: claim.data?.error === 'envio_ya_en_proceso'
+          ? 'Esta factura ya se está enviando a ContaSimple. Espera a que termine antes de volver a intentarlo.'
+          : 'La factura ya se envió o su estado ha cambiado. Actualiza la bandeja.',
+        state: claim.data?.estado_actual || null,
+      }, 409);
+    }
+    claimedFacturaId = facturaId;
+
     let providerCreated = false;
     if (!remoteProvider) {
+      remoteMutationStarted = true;
       remoteProvider = data(await call(accessToken, '/entities/providers', { method: 'POST', body: JSON.stringify(providerPayload) })) || undefined;
       providerCreated = true;
     }
     const issuerEntityId = Number(remoteProvider?.id);
     if (!Number.isSafeInteger(issuerEntityId) || issuerEntityId <= 0) throw new Error('ContaSimple no devolvió un identificador válido para el proveedor.');
 
+    remoteMutationStarted = true;
     const createdPayload = await call(
       accessToken,
       isExpense
@@ -396,7 +420,30 @@ Deno.serve(async (request) => {
       documentType: purchaseDocumentType, providerId: issuerEntityId, providerCreated,
       state: 'creada_en_contasimple', uploadsFile: false, usesContasimpleOcr: false });
   } catch (error) {
-    console.error('contasimple-invoice:', message(error));
-    return reply({ ok: false, code: 'internal_error', message: message(error) }, 500);
+    const errorMessage = message(error);
+    console.error('contasimple-invoice:', errorMessage);
+    if (recoveryAdmin && claimedFacturaId) {
+      const uncertain = remoteMutationStarted;
+      const recovery = await recoveryAdmin
+        .from('facturas_gastos_contasimple_control')
+        .update({
+          estado: uncertain ? 'error_contasimple' : 'lista_para_contasimple',
+          observaciones: uncertain
+            ? 'La API pudo haber iniciado una escritura. Revisar ContaSimple antes de reintentar.'
+            : 'El envío falló antes de iniciar escrituras en ContaSimple; puede volver a intentarse.',
+          error: errorMessage,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('factura_id', claimedFacturaId)
+        .eq('estado', 'procesando_contasimple');
+      if (recovery.error) console.error('contasimple-invoice recovery:', message(recovery.error));
+    }
+    return reply({
+      ok: false,
+      code: remoteMutationStarted ? 'remote_result_uncertain' : 'internal_error',
+      message: remoteMutationStarted
+        ? `${errorMessage} Revisa ContaSimple antes de reintentar para evitar duplicados.`
+        : errorMessage,
+    }, 500);
   }
 });
