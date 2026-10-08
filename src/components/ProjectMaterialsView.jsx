@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/customSupabaseClient';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Loader2, Plus, Search } from 'lucide-react';
@@ -9,6 +9,7 @@ import MaterialExpenseModal from '@/components/MaterialExpenseModal';
 import MaterialesExpenseTable from '@/components/MaterialesExpenseTable';
 import ProjectMaterialAudit from '@/components/ProjectMaterialAudit';
 import ProjectMaterialLedger from '@/components/ProjectMaterialLedger';
+import ProviderReturnModal from '@/components/ProviderReturnModal';
 import { toast } from '@/components/ui/use-toast';
 import {
   AlertDialog,
@@ -32,6 +33,8 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
     const [expenseToEdit, setExpenseToEdit] = useState(null);
     const [expenseToDelete, setExpenseToDelete] = useState(null);
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+    const [providerReturnExpense, setProviderReturnExpense] = useState(null);
+    const queryClient = useQueryClient();
 
     // Fetch Expenses
     const { data: gastos, isLoading, error, refetch } = useQuery({
@@ -63,6 +66,13 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
             
             if (error) throw error;
 
+            const { data: returnSummaries, error: returnSummariesError } = await supabase
+                .from('v_devoluciones_proveedor_resumen_factura')
+                .select('*')
+                .eq('obra_id', projectId);
+            if (returnSummariesError) throw returnSummariesError;
+            const returnSummaryByInvoice = new Map((returnSummaries || []).map((summary) => [summary.factura_id, summary]));
+
             // facturas_gastos puede venir como array u objeto según cómo infiera PostgREST la relación
             // (no hay constraint UNIQUE en gasto_id, así que por defecto es array; se maneja de forma defensiva).
             return (data || []).map(gasto => {
@@ -76,6 +86,7 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                     documento_principal_id: facturaInfo?.documento_principal_id || null,
                     num_documentos_factura: numDocumentosFactura,
                     tiene_documento_factura: !!facturaInfo?.documento_principal_id,
+                    devolucion_proveedor: facturaInfo?.id ? returnSummaryByInvoice.get(facturaInfo.id) || null : null,
                 };
             });
         },
@@ -137,6 +148,15 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
 
     const handleModalSuccess = () => {
         refetch();
+    };
+
+    const handleProviderReturnSuccess = async () => {
+        await Promise.all([
+            refetch(),
+            queryClient.invalidateQueries({ queryKey: ['obra_materiales_balance', projectId] }),
+            queryClient.invalidateQueries({ queryKey: ['obra_materiales_devolucion_disponible', projectId] }),
+            queryClient.invalidateQueries({ queryKey: ['obra_materiales_control', projectId] }),
+        ]);
     };
 
     if (isLoading) {
@@ -213,6 +233,8 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                         gastos={filteredGastos} 
                         onEdit={handleEdit} 
                         onDelete={handleDeleteClick} 
+                        onReturnToProvider={setProviderReturnExpense}
+                        canManage={canManage}
                     />
                 </CardContent>
             </Card>
@@ -223,6 +245,14 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                 projectId={projectId}
                 expenseToEdit={expenseToEdit}
                 onSuccess={handleModalSuccess}
+            />
+
+            <ProviderReturnModal
+                open={!!providerReturnExpense}
+                onOpenChange={(open) => !open && setProviderReturnExpense(null)}
+                factura={providerReturnExpense}
+                projectId={projectId}
+                onSuccess={handleProviderReturnSuccess}
             />
 
             <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
