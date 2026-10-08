@@ -1,388 +1,467 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import './direct.ts';
 
-const CONTASIMPLE_API_BASE = 'https://api.contasimple.com/api/v2';
-const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
-const ALLOWED_CONTENT_TYPES = new Set([
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-]);
-
+const API_BASE = 'https://api.contasimple.com/api/v2';
+const ACTIONS = new Set(['preview', 'create']);
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-api-version',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-function json(body: Record<string, unknown>, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      ...corsHeaders,
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    },
-  });
+const reply = (body: Record<string, unknown>, status = 200) => new Response(JSON.stringify(body), {
+  status,
+  headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+});
+const message = (error: unknown) => error instanceof Error ? error.message : String(error || 'Error desconocido');
+const normalized = (value: unknown) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const DNI_LETTERS = 'TRWAGMYFPDXBNJZSQVHLCKE';
+const CIF_CONTROL_LETTERS = 'JABCDEFGHI';
+
+function validSpanishTaxId(value: unknown) {
+  let taxId = normalized(value);
+  if (taxId.startsWith('ES') && taxId.length === 11) taxId = taxId.slice(2);
+
+  const dni = taxId.match(/^(\d{8})([A-Z])$/);
+  if (dni) return dni[2] === DNI_LETTERS[Number(dni[1]) % 23] ? taxId : null;
+
+  const nie = taxId.match(/^([XYZ])(\d{7})([A-Z])$/);
+  if (nie) {
+    const prefix = { X: '0', Y: '1', Z: '2' }[nie[1] as 'X' | 'Y' | 'Z'];
+    return nie[3] === DNI_LETTERS[Number(`${prefix}${nie[2]}`) % 23] ? taxId : null;
+  }
+
+  const cif = taxId.match(/^([ABCDEFGHJKLMNPQRSUVW])(\d{7})([0-9A-J])$/);
+  if (!cif) return null;
+  const digits = cif[2].split('').map(Number);
+  const evenSum = digits[1] + digits[3] + digits[5];
+  const oddSum = [digits[0], digits[2], digits[4], digits[6]].reduce((sum, digit) => {
+    const doubled = digit * 2;
+    return sum + Math.floor(doubled / 10) + (doubled % 10);
+  }, 0);
+  const controlDigit = (10 - ((evenSum + oddSum) % 10)) % 10;
+  const controlLetter = CIF_CONTROL_LETTERS[controlDigit];
+  const supplied = cif[3];
+  const valid = 'ABEH'.includes(cif[1])
+    ? supplied === String(controlDigit)
+    : 'KPQS'.includes(cif[1])
+      ? supplied === controlLetter
+      : supplied === String(controlDigit) || supplied === controlLetter;
+  return valid ? taxId : null;
 }
 
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error || 'Error desconocido');
+function text(value: unknown, label: string) {
+  const result = String(value || '').trim();
+  if (!result) throw new Error(`Falta ${label}.`);
+  return result;
 }
 
-function normalizeText(value: unknown) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^A-Z0-9]/gi, '')
-    .toUpperCase();
+function number(value: unknown, label: string) {
+  const result = Number(value);
+  if (!Number.isFinite(result)) throw new Error(`${label} no es un número válido.`);
+  return result;
+}
+
+function apiDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('La fecha de la factura no es válida.');
+  return `${value}T00:00:00`;
 }
 
 function periodFromDate(value: string) {
   const date = new Date(`${value}T12:00:00Z`);
   if (Number.isNaN(date.getTime())) throw new Error('La fecha de la factura no es válida.');
-  const quarter = Math.floor(date.getUTCMonth() / 3) + 1;
-  return `${date.getUTCFullYear()}-${quarter}T`;
+  return `${date.getUTCFullYear()}-${Math.floor(date.getUTCMonth() / 3) + 1}T`;
 }
 
-function extractRows(payload: unknown): Array<Record<string, unknown>> {
+function rows(payload: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(payload)) return payload as Array<Record<string, unknown>>;
   if (!payload || typeof payload !== 'object') return [];
   const record = payload as Record<string, unknown>;
-  const data = record.data;
-  if (Array.isArray(data)) return data as Array<Record<string, unknown>>;
-  if (data && typeof data === 'object') {
-    const nested = data as Record<string, unknown>;
-    for (const key of ['items', 'rows', 'results', 'invoices']) {
-      if (Array.isArray(nested[key])) return nested[key] as Array<Record<string, unknown>>;
-    }
-  }
-  for (const key of ['items', 'rows', 'results', 'invoices']) {
-    if (Array.isArray(record[key])) return record[key] as Array<Record<string, unknown>>;
-  }
+  if (Array.isArray(record.data)) return record.data as Array<Record<string, unknown>>;
   return [];
 }
 
-function extractOcrRequest(payload: unknown) {
+function data(payload: unknown) {
   if (!payload || typeof payload !== 'object') return null;
   const record = payload as Record<string, unknown>;
-  const candidate = record.data && typeof record.data === 'object'
-    ? record.data as Record<string, unknown>
-    : record;
-  return candidate;
+  return record.data && typeof record.data === 'object' ? record.data as Record<string, unknown> : record;
 }
 
-function safeFilename(sourceUrl: string, contentType: string) {
-  const extensionByType: Record<string, string> = {
-    'application/pdf': 'pdf',
-    'image/jpeg': 'jpg',
-    'image/png': 'png',
-    'image/webp': 'webp',
-  };
-  try {
-    const raw = decodeURIComponent(new URL(sourceUrl).pathname.split('/').pop() || 'factura');
-    if (/\.(pdf|jpe?g|png|webp)$/i.test(raw)) return raw.replace(/[^a-zA-Z0-9._-]/g, '_');
-  } catch {
-    // Se usa el nombre seguro por defecto.
-  }
-  return `factura.${extensionByType[contentType] || 'bin'}`;
-}
-
-function getDocumentStoragePath(sourceUrl: string, supabaseUrl: string) {
-  const source = new URL(sourceUrl);
-  const project = new URL(supabaseUrl);
-  const expectedPrefix = '/storage/v1/object/public/facturas_ocr/';
-  if (source.origin !== project.origin || !source.pathname.startsWith(expectedPrefix)) {
-    throw new Error('La factura no apunta al almacén autorizado facturas_ocr.');
-  }
-  const storagePath = decodeURIComponent(source.pathname.slice(expectedPrefix.length));
-  if (!storagePath || storagePath.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
-    throw new Error('La ruta del documento no es válida.');
-  }
-  return storagePath;
-}
-
-async function getContasimpleToken(apiKey: string) {
-  const response = await fetch(`${CONTASIMPLE_API_BASE}/oauth/token`, {
+async function token(apiKey: string) {
+  const response = await fetch(`${API_BASE}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'authentication_key',
-      key: apiKey,
-    }),
+    body: new URLSearchParams({ grant_type: 'authentication_key', key: apiKey }),
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload?.access_token) {
-    throw new Error(`ContaSimple rechazó la autenticación (${response.status}).`);
-  }
+  if (!response.ok || !payload?.access_token) throw new Error(`ContaSimple rechazó la autenticación (${response.status}).`);
   return payload.access_token as string;
 }
 
-async function callContasimple(token: string, endpoint: string, init: RequestInit = {}) {
+async function call(accessToken: string, endpoint: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers || {});
-  headers.set('Authorization', `Bearer ${token}`);
+  headers.set('Authorization', `Bearer ${accessToken}`);
   headers.set('Accept-Language', 'es-ES');
-  const response = await fetch(`${CONTASIMPLE_API_BASE}${endpoint}`, { ...init, headers });
+  if (init.body) headers.set('Content-Type', 'application/json');
+  const response = await fetch(`${API_BASE}${endpoint}`, { ...init, headers });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = payload?.errorMessage || payload?.message || payload?.error || `HTTP ${response.status}`;
     const code = payload?.errorCode || payload?.code;
-    const extra = payload?.extra;
-    const diagnostic = [
-      code ? `código ${String(code)}` : '',
-      extra ? `detalle ${typeof extra === 'string' ? extra : JSON.stringify(extra)}` : '',
-    ].filter(Boolean).join('; ');
-    throw new Error(`ContaSimple devolvió un error: ${detail}${diagnostic ? ` (${diagnostic})` : ''}`);
+    throw new Error(`ContaSimple devolvió un error: ${detail}${code ? ` (código ${String(code)})` : ''}`);
   }
   return payload;
 }
 
-export const legacyContasimpleInvoiceHandler = async (request: Request) => {
+function invoiceLines(source: Array<Record<string, unknown>>) {
+  if (!source.length) throw new Error('La factura no contiene líneas validadas.');
+  return source.map((line, index) => {
+    const quantity = number(line.cantidad ?? 1, `Cantidad de la línea ${index + 1}`);
+    if (quantity === 0) throw new Error(`La cantidad de la línea ${index + 1} no puede ser cero.`);
+    const storedBase = line.base_linea == null ? null : number(line.base_linea, `Base de la línea ${index + 1}`);
+    const unitAmount = line.precio_unitario == null
+      ? number((storedBase || 0) / quantity, `Precio de la línea ${index + 1}`)
+      : number(line.precio_unitario, `Precio de la línea ${index + 1}`);
+    const totalTaxableAmount = money(storedBase == null ? unitAmount * quantity : storedBase);
+    const vatPercentage = number(line.iva_porcentaje ?? 0, `IVA de la línea ${index + 1}`);
+    const vatAmount = money(line.iva_importe == null
+      ? totalTaxableAmount * vatPercentage / 100
+      : number(line.iva_importe, `Importe IVA de la línea ${index + 1}`));
+    const reference = String(line.referencia || '').trim();
+    const description = text(line.descripcion, `el concepto de la línea ${index + 1}`);
+    return {
+      concept: reference ? `${reference} · ${description}` : description,
+      unitAmount: money(unitAmount),
+      quantity,
+      vatPercentage,
+      vatAmount,
+      rePercentage: 0,
+      reAmount: 0,
+      totalTaxableAmount,
+      discountPercentage: 0,
+      detailedDescription: line.unidad ? `Unidad ERP: ${String(line.unidad)}` : '',
+    };
+  });
+}
+
+Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-  if (request.method !== 'POST') {
-    return json({ ok: false, code: 'method_not_allowed', message: 'Método no permitido.' }, 405);
-  }
+  if (request.method !== 'POST') return reply({ ok: false, code: 'method_not_allowed', message: 'Método no permitido.' }, 405);
+
+  let recoveryAdmin: any = null;
+  let claimedFacturaId = '';
+  let remoteMutationStarted = false;
 
   try {
     const authorization = request.headers.get('Authorization');
-    if (!authorization?.startsWith('Bearer ')) {
-      return json({ ok: false, code: 'unauthorized', message: 'Sesión requerida.' }, 401);
-    }
+    if (!authorization?.startsWith('Bearer ')) return reply({ ok: false, code: 'unauthorized', message: 'Sesión requerida.' }, 401);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY');
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     const apiKey = Deno.env.get('CONTASIMPLE_API_KEY');
-    if (!supabaseUrl || !supabaseAnonKey || !serviceRoleKey || !apiKey) {
-      return json({ ok: false, code: 'backend_not_configured', message: 'El conector no está configurado.' }, 503);
+    if (!supabaseUrl || !anonKey || !serviceKey || !apiKey) {
+      return reply({ ok: false, code: 'backend_not_configured', message: 'El conector no está configurado.' }, 503);
     }
 
-    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authorization } },
-      auth: { persistSession: false },
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authorization } }, auth: { persistSession: false },
     });
-    const adminClient = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { persistSession: false },
-    });
+    const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+    recoveryAdmin = admin;
+    const { data: authData, error: authError } = await userClient.auth.getUser(authorization.slice(7));
+    if (authError || !authData.user) return reply({ ok: false, code: 'invalid_session', message: 'La sesión no es válida.' }, 401);
 
-    const userAccessToken = authorization.slice('Bearer '.length);
-    const { data: userData, error: userError } = await userClient.auth.getUser(userAccessToken);
-    if (userError || !userData.user) {
-      return json({ ok: false, code: 'invalid_session', message: 'La sesión no es válida.' }, 401);
+    let employeeResult = await admin.from('empleados').select('id, rol, activo, baja').eq('auth_user_id', authData.user.id).maybeSingle();
+    if (!employeeResult.data && authData.user.email) {
+      employeeResult = await admin.from('empleados').select('id, rol, activo, baja').ilike('email', authData.user.email.trim()).maybeSingle();
     }
-
-    let { data: employee, error: employeeError } = await adminClient
-      .from('empleados')
-      .select('id, rol, activo, baja')
-      .eq('auth_user_id', userData.user.id)
-      .maybeSingle();
-
-    // Algunas cuentas antiguas pueden conservar el correo correcto aunque el
-    // vínculo auth_user_id no se haya propagado todavía. El fallback sigue
-    // exigiendo una cuenta autenticada y un empleado activo con rol permitido.
-    if (!employee && userData.user.email) {
-      const fallback = await adminClient
-        .from('empleados')
-        .select('id, rol, activo, baja')
-        .ilike('email', userData.user.email.trim())
-        .maybeSingle();
-      employee = fallback.data;
-      employeeError = fallback.error;
-    }
-    if (employeeError || !employee || employee.activo === false || employee.baja === true) {
-      return json({ ok: false, code: 'forbidden', message: 'Usuario sin acceso al conector.' }, 403);
-    }
-    if (!['admin', 'encargado'].includes(employee.rol)) {
-      return json({ ok: false, code: 'forbidden', message: 'Solo administración puede enviar facturas.' }, 403);
+    const employee = employeeResult.data;
+    if (employeeResult.error || !employee || employee.activo === false || employee.baja === true || !['admin', 'encargado'].includes(employee.rol)) {
+      return reply({ ok: false, code: 'forbidden', message: 'Usuario sin acceso administrativo al conector.' }, 403);
     }
 
     const body = await request.json().catch(() => ({}));
+    const action = typeof body?.action === 'string' ? body.action : '';
     const facturaId = typeof body?.facturaId === 'string' ? body.facturaId : '';
-    const action = body?.action;
-    if (!['upload', 'status'].includes(action)) {
-      return json({ ok: false, code: 'invalid_action', message: 'Acción no válida.' }, 400);
-    }
-    if (!/^[0-9a-f-]{36}$/i.test(facturaId)) {
-      return json({ ok: false, code: 'invalid_invoice', message: 'Factura no válida.' }, 400);
-    }
+    if (!ACTIONS.has(action)) return reply({ ok: false, code: 'invalid_action', message: 'Acción no válida.' }, 400);
+    if (!/^[0-9a-f-]{36}$/i.test(facturaId)) return reply({ ok: false, code: 'invalid_invoice', message: 'Factura no válida.' }, 400);
 
-    const [{ data: invoice, error: invoiceError }, { data: ocr, error: ocrError }, { data: control, error: controlError }] = await Promise.all([
-      adminClient.from('facturas_gastos').select('id, imagen_url, estado_contabilidad').eq('id', facturaId).maybeSingle(),
-      adminClient.from('facturas_gastos_ocr')
-        .select('proveedor_nombre, proveedor_nif, numero_factura, fecha_factura, total, validacion_estado')
-        .eq('factura_id', facturaId)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      adminClient.from('facturas_gastos_contasimple_control').select('*').eq('factura_id', facturaId).maybeSingle(),
+    const [invoiceResult, ocrResult, controlResult, linesResult] = await Promise.all([
+      admin.from('facturas_gastos').select('id, proveedor_id, estado_contabilidad').eq('id', facturaId).maybeSingle(),
+      admin.from('facturas_gastos_ocr').select('proveedor_nombre, proveedor_nif, numero_factura, fecha_factura, total, validacion_estado, json_ocr').eq('factura_id', facturaId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      admin.from('facturas_gastos_contasimple_control').select('*').eq('factura_id', facturaId).maybeSingle(),
+      admin.from('facturas_gastos_lineas_ocr').select('numero_linea, referencia, descripcion, cantidad, unidad, precio_unitario, base_linea, iva_porcentaje, iva_importe, validacion_estado').eq('factura_id', facturaId).order('numero_linea'),
     ]);
-    if (invoiceError || ocrError || controlError) throw invoiceError || ocrError || controlError;
-    if (!invoice || !ocr || !control) {
-      return json({ ok: false, code: 'invoice_not_ready', message: 'No se encontró la factura completa o su control de ContaSimple.' }, 404);
+    const queryError = invoiceResult.error || ocrResult.error || controlResult.error || linesResult.error;
+    if (queryError) throw queryError;
+    const invoice = invoiceResult.data;
+    const ocr = ocrResult.data;
+    const control = controlResult.data;
+    const sourceLines = linesResult.data || [];
+    if (!invoice || !ocr || !control) return reply({ ok: false, code: 'invoice_not_ready', message: 'No se encontró la factura completa o su control.' }, 404);
+    if (control.estado !== 'lista_para_contasimple') return reply({ ok: false, code: 'invalid_state', message: 'La factura ya se registró o necesita revisión.', state: control.estado }, 409);
+    if (control.contasimple_document_id || control.contasimple_ocr_request_id) return reply({ ok: false, code: 'already_sent', message: 'La factura ya tiene identificador de ContaSimple.' }, 409);
+    if (ocr.validacion_estado !== 'validado') return reply({ ok: false, code: 'invoice_not_validated', message: 'La factura debe estar validada.' }, 409);
+    if (sourceLines.some((line) => !['validada', 'no_material'].includes(String(line.validacion_estado)))) {
+      return reply({ ok: false, code: 'lines_not_validated', message: 'Todas las líneas deben estar validadas.' }, 409);
     }
 
-    const token = await getContasimpleToken(apiKey);
-
-    if (action === 'status') {
-      if (!control.contasimple_ocr_request_id) {
-        return json({ ok: false, code: 'request_not_found', message: 'La factura todavía no tiene un envío OCR.' }, 409);
-      }
-      const statusPayload = await callContasimple(token, `/ocr/${encodeURIComponent(String(control.contasimple_ocr_request_id))}`);
-      const ocrRequest = extractOcrRequest(statusPayload);
-      if (!ocrRequest?.status) throw new Error('ContaSimple no devolvió el estado de la petición OCR.');
-
-      const { data: updated, error: updateError } = await adminClient.rpc('flopy_actualizar_resultado_ocr_contasimple', {
-        p_factura_id: facturaId,
-        p_contasimple_ocr_status: String(ocrRequest.status),
-        p_contasimple_document_id: ocrRequest.createdDocumentId || null,
-        p_contasimple_document_number: ocrRequest.createdDocumentNumber || null,
-        p_contasimple_document_amount: ocrRequest.createdDocumentAmount || null,
-        p_error: ocrRequest.errorMessage || null,
-        p_raw_contasimple: statusPayload,
-      });
-      if (updateError) throw updateError;
-
-      if (String(ocrRequest.status).toLowerCase() === 'done' && ocrRequest.createdDocumentId) {
-        await adminClient.from('facturas_gastos').update({
-          contasimple_id: String(ocrRequest.createdDocumentId),
-          contasimple_error: null,
-          estado_contabilidad: 'enviada',
-        }).eq('id', facturaId);
-      }
-
-      return json({
-        ok: true,
-        action: 'status',
-        facturaId,
-        status: ocrRequest.status,
-        documentId: ocrRequest.createdDocumentId || null,
-        documentNumber: ocrRequest.createdDocumentNumber || null,
-        documentAmount: ocrRequest.createdDocumentAmount || null,
-        state: updated?.estado_nuevo || control.estado,
-      });
-    }
-
-    if (control.estado !== 'lista_para_contasimple') {
-      return json({
+    const documentMetadata = ocr.json_ocr && typeof ocr.json_ocr === 'object'
+      ? ocr.json_ocr as Record<string, unknown>
+      : {};
+    const purchaseDocumentType = String(documentMetadata.tipo_documento_erp || 'factura_recibida');
+    if (purchaseDocumentType === 'revisar') {
+      return reply({
         ok: false,
-        code: 'invalid_state',
-        message: 'Esta factura ya se envió o necesita revisión antes de enviarla.',
-        state: control.estado,
+        code: 'document_type_review_required',
+        message: 'Confirma en el ERP si el documento es una factura recibida o un gasto/ticket.',
       }, 409);
     }
-    if (control.contasimple_ocr_request_id || control.contasimple_document_id) {
-      return json({ ok: false, code: 'already_sent', message: 'La factura ya tiene identificador de ContaSimple.' }, 409);
-    }
-    if (ocr.validacion_estado !== 'validado') {
-      return json({ ok: false, code: 'invoice_not_validated', message: 'La factura debe estar validada antes de enviarla.' }, 409);
-    }
-    if (!ocr.proveedor_nif || !ocr.numero_factura || !ocr.fecha_factura || !ocr.total) {
-      return json({ ok: false, code: 'missing_data', message: 'Faltan NIF, número, fecha o total de la factura.' }, 409);
+    const isExpense = purchaseDocumentType === 'gasto';
+    const isCreditNote = documentMetadata.es_abono === true
+      || ['abono', 'factura_rectificativa'].includes(String(documentMetadata.tipo_documento_fiscal || ''));
+    if (isCreditNote && isExpense) {
+      return reply({
+        ok: false,
+        code: 'credit_note_must_be_received_invoice',
+        message: 'Un abono de proveedor debe registrarse como factura recibida rectificativa, no como gasto/ticket.',
+      }, 409);
     }
 
-    const period = periodFromDate(ocr.fecha_factura);
-    const duplicateQuery = new URLSearchParams({
-      startIndex: '0',
-      numRows: '20',
-      number: ocr.numero_factura,
-      nif: ocr.proveedor_nif,
-    });
-    const duplicatePayload = await callContasimple(token, `/accounting/${encodeURIComponent(period)}/invoices/received?${duplicateQuery}`);
-    const duplicate = extractRows(duplicatePayload).find((row) => {
-      const number = row.number ?? row.invoiceNumber ?? row.documentNumber;
-      const nif = row.issuerNif ?? row.supplierNif ?? row.nif ?? row.entityNif;
-      const total = Number(row.totalAmount ?? row.amount ?? row.total ?? 0);
-      return normalizeText(number) === normalizeText(ocr.numero_factura)
-        && normalizeText(nif) === normalizeText(ocr.proveedor_nif)
-        && Math.abs(total - Number(ocr.total)) <= 0.02;
-    });
+    const nif = validSpanishTaxId(text(ocr.proveedor_nif, 'el NIF del proveedor'));
+    if (!nif) {
+      return reply({
+        ok: false,
+        code: 'invalid_provider_tax_id',
+        message: 'El CIF/NIF del proveedor no supera la validación fiscal española. Corrígelo en el ERP antes de enviarlo.',
+      }, 400);
+    }
+    const providerName = text(ocr.proveedor_nombre, 'el nombre del proveedor');
+    const invoiceNumber = text(ocr.numero_factura, 'el número de factura');
+    const invoiceDate = text(ocr.fecha_factura, 'la fecha de factura');
+    const invoiceTotal = number(ocr.total, 'El total de la factura');
+    if (isCreditNote && invoiceTotal >= 0) {
+      return reply({ ok: false, code: 'invalid_credit_note_sign', message: 'El abono debe tener total negativo en el ERP.' }, 409);
+    }
+    if (!isCreditNote && invoiceTotal <= 0) {
+      return reply({ ok: false, code: 'unexpected_negative_invoice', message: 'La factura tiene total negativo pero no está confirmada como abono.' }, 409);
+    }
+    let mappedLines = isExpense ? [] : invoiceLines(sourceLines);
+    const expenseLinesTotal = money(sourceLines.reduce((sum, line) => {
+      const quantity = Number(line.cantidad ?? 1);
+      const unitAmount = Number(line.precio_unitario ?? 0);
+      return sum + Number(line.base_linea ?? quantity * unitAmount);
+    }, 0));
+    const base = isExpense ? (expenseLinesTotal || invoiceTotal) : money(mappedLines.reduce((sum, line) => sum + line.totalTaxableAmount, 0));
+    let vat = isExpense ? money(invoiceTotal - base) : money(mappedLines.reduce((sum, line) => sum + line.vatAmount, 0));
 
+    // El escáner antiguo conserva el IVA en la cabecera, pero no siempre lo
+    // distribuye entre las líneas. Solo lo inferimos cuando todas las líneas
+    // vienen sin IVA y el porcentaje resultante coincide con un tipo español
+    // habitual; así evitamos inventar repartos en facturas con tipos mixtos.
+    const headerVat = money(invoiceTotal - base);
+    const linesHaveNoVat = !isExpense && mappedLines.every((line) =>
+      Math.abs(line.vatAmount) <= 0.01 && Math.abs(line.vatPercentage) <= 0.01
+    );
+    if (!isExpense && Math.abs(base + vat - invoiceTotal) > 0.05 && linesHaveNoVat && Math.abs(base) > 0.01) {
+      const inferredPercentage = Math.abs(headerVat / base * 100);
+      const standardVatRates = [0, 4, 10, 21];
+      const inferredVatRate = standardVatRates.find((rate) => Math.abs(rate - inferredPercentage) <= 0.05);
+      if (inferredVatRate !== undefined) {
+        let allocatedVat = 0;
+        mappedLines = mappedLines.map((line, index) => {
+          const vatAmount = index === mappedLines.length - 1
+            ? money(headerVat - allocatedVat)
+            : money(line.totalTaxableAmount * inferredVatRate / 100);
+          allocatedVat = money(allocatedVat + vatAmount);
+          return { ...line, vatPercentage: inferredVatRate, vatAmount };
+        });
+        vat = money(mappedLines.reduce((sum, line) => sum + line.vatAmount, 0));
+      }
+    }
+    if (!isExpense && Math.abs(base + vat - invoiceTotal) > 0.05) {
+      return reply({
+        ok: false,
+        code: 'totals_mismatch',
+        message: 'La base y el IVA de las líneas no coinciden con el total. Revisa el IVA por línea, especialmente si la factura contiene tipos distintos.',
+        totals: { base, vat, total: invoiceTotal },
+      }, 409);
+    }
+
+    let localProvider: Record<string, unknown> | null = null;
+    if (invoice.proveedor_id) {
+      const providerResult = await admin.from('proveedores').select('nombre, cif, email, telefono, direccion, cp, ciudad, provincia, pais').eq('id', invoice.proveedor_id).maybeSingle();
+      if (providerResult.error) throw providerResult.error;
+      localProvider = providerResult.data;
+    }
+
+    const period = periodFromDate(invoiceDate);
+    const accessToken = await token(apiKey);
+    const duplicateEndpoint = isExpense
+      ? `/accounting/${encodeURIComponent(period)}/expenses?${new URLSearchParams({ startIndex: '0', numRows: '50', number: invoiceNumber, nif })}`
+      : `/accounting/${encodeURIComponent(period)}/invoices/received?${new URLSearchParams({ startIndex: '0', numRows: '20', number: invoiceNumber, nif })}`;
+    const duplicates = await call(accessToken, duplicateEndpoint);
+    const duplicate = rows(duplicates).find((item) => {
+      const issuer = item.issuer && typeof item.issuer === 'object' ? item.issuer as Record<string, unknown> : {};
+      return normalized(item.number) === normalized(invoiceNumber)
+        && normalized(issuer.nif ?? item.nif) === normalized(nif)
+        && Math.abs(Number(item.totalAmount ?? item.amount ?? 0) - invoiceTotal) <= 0.02;
+    });
     if (duplicate) {
-      await adminClient.from('facturas_gastos_contasimple_control').update({
-        estado: 'posible_duplicado_contasimple',
-        observaciones: 'Coincidencia encontrada por NIF, número e importe antes del envío OCR.',
-        raw_contasimple: { duplicate },
-        updated_at: new Date().toISOString(),
-      }).eq('factura_id', facturaId);
-      return json({
+      if (action === 'create') await admin.from('facturas_gastos_contasimple_control').update({ estado: 'posible_duplicado_contasimple', observaciones: 'Coincidencia por NIF, número e importe antes del registro directo.', raw_contasimple: { duplicate }, updated_at: new Date().toISOString() }).eq('factura_id', facturaId);
+      return reply({ ok: false, code: 'possible_duplicate', message: 'ContaSimple ya contiene una factura con el mismo proveedor, número e importe.' }, 409);
+    }
+
+    const providerSearch = await call(accessToken, `/entities/providers/search/nif?${new URLSearchParams({ query: nif, exactMatch: 'true' })}`);
+    let remoteProvider = rows(providerSearch).find((item) => normalized(item.nif) === normalized(nif));
+    const providerPayload = {
+      type: 'Issuer', organization: String(localProvider?.nombre || providerName).trim(), nif,
+      address: String(localProvider?.direccion || '').trim(), province: String(localProvider?.provincia || '').trim(),
+      city: String(localProvider?.ciudad || '').trim(), country: String(localProvider?.pais || 'España').trim(),
+      postalCode: String(localProvider?.cp || '').trim(), phone: String(localProvider?.telefono || '').trim(),
+      email: String(localProvider?.email || '').trim(), notes: 'Proveedor sincronizado desde ERP IA360.',
+    };
+    const invoiceBase = {
+      imputation: 100, vatImputation: 100, isCashCriteria: false, number: invoiceNumber,
+      date: apiDate(invoiceDate), operationDate: apiDate(invoiceDate), invoiceClass: 600,
+      notes: isCreditNote
+        ? `Factura rectificativa registrada directamente desde ERP IA360 · original ${String(documentMetadata.factura_original_numero || 'no indicada')} · ${facturaId}`
+        : `Registrada directamente desde ERP IA360 · ${facturaId}`,
+      retentionPercentage: 0,
+      operationType: 'Nacional', lines: mappedLines,
+    };
+    const paymentMethodId = Number(documentMetadata.contasimple_metodo_pago_id || 495834);
+    const expenseClass = Number(documentMetadata.contasimple_tipo_gasto || 600);
+    if (!Number.isSafeInteger(paymentMethodId) || paymentMethodId <= 0) throw new Error('El método de pago de ContaSimple no es válido.');
+    if (!Number.isSafeInteger(expenseClass) || expenseClass <= 0) throw new Error('El tipo contable del gasto no es válido.');
+    let paymentMethod: Record<string, unknown> | null = null;
+    if (isExpense) {
+      const configuredPaymentMethods = rows(await call(
+        accessToken,
+        `/configuration/paymentMethods?${new URLSearchParams({ includeInactive: 'true', startIndex: '0', numRows: '300' })}`,
+      ));
+      paymentMethod = configuredPaymentMethods.find((item) => Number(item.id) === paymentMethodId) || null;
+      if (!paymentMethod || paymentMethod.active === false) {
+        throw new Error('El método de pago seleccionado no existe o está inactivo en ContaSimple. No se ha creado ningún gasto.');
+      }
+    }
+    const expenseConcept = sourceLines
+      .map((line) => String(line.descripcion || '').trim())
+      .filter(Boolean)
+      .join(' · ')
+      .slice(0, 250) || providerName;
+    const expenseBase = {
+      number: invoiceNumber,
+      date: apiDate(invoiceDate),
+      amount: money(invoiceTotal),
+      imputation: 100,
+      concept: expenseConcept,
+      notes: `Registrado directamente desde ERP IA360 · ${facturaId}`,
+      expenseClass,
+      paymentMethodId,
+    };
+
+    if (action === 'preview') return reply({
+      ok: true, action, facturaId, period, documentType: purchaseDocumentType, isCreditNote,
+      provider: { action: remoteProvider ? 'reuse' : 'create', id: remoteProvider?.id || null, organization: providerPayload.organization, nif },
+      ...(isExpense
+        ? {
+          expense: {
+            ...expenseBase,
+            issuerEntityId: remoteProvider?.id || null,
+            expensePayment: { paymentMethodId, paymentMethod },
+          },
+        }
+        : { invoice: { ...invoiceBase, issuerEntityId: remoteProvider?.id || null } }),
+      totals: { base, vat, total: invoiceTotal },
+      uploadsFile: false, usesContasimpleOcr: false,
+    });
+
+    const claim = await admin.rpc('flopy_reclamar_envio_directo_contasimple', {
+      p_factura_id: facturaId,
+      p_usuario_id: employee.id,
+    });
+    if (claim.error) throw claim.error;
+    if (claim.data?.ok !== true) {
+      return reply({
         ok: false,
-        code: 'possible_duplicate',
-        message: 'ContaSimple ya contiene una factura con el mismo proveedor, número e importe.',
+        code: claim.data?.error === 'envio_ya_en_proceso' ? 'send_in_progress' : 'invalid_state',
+        message: claim.data?.error === 'envio_ya_en_proceso'
+          ? 'Esta factura ya se está enviando a ContaSimple. Espera a que termine antes de volver a intentarlo.'
+          : 'La factura ya se envió o su estado ha cambiado. Actualiza la bandeja.',
+        state: claim.data?.estado_actual || null,
       }, 409);
     }
+    claimedFacturaId = facturaId;
 
-    const documentPath = getDocumentStoragePath(invoice.imagen_url, supabaseUrl);
-    const { data: documentBlob, error: documentError } = await adminClient.storage
-      .from('facturas_ocr')
-      .download(documentPath);
-    if (documentError || !documentBlob) {
-      throw new Error(`No se pudo descargar el documento original${documentError?.message ? `: ${documentError.message}` : '.'}`);
+    let providerCreated = false;
+    if (!remoteProvider) {
+      remoteMutationStarted = true;
+      remoteProvider = data(await call(accessToken, '/entities/providers', { method: 'POST', body: JSON.stringify(providerPayload) })) || undefined;
+      providerCreated = true;
     }
-    if (documentBlob.size > MAX_DOCUMENT_BYTES) throw new Error('El documento supera el máximo de 20 MB.');
-    const documentBytes = new Uint8Array(await documentBlob.arrayBuffer());
-    if (documentBytes.byteLength === 0 || documentBytes.byteLength > MAX_DOCUMENT_BYTES) {
-      throw new Error('El documento está vacío o supera el máximo de 20 MB.');
-    }
-    const contentType = (documentBlob.type || '').split(';')[0].toLowerCase();
-    if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
-      throw new Error(`Formato no permitido para OCR: ${contentType || 'desconocido'}.`);
-    }
+    const issuerEntityId = Number(remoteProvider?.id);
+    if (!Number.isSafeInteger(issuerEntityId) || issuerEntityId <= 0) throw new Error('ContaSimple no devolvió un identificador válido para el proveedor.');
 
-    const form = new FormData();
-    form.append('file', new Blob([documentBytes], { type: contentType }), safeFilename(invoice.imagen_url, contentType));
-    form.append('period', period);
-    form.append('class', '600');
-    form.append('comments', `ERP IA360 · factura ${facturaId}`);
+    remoteMutationStarted = true;
+    const createdPayload = await call(
+      accessToken,
+      isExpense
+        ? `/accounting/${encodeURIComponent(period)}/expenses`
+        : `/accounting/${encodeURIComponent(period)}/invoices/received?bypassInvoiceDuplicateValidation=false`,
+      {
+        method: 'POST',
+        body: JSON.stringify(isExpense ? { ...expenseBase, issuerEntityId } : { ...invoiceBase, issuerEntityId }),
+      },
+    );
+    const created = data(createdPayload);
+    const documentId = Number(created?.id);
+    if (!Number.isSafeInteger(documentId) || documentId <= 0) throw new Error('ContaSimple no devolvió el identificador de la factura creada.');
 
-    const uploadQuery = new URLSearchParams({ period, class: '600' });
-    const uploadPayload = await callContasimple(token, `/ocr/receivedInvoice?${uploadQuery.toString()}`, {
-      method: 'POST',
-      body: form,
+    const registered = await admin.rpc('flopy_registrar_factura_directa_contasimple', {
+      p_factura_id: facturaId, p_contasimple_document_id: documentId,
+      p_contasimple_document_number: String(created?.number || invoiceNumber),
+      p_contasimple_document_amount: Number(created?.totalAmount ?? created?.amount ?? invoiceTotal),
+      p_contasimple_period: String(created?.period || period), p_usuario_id: employee.id,
+      p_observaciones: providerCreated
+        ? `${isExpense ? 'Gasto' : 'Factura'} y proveedor creados por API, sin OCR ni archivo.`
+        : `${isExpense ? 'Gasto' : 'Factura'} creado por API, sin OCR ni archivo.`,
+      p_raw_contasimple: createdPayload,
     });
-    const ocrRequest = extractOcrRequest(uploadPayload);
-    if (!ocrRequest?.id) throw new Error('ContaSimple no devolvió el identificador de la petición OCR.');
+    if (registered.error) throw registered.error;
+    if (registered.data?.ok === false) throw new Error(registered.data?.mensaje || registered.data?.error || 'No se pudo registrar el resultado en el ERP.');
+    await admin.from('facturas_gastos').update({ contasimple_id: String(documentId), contasimple_error: null, estado_contabilidad: 'enviada' }).eq('id', facturaId);
 
-    const { data: registered, error: registerError } = await adminClient.rpc('flopy_registrar_envio_ocr_contasimple', {
-      p_factura_id: facturaId,
-      p_contasimple_ocr_request_id: ocrRequest.id,
-      p_contasimple_ocr_status: ocrRequest.status || 'Waiting',
-      p_contasimple_document_type: 'receivedInvoice',
-      p_contasimple_period: ocrRequest.period || period,
-      p_usuario_id: employee.id,
-      p_observaciones: 'Enviada desde la bandeja de administración del ERP IA360.',
-      p_raw_contasimple: uploadPayload,
-    });
-    if (registerError) throw registerError;
-    if (registered?.ok === false) {
-      await adminClient.from('facturas_gastos_contasimple_control').update({
-        estado: ['Processing', 'Uploading'].includes(String(ocrRequest.status))
-          ? 'procesando_contasimple'
-          : 'enviada_ocr_contasimple',
-        contasimple_ocr_request_id: ocrRequest.id,
-        contasimple_ocr_status: ocrRequest.status || 'Waiting',
-        contasimple_document_type: 'receivedInvoice',
-        contasimple_period: ocrRequest.period || period,
-        enviado_a_contasimple_at: new Date().toISOString(),
-        enviado_por: employee.id,
-        observaciones: 'Envío realizado; recuperado por el conector tras una incidencia al registrar la respuesta.',
-        raw_contasimple: uploadPayload,
-        error: null,
-        updated_at: new Date().toISOString(),
-      }).eq('factura_id', facturaId);
-    }
-
-    return json({
-      ok: true,
-      action: 'upload',
-      facturaId,
-      requestId: ocrRequest.id,
-      status: ocrRequest.status || 'Waiting',
-      period: ocrRequest.period || period,
-      state: registered?.estado_nuevo || 'enviada_ocr_contasimple',
-    });
+    return reply({ ok: true, action, facturaId, documentId, documentNumber: created?.number || invoiceNumber,
+      documentAmount: created?.totalAmount ?? created?.amount ?? invoiceTotal, period: created?.period || period,
+      documentType: purchaseDocumentType, isCreditNote, providerId: issuerEntityId, providerCreated,
+      state: 'creada_en_contasimple', uploadsFile: false, usesContasimpleOcr: false });
   } catch (error) {
-    console.error('contasimple-invoice:', errorMessage(error));
-    return json({ ok: false, code: 'internal_error', message: errorMessage(error) }, 500);
+    const errorMessage = message(error);
+    console.error('contasimple-invoice:', errorMessage);
+    if (recoveryAdmin && claimedFacturaId) {
+      const uncertain = remoteMutationStarted;
+      const recovery = await recoveryAdmin
+        .from('facturas_gastos_contasimple_control')
+        .update({
+          estado: uncertain ? 'error_contasimple' : 'lista_para_contasimple',
+          observaciones: uncertain
+            ? 'La API pudo haber iniciado una escritura. Revisar ContaSimple antes de reintentar.'
+            : 'El envío falló antes de iniciar escrituras en ContaSimple; puede volver a intentarse.',
+          error: errorMessage,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('factura_id', claimedFacturaId)
+        .eq('estado', 'procesando_contasimple');
+      if (recovery.error) console.error('contasimple-invoice recovery:', message(recovery.error));
+    }
+    return reply({
+      ok: false,
+      code: remoteMutationStarted ? 'remote_result_uncertain' : 'internal_error',
+      message: remoteMutationStarted
+        ? `${errorMessage} Revisa ContaSimple antes de reintentar para evitar duplicados.`
+        : errorMessage,
+    }, 500);
   }
-};
+});
