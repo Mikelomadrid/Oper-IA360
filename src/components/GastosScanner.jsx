@@ -370,7 +370,7 @@ const GastosScanner = ({ navigate }) => {
       !l.referencia?.trim()
       || !l.nombre?.trim()
       || !l.unidad
-      || Number(l.cantidad) <= 0
+      || Number(l.cantidad) === 0
       || Number(l.precio_unitario) < 0
     ));
 
@@ -378,7 +378,7 @@ const GastosScanner = ({ navigate }) => {
       toast({
         variant: "destructive",
         title: "Línea pendiente de revisar",
-        description: "Cada material necesita referencia, descripción, unidad, cantidad y precio.",
+        description: "Cada material necesita referencia, descripción, unidad, una cantidad distinta de cero y precio.",
       });
       return;
     }
@@ -388,7 +388,7 @@ const GastosScanner = ({ navigate }) => {
       const suma = linea.asignaciones.reduce((total, asignacion) => total + Number(asignacion.cantidad || 0), 0);
       return Math.abs(suma - Number(linea.cantidad || 0)) > 0.001
         || linea.asignaciones.some((asignacion) => (
-          Number(asignacion.cantidad || 0) <= 0
+          Number(asignacion.cantidad || 0) === 0
           || !['obra', 'general', 'almacen'].includes(asignacion.destino_tipo)
           || (asignacion.destino_tipo === 'obra' && !asignacion.obra_id)
         ));

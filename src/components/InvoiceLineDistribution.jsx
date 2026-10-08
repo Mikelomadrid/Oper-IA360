@@ -87,7 +87,7 @@ const InvoiceLineDistribution = ({ linea, proyectos, destinoPrincipal, enabled, 
   const splitAssignment = () => {
     if (!assignments.length) return;
     const sourceIndex = assignments.reduce((largest, item, index) => (
-      Number(item.cantidad || 0) > Number(assignments[largest]?.cantidad || 0) ? index : largest
+      Math.abs(Number(item.cantidad || 0)) > Math.abs(Number(assignments[largest]?.cantidad || 0)) ? index : largest
     ), 0);
     const source = assignments[sourceIndex];
     const sourceQty = Number(source.cantidad || 0);
@@ -144,7 +144,6 @@ const InvoiceLineDistribution = ({ linea, proyectos, destinoPrincipal, enabled, 
           />
           <Input
             type="number"
-            min="0"
             step="0.001"
             value={assignment.cantidad}
             onChange={(event) => updateAssignment(index, { cantidad: event.target.value })}

@@ -236,7 +236,7 @@ Deno.serve(async (request) => {
       address: String(localProvider?.direccion || '').trim(), province: String(localProvider?.provincia || '').trim(),
       city: String(localProvider?.ciudad || '').trim(), country: String(localProvider?.pais || 'España').trim(),
       postalCode: String(localProvider?.cp || '').trim(), phone: String(localProvider?.telefono || '').trim(),
-      email: String(localProvider?.email || '').trim(), notes: 'Proveedor sincronizado desde ERP IA360.', documentCulture: 'es-ES',
+      email: String(localProvider?.email || '').trim(), notes: 'Proveedor sincronizado desde ERP IA360.',
     };
     const invoiceBase = {
       imputation: 100, vatImputation: 100, isCashCriteria: false, number: invoiceNumber,
