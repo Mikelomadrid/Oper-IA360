@@ -32,7 +32,7 @@ import InvoiceLineDistribution, {
 } from '@/components/InvoiceLineDistribution';
 
 const CATEGORIAS = ['electricidad', 'fontanería', 'pintura', 'albañilería', 'herramientas', 'materiales', 'otro'];
-const UNIDADES = ['ud', 'm', 'm2', 'm3', 'kg', 'l', 'h', 'caja', 'rollo', 'pack'];
+const UNIDADES = ['ud', 'm', 'm2', 'm3', 'kg', 'l', 'h', 'caja', 'rollo', 'pack', 'saco', 'palé', 'big bag'];
 const CONTASIMPLE_PAYMENT_METHODS = [
   { id: '495834', name: 'Efectivo' },
   { id: '118408', name: 'Tarjeta MIGUEL' },
@@ -326,7 +326,9 @@ const GastosScanner = ({ navigate }) => {
       setDistribucionActiva(false);
       setFormData(prev => ({
         ...prev,
-        numero_factura: '', fecha_emision: '', total_con_iva: '', iva: '', monto_bruto: '', concepto: '',
+        numero_factura: '',
+        fecha_emision: contextualReturnId ? new Date().toISOString().split('T')[0] : '',
+        total_con_iva: '', iva: '', monto_bruto: '', concepto: '',
         tipo_documento: contextualReturnId ? PURCHASE_DOCUMENT_TYPES.RECEIVED_INVOICE : PURCHASE_DOCUMENT_TYPES.REVIEW,
         tipo_documento_motivo: contextualReturnId ? 'Abono iniciado desde una devolución pendiente.' : 'Pendiente de analizar.',
         numero_generado: false,
@@ -770,6 +772,7 @@ const GastosScanner = ({ navigate }) => {
         };
       });
 
+      const fechaFactura = formData.fecha_emision || new Date().toISOString().split('T')[0];
       const intakeParams = {
         p_subido_por: currentEmpleadoId,
         p_proveedor_id: formData.proveedor_id,
@@ -777,7 +780,7 @@ const GastosScanner = ({ navigate }) => {
         p_proveedor_nombre: formData.proveedor_nombre_ocr || proveedores.find(p => p.id === formData.proveedor_id)?.nombre || null,
         p_proveedor_nif: formData.proveedor_cif_ocr || proveedores.find(p => p.id === formData.proveedor_id)?.cif || null,
         p_numero_factura: formData.numero_factura,
-        p_fecha_factura: formData.fecha_emision,
+        p_fecha_factura: fechaFactura,
         p_base_imponible: baseImponible,
         p_iva_importe: ivaImporte,
         p_total: totalFactura,
