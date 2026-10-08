@@ -122,8 +122,8 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
 
     // Create / Edit Handlers
     const handleAdd = () => {
-        setExpenseToEdit(null);
-        setIsModalOpen(true);
+        const returnTo = `/gestion/obras/${projectId}?tab=materiales`;
+        navigate(`/administracion/gastos/scanner?obraId=${encodeURIComponent(projectId)}&returnTo=${encodeURIComponent(returnTo)}`);
     };
 
     const handleEdit = (gasto) => {

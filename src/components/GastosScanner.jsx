@@ -149,6 +149,7 @@ const GastosScanner = ({ navigate }) => {
   const location = useLocation();
   const routeParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const contextualReturnId = routeParams.get('devolucionProveedorId') || '';
+  const contextualObraId = routeParams.get('obraId') || '';
   const returnTo = routeParams.get('returnTo') || '';
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -160,7 +161,9 @@ const GastosScanner = ({ navigate }) => {
   const [currentEmpleadoId, setCurrentEmpleadoId] = useState(null);
   const [lineas, setLineas] = useState([]);
   const [ocrResult, setOcrResult] = useState(null);
-  const [destinoPrincipal, setDestinoPrincipal] = useState('');
+  const [destinoPrincipal, setDestinoPrincipal] = useState(() => (
+    contextualObraId ? destinoObra(contextualObraId) : ''
+  ));
   const [distribucionActiva, setDistribucionActiva] = useState(false);
   const [devolucionesPendientes, setDevolucionesPendientes] = useState([]);
   const [loadingDevoluciones, setLoadingDevoluciones] = useState(false);
@@ -854,7 +857,7 @@ const GastosScanner = ({ navigate }) => {
         motivo_abono: '',
         devolucion_proveedor_id: '',
       });
-      if (contextualReturnId && returnTo) navigate(returnTo);
+      if (returnTo) navigate(returnTo);
 
     } catch (err) {
       console.error(err);
