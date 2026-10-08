@@ -314,15 +314,22 @@ Deno.serve(async (request) => {
     if (!Number.isSafeInteger(expenseClass) || expenseClass <= 0) throw new Error('El tipo contable del gasto no es válido.');
     let paymentMethod: Record<string, unknown> | null = null;
     if (isExpense) {
-      const recentExpenses = rows(await call(
-        accessToken,
-        `/accounting/${encodeURIComponent(period)}/expenses?${new URLSearchParams({ startIndex: '0', numRows: '50' })}`,
-      ));
-      paymentMethod = recentExpenses
-        .map((item) => item.expensePayment && typeof item.expensePayment === 'object'
-          ? (item.expensePayment as Record<string, unknown>).paymentMethod
-          : null)
-        .find((item) => item && typeof item === 'object' && Number((item as Record<string, unknown>).id) === paymentMethodId) as Record<string, unknown> | null || null;
+      const invoiceYear = Number(period.slice(0, 4));
+      const lookupPeriods = [invoiceYear, invoiceYear - 1]
+        .flatMap((year) => [1, 2, 3, 4].map((quarter) => `${year}-${quarter}T`));
+      lookupPeriods.sort((left, right) => left === period ? -1 : right === period ? 1 : right.localeCompare(left));
+      for (const lookupPeriod of lookupPeriods) {
+        const knownExpenses = rows(await call(
+          accessToken,
+          `/accounting/${encodeURIComponent(lookupPeriod)}/expenses?${new URLSearchParams({ startIndex: '0', numRows: '1000' })}`,
+        ));
+        paymentMethod = knownExpenses
+          .map((item) => item.expensePayment && typeof item.expensePayment === 'object'
+            ? (item.expensePayment as Record<string, unknown>).paymentMethod
+            : null)
+          .find((item) => item && typeof item === 'object' && Number((item as Record<string, unknown>).id) === paymentMethodId) as Record<string, unknown> | null || null;
+        if (paymentMethod) break;
+      }
       if (!paymentMethod) {
         throw new Error('ContaSimple no devolvió la definición completa del método de pago seleccionado. No se ha creado ningún gasto.');
       }
