@@ -18,6 +18,7 @@ import {
   Users,
 } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
+import AnalisisFacturasTrabajos from '@/components/AnalisisFacturasTrabajos';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
@@ -194,11 +195,7 @@ const BibliotecaRendimientos = () => {
   const hourlyRatesQuery = useQuery({
     queryKey: ['costes-horarios-rendimientos'],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('costes_horarios')
-        .select('id,rol,tipo_hora,coste_hora')
-        .order('rol')
-        .order('tipo_hora');
+      const { data, error } = await supabase.rpc('api_costes_horarios_rendimientos');
       if (error) throw error;
       return data || [];
     },
@@ -454,9 +451,12 @@ const BibliotecaRendimientos = () => {
               Define qué materiales, horas y medios hacen falta para ejecutar una unidad de trabajo. Esta biblioteca será la base de presupuestos y del aprendizaje con obras reales.
             </p>
           </div>
-          <Button className="gap-2 bg-blue-700 hover:bg-blue-800" onClick={() => setSystemDialog(true)}>
-            <Plus className="h-4 w-4" /> Nuevo sistema
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <AnalisisFacturasTrabajos />
+            <Button className="gap-2 bg-blue-700 hover:bg-blue-800" onClick={() => setSystemDialog(true)}>
+              <Plus className="h-4 w-4" /> Nuevo sistema
+            </Button>
+          </div>
         </div>
         <div className="mt-5 flex flex-wrap gap-x-8 gap-y-2 text-sm">
           <span><strong className="font-mono text-slate-950">{stats.total}</strong> <span className="text-slate-500">sistemas</span></span>
