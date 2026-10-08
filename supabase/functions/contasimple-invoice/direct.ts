@@ -313,28 +313,14 @@ Deno.serve(async (request) => {
     if (!Number.isSafeInteger(paymentMethodId) || paymentMethodId <= 0) throw new Error('El método de pago de ContaSimple no es válido.');
     if (!Number.isSafeInteger(expenseClass) || expenseClass <= 0) throw new Error('El tipo contable del gasto no es válido.');
     let paymentMethod: Record<string, unknown> | null = null;
-    let expensePaymentTemplate: Record<string, unknown> | null = null;
     if (isExpense) {
-      const invoiceYear = Number(period.slice(0, 4));
-      const lookupPeriods = [invoiceYear, invoiceYear - 1]
-        .flatMap((year) => [1, 2, 3, 4].map((quarter) => `${year}-${quarter}T`));
-      lookupPeriods.sort((left, right) => left === period ? -1 : right === period ? 1 : right.localeCompare(left));
-      for (const lookupPeriod of lookupPeriods) {
-        const knownExpenses = rows(await call(
-          accessToken,
-          `/accounting/${encodeURIComponent(lookupPeriod)}/expenses?${new URLSearchParams({ startIndex: '0', numRows: '300' })}`,
-        ));
-        expensePaymentTemplate = knownExpenses
-          .map((item) => item.expensePayment && typeof item.expensePayment === 'object'
-            ? item.expensePayment as Record<string, unknown>
-            : null)
-          .find((item) => item?.paymentMethod && typeof item.paymentMethod === 'object'
-            && Number((item.paymentMethod as Record<string, unknown>).id) === paymentMethodId) || null;
-        paymentMethod = expensePaymentTemplate?.paymentMethod as Record<string, unknown> | null || null;
-        if (paymentMethod) break;
-      }
-      if (!paymentMethod) {
-        throw new Error('ContaSimple no devolvió la definición completa del método de pago seleccionado. No se ha creado ningún gasto.');
+      const configuredPaymentMethods = rows(await call(
+        accessToken,
+        `/configuration/paymentMethods?${new URLSearchParams({ includeInactive: 'true', startIndex: '0', numRows: '300' })}`,
+      ));
+      paymentMethod = configuredPaymentMethods.find((item) => Number(item.id) === paymentMethodId) || null;
+      if (!paymentMethod || paymentMethod.active === false) {
+        throw new Error('El método de pago seleccionado no existe o está inactivo en ContaSimple. No se ha creado ningún gasto.');
       }
     }
     const expenseConcept = sourceLines
@@ -342,35 +328,28 @@ Deno.serve(async (request) => {
       .filter(Boolean)
       .join(' · ')
       .slice(0, 250) || providerName;
-    const paymentTemplate = { ...(expensePaymentTemplate || {}) };
-    delete paymentTemplate.id;
-    delete paymentTemplate.expenseId;
     const expenseBase = {
       number: invoiceNumber,
       date: apiDate(invoiceDate),
-      expenseDate: apiDate(invoiceDate),
       amount: money(invoiceTotal),
-      computablePercentage: 100,
+      imputation: 100,
       concept: expenseConcept,
       notes: `Registrado directamente desde ERP IA360 · ${facturaId}`,
       expenseClass,
-      expensePayment: {
-        ...paymentTemplate,
-        date: apiDate(invoiceDate),
-        amount: money(invoiceTotal),
-        paymentMethodId,
-        paymentMethod,
-        paymentMethodType: paymentMethod?.type,
-        paymentMethodName: paymentMethod?.name,
-        paymentMethodNumber: paymentMethod?.number || '',
-      },
+      paymentMethodId,
     };
 
     if (action === 'preview') return reply({
       ok: true, action, facturaId, period, documentType: purchaseDocumentType,
       provider: { action: remoteProvider ? 'reuse' : 'create', id: remoteProvider?.id || null, organization: providerPayload.organization, nif },
       ...(isExpense
-        ? { expense: { ...expenseBase, issuerEntityId: remoteProvider?.id || null } }
+        ? {
+          expense: {
+            ...expenseBase,
+            issuerEntityId: remoteProvider?.id || null,
+            expensePayment: { paymentMethodId, paymentMethod },
+          },
+        }
         : { invoice: { ...invoiceBase, issuerEntityId: remoteProvider?.id || null } }),
       totals: { base, vat, total: invoiceTotal },
       uploadsFile: false, usesContasimpleOcr: false,
