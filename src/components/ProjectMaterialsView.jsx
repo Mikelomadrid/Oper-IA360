@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import MaterialExpenseModal from '@/components/MaterialExpenseModal';
 import MaterialesExpenseTable from '@/components/MaterialesExpenseTable';
 import ProjectMaterialAudit from '@/components/ProjectMaterialAudit';
+import ProjectMaterialLedger from '@/components/ProjectMaterialLedger';
 import { toast } from '@/components/ui/use-toast';
 import {
   AlertDialog,
@@ -38,6 +39,11 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
         queryFn: async () => {
             if (!projectId) return [];
             
+            // Se añade el embed a facturas_gastos para poder mostrar el botón "ver factura escaneada"
+            // en MaterialesExpenseTable. Se usa el hint !facturas_gastos_gasto_id_fkey porque
+            // gasto_etiquetas_rel.gasto_id tiene FKs tanto a gastos.id como a facturas_gastos.id,
+            // lo que crea un camino indirecto adicional entre 'gastos' y 'facturas_gastos' y
+            // PostgREST no puede elegir automáticamente cuál usar (error "more than one relationship").
             const { data, error } = await supabase
                 .from('gastos')
                 .select(`
@@ -49,13 +55,29 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                     iva,
                     total_con_iva,
                     proveedor_id,
-                    proveedor:proveedores(nombre)
+                    proveedor:proveedores(nombre),
+                    facturas_gastos!facturas_gastos_gasto_id_fkey(id, documento_principal_id, documentos_ids)
                 `)
                 .eq('proyecto_id', projectId)
                 .order('fecha_emision', { ascending: false });
             
             if (error) throw error;
-            return data || [];
+
+            // facturas_gastos puede venir como array u objeto según cómo infiera PostgREST la relación
+            // (no hay constraint UNIQUE en gasto_id, así que por defecto es array; se maneja de forma defensiva).
+            return (data || []).map(gasto => {
+                const fgRaw = gasto.facturas_gastos;
+                const facturaInfo = Array.isArray(fgRaw) ? (fgRaw[0] || null) : (fgRaw || null);
+                const numDocumentosFactura = Array.isArray(facturaInfo?.documentos_ids) ? facturaInfo.documentos_ids.length : 0;
+
+                return {
+                    ...gasto,
+                    factura_gasto_id: facturaInfo?.id || null,
+                    documento_principal_id: facturaInfo?.documento_principal_id || null,
+                    num_documentos_factura: numDocumentosFactura,
+                    tiene_documento_factura: !!facturaInfo?.documento_principal_id,
+                };
+            });
         },
         enabled: !!projectId
     });
@@ -131,6 +153,7 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
 
     return (
         <div className="space-y-6 animate-in fade-in duration-500">
+            <ProjectMaterialLedger projectId={projectId} canManage={canManage} />
             <ProjectMaterialAudit projectId={projectId} canManage={canManage} />
 
             {/* Header / Actions */}
