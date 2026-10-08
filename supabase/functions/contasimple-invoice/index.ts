@@ -22,16 +22,19 @@ function validSpanishTaxId(value: unknown) {
   let taxId = normalized(value);
   if (taxId.startsWith('ES') && taxId.length === 11) taxId = taxId.slice(2);
 
-  const dni = taxId.match(/^(\d{8})([A-Z])$/);
+  // Use explicit numeric character classes. The Supabase dashboard bundler used
+  // for this function has stripped `\\d` escapes from generated deployments,
+  // turning valid patterns into literal `d{...}` matches.
+  const dni = taxId.match(/^([0-9]{8})([A-Z])$/);
   if (dni) return dni[2] === DNI_LETTERS[Number(dni[1]) % 23] ? taxId : null;
 
-  const nie = taxId.match(/^([XYZ])(\d{7})([A-Z])$/);
+  const nie = taxId.match(/^([XYZ])([0-9]{7})([A-Z])$/);
   if (nie) {
     const prefix = { X: '0', Y: '1', Z: '2' }[nie[1] as 'X' | 'Y' | 'Z'];
     return nie[3] === DNI_LETTERS[Number(`${prefix}${nie[2]}`) % 23] ? taxId : null;
   }
 
-  const cif = taxId.match(/^([ABCDEFGHJKLMNPQRSUVW])(\d{7})([0-9A-J])$/);
+  const cif = taxId.match(/^([ABCDEFGHJKLMNPQRSUVW])([0-9]{7})([0-9A-J])$/);
   if (!cif) return null;
   const digits = cif[2].split('').map(Number);
   const evenSum = digits[1] + digits[3] + digits[5];
@@ -63,7 +66,7 @@ function number(value: unknown, label: string) {
 }
 
 function apiDate(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('La fecha de la factura no es válida.');
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) throw new Error('La fecha de la factura no es válida.');
   return `${value}T00:00:00`;
 }
 
