@@ -4,7 +4,7 @@ const API_BASE = 'https://api.contasimple.com/api/v2';
 const ACTIONS = new Set(['preview', 'create']);
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-api-version',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
@@ -173,11 +173,41 @@ Deno.serve(async (request) => {
     const invoiceNumber = text(ocr.numero_factura, 'el número de factura');
     const invoiceDate = text(ocr.fecha_factura, 'la fecha de factura');
     const invoiceTotal = number(ocr.total, 'El total de la factura');
-    const mappedLines = invoiceLines(sourceLines);
+    let mappedLines = invoiceLines(sourceLines);
     const base = money(mappedLines.reduce((sum, line) => sum + line.totalTaxableAmount, 0));
-    const vat = money(mappedLines.reduce((sum, line) => sum + line.vatAmount, 0));
+    let vat = money(mappedLines.reduce((sum, line) => sum + line.vatAmount, 0));
+
+    // El escáner antiguo conserva el IVA en la cabecera, pero no siempre lo
+    // distribuye entre las líneas. Solo lo inferimos cuando todas las líneas
+    // vienen sin IVA y el porcentaje resultante coincide con un tipo español
+    // habitual; así evitamos inventar repartos en facturas con tipos mixtos.
+    const headerVat = money(invoiceTotal - base);
+    const linesHaveNoVat = mappedLines.every((line) =>
+      Math.abs(line.vatAmount) <= 0.01 && Math.abs(line.vatPercentage) <= 0.01
+    );
+    if (Math.abs(base + vat - invoiceTotal) > 0.05 && linesHaveNoVat && Math.abs(base) > 0.01) {
+      const inferredPercentage = Math.abs(headerVat / base * 100);
+      const standardVatRates = [0, 4, 10, 21];
+      const inferredVatRate = standardVatRates.find((rate) => Math.abs(rate - inferredPercentage) <= 0.05);
+      if (inferredVatRate !== undefined) {
+        let allocatedVat = 0;
+        mappedLines = mappedLines.map((line, index) => {
+          const vatAmount = index === mappedLines.length - 1
+            ? money(headerVat - allocatedVat)
+            : money(line.totalTaxableAmount * inferredVatRate / 100);
+          allocatedVat = money(allocatedVat + vatAmount);
+          return { ...line, vatPercentage: inferredVatRate, vatAmount };
+        });
+        vat = money(mappedLines.reduce((sum, line) => sum + line.vatAmount, 0));
+      }
+    }
     if (Math.abs(base + vat - invoiceTotal) > 0.05) {
-      return reply({ ok: false, code: 'totals_mismatch', message: 'La suma de las líneas no coincide con el total.', totals: { base, vat, total: invoiceTotal } }, 409);
+      return reply({
+        ok: false,
+        code: 'totals_mismatch',
+        message: 'La base y el IVA de las líneas no coinciden con el total. Revisa el IVA por línea, especialmente si la factura contiene tipos distintos.',
+        totals: { base, vat, total: invoiceTotal },
+      }, 409);
     }
 
     let localProvider: Record<string, unknown> | null = null;
@@ -212,7 +242,7 @@ Deno.serve(async (request) => {
       imputation: 100, vatImputation: 100, isCashCriteria: false, number: invoiceNumber,
       date: apiDate(invoiceDate), operationDate: apiDate(invoiceDate), invoiceClass: 600,
       notes: `Registrada directamente desde ERP IA360 · ${facturaId}`, retentionPercentage: 0,
-      operationType: 'Nacional', lines: mappedLines, uiCulture: 'es-ES',
+      operationType: 'Nacional', lines: mappedLines,
     };
 
     if (action === 'preview') return reply({
