@@ -812,9 +812,9 @@ export default function BandejaAdminContasimple() {
       <Dialog open={!!sendDialog} onOpenChange={(open) => { if (!open && !contasimpleLoadingId) { setSendDialog(null); setSendPreview(null); setSendPreviewError(null); } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Registrar factura en ContaSimple</DialogTitle>
+            <DialogTitle>Registrar documento en ContaSimple</DialogTitle>
             <DialogDescription>
-              Se crearán directamente el proveedor (solo si no existe) y la factura recibida con los datos validados por el ERP. No se subirá la imagen y no se utilizará ni cobrará el OCR de ContaSimple.
+              Se crearán directamente el proveedor (solo si no existe) y el documento en Facturas recibidas o Gastos, según la clasificación validada por el ERP. No se subirá la imagen y no se utilizará ni cobrará el OCR de ContaSimple.
             </DialogDescription>
           </DialogHeader>
           <div className="rounded-lg border bg-slate-50 p-4 text-sm space-y-2">
@@ -836,12 +836,16 @@ export default function BandejaAdminContasimple() {
           {sendPreview && !sendPreviewLoading && (
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800 space-y-1">
               <p className="font-semibold">Datos listos para registro directo</p>
-              <p>{sendPreview.invoice?.lines?.length || 0} líneas · Base {formatCurrency(sendPreview.totals?.base)} · IVA {formatCurrency(sendPreview.totals?.vat)}</p>
+              {sendPreview.documentType === 'gasto' ? (
+                <p>Destino: Gastos · Importe {formatCurrency(sendPreview.expense?.amount)} · Pago {sendPreview.expense?.expensePayment?.paymentMethodId || '—'}</p>
+              ) : (
+                <p>{sendPreview.invoice?.lines?.length || 0} líneas · Base {formatCurrency(sendPreview.totals?.base)} · IVA {formatCurrency(sendPreview.totals?.vat)}</p>
+              )}
               <p>Proveedor: {sendPreview.provider?.action === 'create' ? 'se creará en ContaSimple' : 'se reutilizará el existente'}.</p>
               <p>Archivo: no se envía · OCR de ContaSimple: no se utiliza.</p>
             </div>
           )}
-          <p className="text-xs text-amber-700">El botón creará realmente la factura recibida en ContaSimple. Antes se comprobarán duplicados por NIF, número e importe.</p>
+          <p className="text-xs text-amber-700">El botón creará realmente el documento en ContaSimple. Antes se comprobarán duplicados por NIF, número e importe.</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSendDialog(null)} disabled={!!contasimpleLoadingId}>Cancelar</Button>
             <Button onClick={confirmEnviarContasimple} disabled={!!contasimpleLoadingId || sendPreviewLoading || !sendPreview || !!sendPreviewError}>

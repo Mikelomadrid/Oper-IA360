@@ -30,6 +30,25 @@ import InvoiceLineDistribution, {
 
 const CATEGORIAS = ['electricidad', 'fontanería', 'pintura', 'albañilería', 'herramientas', 'materiales', 'otro'];
 const UNIDADES = ['ud', 'm', 'm2', 'm3', 'kg', 'l', 'h', 'caja', 'rollo', 'pack'];
+const CONTASIMPLE_PAYMENT_METHODS = [
+  { id: '495834', name: 'Efectivo' },
+  { id: '118408', name: 'Tarjeta MIGUEL' },
+  { id: '1149112', name: 'Tarjeta débito MIGUEL' },
+  { id: '1198714', name: 'Tarjeta FRAN' },
+  { id: '1198715', name: 'Tarjeta ISRA' },
+  { id: '1198742', name: 'Tarjeta PACO' },
+  { id: '118400', name: 'Transferencia bancaria CAJA' },
+  { id: '118610', name: 'Domiciliado CAJA' },
+];
+const CONTASIMPLE_EXPENSE_CLASSES = [
+  { id: '600', name: 'Compras de mercaderías (materiales)' },
+  { id: '602', name: 'Otros aprovisionamientos' },
+  { id: '607', name: 'Trabajos realizados por otras empresas' },
+  { id: '624', name: 'Transportes' },
+  { id: '629', name: 'Otros servicios' },
+  { id: '6293', name: 'Material de oficina' },
+  { id: '6294', name: 'Material informático' },
+];
 
 const LineaEditable = ({
   linea,
@@ -160,6 +179,9 @@ const GastosScanner = ({ navigate }) => {
     numero_generado: false,
     receptor_nombre_ocr: '',
     receptor_cif_ocr: '',
+    contasimple_metodo_pago_id: '495834',
+    contasimple_metodo_pago_nombre: 'Efectivo',
+    contasimple_tipo_gasto: '600',
   });
   const nuevoProveedorCifValidation = useMemo(
     () => validateSpanishTaxId(nuevoProveedor?.cif),
@@ -266,7 +288,9 @@ const GastosScanner = ({ navigate }) => {
         total_con_iva: result.total || '',
         iva: result.iva_porcentaje ? result.iva_porcentaje / 100 : 0.21,
         iva_importe: result.iva_importe || '',
-        monto_bruto: result.subtotal || (result.total && result.iva_importe ? (result.total - result.iva_importe).toFixed(2) : ''),
+        monto_bruto: result.subtotal || (result.total && result.iva_importe
+          ? (result.total - result.iva_importe).toFixed(2)
+          : (documentClassification.type === PURCHASE_DOCUMENT_TYPES.EXPENSE ? result.total : '')),
         proveedor_id: foundProvider ? foundProvider.id : '',
         proveedor_nombre_ocr: result.proveedor_nombre || '',
         proveedor_cif_ocr: result.proveedor_cif || '',
@@ -413,6 +437,15 @@ const GastosScanner = ({ navigate }) => {
         variant: 'destructive',
         title: 'Clasificación pendiente',
         description: 'Confirma si el documento es una factura recibida o un gasto/ticket antes de guardarlo.',
+      });
+      return;
+    }
+    if (formData.tipo_documento === PURCHASE_DOCUMENT_TYPES.EXPENSE
+      && (!formData.contasimple_metodo_pago_id || !formData.contasimple_tipo_gasto)) {
+      toast({
+        variant: 'destructive',
+        title: 'Datos contables pendientes',
+        description: 'Selecciona el método de pago y el tipo contable del gasto.',
       });
       return;
     }
@@ -574,6 +607,9 @@ const GastosScanner = ({ navigate }) => {
           numero_documento_generado: formData.numero_generado,
           receptor_nombre: formData.receptor_nombre_ocr || ocrResult?.receptor_nombre || null,
           receptor_cif: formData.receptor_cif_ocr || ocrResult?.receptor_cif || null,
+          contasimple_metodo_pago_id: Number(formData.contasimple_metodo_pago_id),
+          contasimple_metodo_pago_nombre: formData.contasimple_metodo_pago_nombre,
+          contasimple_tipo_gasto: Number(formData.contasimple_tipo_gasto),
         },
         p_lineas: lineasOcr,
         p_confianza_ocr: Number(ocrResult?.confianza_ocr || ocrResult?.confianza) || null,
@@ -609,6 +645,9 @@ const GastosScanner = ({ navigate }) => {
         numero_generado: false,
         receptor_nombre_ocr: '',
         receptor_cif_ocr: '',
+        contasimple_metodo_pago_id: '495834',
+        contasimple_metodo_pago_nombre: 'Efectivo',
+        contasimple_tipo_gasto: '600',
       });
 
     } catch (err) {
@@ -766,6 +805,45 @@ const GastosScanner = ({ navigate }) => {
                 <p className="mt-2 text-[11px] text-muted-foreground">{formData.tipo_documento_motivo}</p>
                 {(formData.receptor_nombre_ocr || formData.receptor_cif_ocr) && (
                   <p className="mt-1 text-[11px] text-slate-600">Destinatario leído: {formData.receptor_nombre_ocr || 'sin nombre'}{formData.receptor_cif_ocr ? ` · ${formData.receptor_cif_ocr}` : ''}</p>
+                )}
+                {formData.tipo_documento === PURCHASE_DOCUMENT_TYPES.EXPENSE && (
+                  <div className="mt-3 grid gap-3 border-t border-slate-200 pt-3 sm:grid-cols-2">
+                    <div>
+                      <Label className="text-xs">Método de pago *</Label>
+                      <Select
+                        value={formData.contasimple_metodo_pago_id}
+                        onValueChange={(value) => {
+                          const option = CONTASIMPLE_PAYMENT_METHODS.find((item) => item.id === value);
+                          setFormData((current) => ({
+                            ...current,
+                            contasimple_metodo_pago_id: value,
+                            contasimple_metodo_pago_nombre: option?.name || '',
+                          }));
+                        }}
+                      >
+                        <SelectTrigger className="mt-1 h-9 bg-background text-sm"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {CONTASIMPLE_PAYMENT_METHODS.map((option) => (
+                            <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Tipo contable *</Label>
+                      <Select
+                        value={formData.contasimple_tipo_gasto}
+                        onValueChange={(value) => setFormData((current) => ({ ...current, contasimple_tipo_gasto: value }))}
+                      >
+                        <SelectTrigger className="mt-1 h-9 bg-background text-sm"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {CONTASIMPLE_EXPENSE_CLASSES.map((option) => (
+                            <SelectItem key={option.id} value={option.id}>{option.id}. {option.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
                 )}
               </div>
               <div className="rounded-lg border border-primary/15 bg-primary/[0.035] p-3">

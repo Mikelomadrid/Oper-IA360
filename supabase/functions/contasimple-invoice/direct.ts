@@ -213,14 +213,7 @@ Deno.serve(async (request) => {
         message: 'Confirma en el ERP si el documento es una factura recibida o un gasto/ticket.',
       }, 409);
     }
-    if (purchaseDocumentType === 'gasto') {
-      return reply({
-        ok: false,
-        code: 'expense_flow_not_ready',
-        message: 'El documento está clasificado como gasto/ticket y no se enviará como factura recibida. Usa el circuito de Gastos de ContaSimple.',
-        documentType: purchaseDocumentType,
-      }, 409);
-    }
+    const isExpense = purchaseDocumentType === 'gasto';
 
     const nif = validSpanishTaxId(text(ocr.proveedor_nif, 'el NIF del proveedor'));
     if (!nif) {
@@ -234,19 +227,24 @@ Deno.serve(async (request) => {
     const invoiceNumber = text(ocr.numero_factura, 'el número de factura');
     const invoiceDate = text(ocr.fecha_factura, 'la fecha de factura');
     const invoiceTotal = number(ocr.total, 'El total de la factura');
-    let mappedLines = invoiceLines(sourceLines);
-    const base = money(mappedLines.reduce((sum, line) => sum + line.totalTaxableAmount, 0));
-    let vat = money(mappedLines.reduce((sum, line) => sum + line.vatAmount, 0));
+    let mappedLines = isExpense ? [] : invoiceLines(sourceLines);
+    const expenseLinesTotal = money(sourceLines.reduce((sum, line) => {
+      const quantity = Number(line.cantidad ?? 1);
+      const unitAmount = Number(line.precio_unitario ?? 0);
+      return sum + Number(line.base_linea ?? quantity * unitAmount);
+    }, 0));
+    const base = isExpense ? (expenseLinesTotal || invoiceTotal) : money(mappedLines.reduce((sum, line) => sum + line.totalTaxableAmount, 0));
+    let vat = isExpense ? money(invoiceTotal - base) : money(mappedLines.reduce((sum, line) => sum + line.vatAmount, 0));
 
     // El escáner antiguo conserva el IVA en la cabecera, pero no siempre lo
     // distribuye entre las líneas. Solo lo inferimos cuando todas las líneas
     // vienen sin IVA y el porcentaje resultante coincide con un tipo español
     // habitual; así evitamos inventar repartos en facturas con tipos mixtos.
     const headerVat = money(invoiceTotal - base);
-    const linesHaveNoVat = mappedLines.every((line) =>
+    const linesHaveNoVat = !isExpense && mappedLines.every((line) =>
       Math.abs(line.vatAmount) <= 0.01 && Math.abs(line.vatPercentage) <= 0.01
     );
-    if (Math.abs(base + vat - invoiceTotal) > 0.05 && linesHaveNoVat && Math.abs(base) > 0.01) {
+    if (!isExpense && Math.abs(base + vat - invoiceTotal) > 0.05 && linesHaveNoVat && Math.abs(base) > 0.01) {
       const inferredPercentage = Math.abs(headerVat / base * 100);
       const standardVatRates = [0, 4, 10, 21];
       const inferredVatRate = standardVatRates.find((rate) => Math.abs(rate - inferredPercentage) <= 0.05);
@@ -262,7 +260,7 @@ Deno.serve(async (request) => {
         vat = money(mappedLines.reduce((sum, line) => sum + line.vatAmount, 0));
       }
     }
-    if (Math.abs(base + vat - invoiceTotal) > 0.05) {
+    if (!isExpense && Math.abs(base + vat - invoiceTotal) > 0.05) {
       return reply({
         ok: false,
         code: 'totals_mismatch',
@@ -280,10 +278,15 @@ Deno.serve(async (request) => {
 
     const period = periodFromDate(invoiceDate);
     const accessToken = await token(apiKey);
-    const duplicates = await call(accessToken, `/accounting/${encodeURIComponent(period)}/invoices/received?${new URLSearchParams({ startIndex: '0', numRows: '20', number: invoiceNumber, nif })}`);
+    const duplicateEndpoint = isExpense
+      ? `/accounting/${encodeURIComponent(period)}/expenses?${new URLSearchParams({ startIndex: '0', numRows: '50', number: invoiceNumber, nif })}`
+      : `/accounting/${encodeURIComponent(period)}/invoices/received?${new URLSearchParams({ startIndex: '0', numRows: '20', number: invoiceNumber, nif })}`;
+    const duplicates = await call(accessToken, duplicateEndpoint);
     const duplicate = rows(duplicates).find((item) => {
       const issuer = item.issuer && typeof item.issuer === 'object' ? item.issuer as Record<string, unknown> : {};
-      return normalized(item.number) === normalized(invoiceNumber) && normalized(issuer.nif ?? item.nif) === normalized(nif) && Math.abs(Number(item.totalAmount ?? 0) - invoiceTotal) <= 0.02;
+      return normalized(item.number) === normalized(invoiceNumber)
+        && normalized(issuer.nif ?? item.nif) === normalized(nif)
+        && Math.abs(Number(item.totalAmount ?? item.amount ?? 0) - invoiceTotal) <= 0.02;
     });
     if (duplicate) {
       if (action === 'create') await admin.from('facturas_gastos_contasimple_control').update({ estado: 'posible_duplicado_contasimple', observaciones: 'Coincidencia por NIF, número e importe antes del registro directo.', raw_contasimple: { duplicate }, updated_at: new Date().toISOString() }).eq('factura_id', facturaId);
@@ -305,11 +308,37 @@ Deno.serve(async (request) => {
       notes: `Registrada directamente desde ERP IA360 · ${facturaId}`, retentionPercentage: 0,
       operationType: 'Nacional', lines: mappedLines,
     };
+    const paymentMethodId = Number(documentMetadata.contasimple_metodo_pago_id || 495834);
+    const expenseClass = Number(documentMetadata.contasimple_tipo_gasto || 600);
+    if (!Number.isSafeInteger(paymentMethodId) || paymentMethodId <= 0) throw new Error('El método de pago de ContaSimple no es válido.');
+    if (!Number.isSafeInteger(expenseClass) || expenseClass <= 0) throw new Error('El tipo contable del gasto no es válido.');
+    const expenseConcept = sourceLines
+      .map((line) => String(line.descripcion || '').trim())
+      .filter(Boolean)
+      .join(' · ')
+      .slice(0, 250) || providerName;
+    const expenseBase = {
+      number: invoiceNumber,
+      expenseDate: apiDate(invoiceDate),
+      amount: money(invoiceTotal),
+      computablePercentage: 100,
+      concept: expenseConcept,
+      notes: `Registrado directamente desde ERP IA360 · ${facturaId}`,
+      expenseClass,
+      expensePayment: {
+        date: apiDate(invoiceDate),
+        amount: money(invoiceTotal),
+        paymentMethodId,
+      },
+    };
 
     if (action === 'preview') return reply({
-      ok: true, action, facturaId, period,
+      ok: true, action, facturaId, period, documentType: purchaseDocumentType,
       provider: { action: remoteProvider ? 'reuse' : 'create', id: remoteProvider?.id || null, organization: providerPayload.organization, nif },
-      invoice: { ...invoiceBase, issuerEntityId: remoteProvider?.id || null }, totals: { base, vat, total: invoiceTotal },
+      ...(isExpense
+        ? { expense: { ...expenseBase, issuerEntityId: remoteProvider?.id || null } }
+        : { invoice: { ...invoiceBase, issuerEntityId: remoteProvider?.id || null } }),
+      totals: { base, vat, total: invoiceTotal },
       uploadsFile: false, usesContasimpleOcr: false,
     });
 
@@ -321,9 +350,16 @@ Deno.serve(async (request) => {
     const issuerEntityId = Number(remoteProvider?.id);
     if (!Number.isSafeInteger(issuerEntityId) || issuerEntityId <= 0) throw new Error('ContaSimple no devolvió un identificador válido para el proveedor.');
 
-    const createdPayload = await call(accessToken, `/accounting/${encodeURIComponent(period)}/invoices/received?bypassInvoiceDuplicateValidation=false`, {
-      method: 'POST', body: JSON.stringify({ ...invoiceBase, issuerEntityId }),
-    });
+    const createdPayload = await call(
+      accessToken,
+      isExpense
+        ? `/accounting/${encodeURIComponent(period)}/expenses`
+        : `/accounting/${encodeURIComponent(period)}/invoices/received?bypassInvoiceDuplicateValidation=false`,
+      {
+        method: 'POST',
+        body: JSON.stringify(isExpense ? { ...expenseBase, issuerEntityId } : { ...invoiceBase, issuerEntityId }),
+      },
+    );
     const created = data(createdPayload);
     const documentId = Number(created?.id);
     if (!Number.isSafeInteger(documentId) || documentId <= 0) throw new Error('ContaSimple no devolvió el identificador de la factura creada.');
@@ -331,9 +367,11 @@ Deno.serve(async (request) => {
     const registered = await admin.rpc('flopy_registrar_factura_directa_contasimple', {
       p_factura_id: facturaId, p_contasimple_document_id: documentId,
       p_contasimple_document_number: String(created?.number || invoiceNumber),
-      p_contasimple_document_amount: Number(created?.totalAmount ?? invoiceTotal),
+      p_contasimple_document_amount: Number(created?.totalAmount ?? created?.amount ?? invoiceTotal),
       p_contasimple_period: String(created?.period || period), p_usuario_id: employee.id,
-      p_observaciones: providerCreated ? 'Factura y proveedor creados por API, sin OCR ni archivo.' : 'Factura creada por API, sin OCR ni archivo.',
+      p_observaciones: providerCreated
+        ? `${isExpense ? 'Gasto' : 'Factura'} y proveedor creados por API, sin OCR ni archivo.`
+        : `${isExpense ? 'Gasto' : 'Factura'} creado por API, sin OCR ni archivo.`,
       p_raw_contasimple: createdPayload,
     });
     if (registered.error) throw registered.error;
@@ -341,8 +379,9 @@ Deno.serve(async (request) => {
     await admin.from('facturas_gastos').update({ contasimple_id: String(documentId), contasimple_error: null, estado_contabilidad: 'enviada' }).eq('id', facturaId);
 
     return reply({ ok: true, action, facturaId, documentId, documentNumber: created?.number || invoiceNumber,
-      documentAmount: created?.totalAmount ?? invoiceTotal, period: created?.period || period,
-      providerId: issuerEntityId, providerCreated, state: 'creada_en_contasimple', uploadsFile: false, usesContasimpleOcr: false });
+      documentAmount: created?.totalAmount ?? created?.amount ?? invoiceTotal, period: created?.period || period,
+      documentType: purchaseDocumentType, providerId: issuerEntityId, providerCreated,
+      state: 'creada_en_contasimple', uploadsFile: false, usesContasimpleOcr: false });
   } catch (error) {
     console.error('contasimple-invoice:', message(error));
     return reply({ ok: false, code: 'internal_error', message: message(error) }, 500);
