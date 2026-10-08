@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useNotification } from "@/contexts/NotificationContext"; // Use Context
 import { supabase } from '@/lib/customSupabaseClient';
@@ -89,9 +89,11 @@ const formatNotificationMessage = (notif, projectNames = {}) => {
     // Case: Task assignment notification
     // Goal: Change "EN EL PROYECTO." -> "EN EL PROYECTO DE [NOMBRE]."
     if (notif.tipo_objeto === 'tarea' && (msg.includes("EN EL PROYECTO.") || msg.includes("en el proyecto."))) {
-        const projectName = projectNames[notif.referencia_id] || "BATRES (LOLO)"; // Default to user's example if fetch fails
+        const projectName = projectNames[notif.referencia_id];
 
-        msg = msg.replace(/EN EL PROYECTO\./i, `EN EL PROYECTO DE ${projectName}.`);
+        msg = projectName
+            ? msg.replace(/EN EL PROYECTO\./i, `EN EL PROYECTO DE ${projectName}.`)
+            : msg.replace(/EN EL PROYECTO\./i, 'EN EL PROYECTO ASIGNADO.');
 
         // Remove trailing "ASIGNADA POR ..." to match user's requested clean format
         const assignedByMatch = msg.match(/\.?\s*ASIGNADA POR.*$/i);
@@ -115,6 +117,7 @@ const NotificationsHandler = () => {
     const [projectNames, setProjectNames] = useState({}); // { taskId: projectName }
     const [isOpen, setIsOpen] = useState(false);
     const [loadingAction, setLoadingAction] = useState(null);
+    const hasAutoOpenedRef = useRef(false);
 
     const fetchData = async () => {
         if (!user || !sessionRole?.empleadoId) return;
@@ -176,7 +179,14 @@ const NotificationsHandler = () => {
                 setNotifications(safeNotifs);
                 setAssignments(safeAssigns);
                 // Only open if there are items to show and not already open
-                if ((safeNotifs.length > 0 || safeAssigns.length > 0) && !isOpen) {
+                const autoOpenKey = `notifications:auto-opened:${sessionRole.empleadoId}`;
+                const alreadyAutoOpened = window.sessionStorage.getItem(autoOpenKey) === '1';
+                if ((safeNotifs.length > 0 || safeAssigns.length > 0)
+                    && !isOpen
+                    && !hasAutoOpenedRef.current
+                    && !alreadyAutoOpened) {
+                    hasAutoOpenedRef.current = true;
+                    window.sessionStorage.setItem(autoOpenKey, '1');
                     setIsOpen(true);
                 }
             }
