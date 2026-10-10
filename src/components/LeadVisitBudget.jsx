@@ -8,6 +8,7 @@ import {
   FileAudio2,
   FileText,
   HelpCircle,
+  History,
   Eye,
   Link2,
   Loader2,
@@ -16,6 +17,8 @@ import {
   Plus,
   Ruler,
   Save,
+  Send,
+  ShieldCheck,
   Sparkles,
   Trash2,
   X,
@@ -31,6 +34,16 @@ import { Combobox } from '@/components/ui/combobox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 const emptyResult = () => ({
   objeto_presupuesto: '',
@@ -301,6 +314,31 @@ const newMeasurementId = () => globalThis.crypto?.randomUUID?.()
 const newPriceComponentId = () => globalThis.crypto?.randomUUID?.()
   || `precio-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
+const newPendingDecisionId = () => globalThis.crypto?.randomUUID?.()
+  || `pendiente-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+const normalizePendingDecision = (item) => {
+  if (typeof item === 'string') {
+    return {
+      id: newPendingDecisionId(),
+      texto: item,
+      estado: 'pendiente',
+      decidido_at: null,
+    };
+  }
+
+  const allowedStates = new Set(['pendiente', 'confirmado', 'no_aplica']);
+  return {
+    id: item?.id || newPendingDecisionId(),
+    texto: item?.texto || item?.descripcion || '',
+    estado: allowedStates.has(item?.estado) ? item.estado : 'pendiente',
+    decidido_at: item?.decidido_at || null,
+  };
+};
+
+const normalizePendingDecisions = (items) => (Array.isArray(items) ? items : [])
+  .map(normalizePendingDecision);
+
 const decimal = (value) => {
   const parsed = Number(String(value ?? '').replace(',', '.'));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -442,12 +480,16 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [pdfGenerating, setPdfGenerating] = useState(null);
   const [pdfExportMode, setPdfExportMode] = useState(null);
+  const [pdfEmission, setPdfEmission] = useState(null);
+  const [emissions, setEmissions] = useState([]);
+  const [emitting, setEmitting] = useState(false);
+  const [emitDialogOpen, setEmitDialogOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
       setLoadingDraft(true);
-      const [systemsResponse, draftResponse] = await Promise.all([
+      const [systemsResponse, draftResponse, emissionsResponse] = await Promise.all([
         supabase
           .from('sistemas_rendimiento')
           .select('id,codigo,nombre,capitulo,categoria_detalle,unidad_base')
@@ -461,11 +503,17 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle(),
+        supabase
+          .from('presupuesto_emisiones')
+          .select('id,visita_id,numero,version,estado,base_imponible,iva,total,emitido_at')
+          .eq('lead_id', leadId)
+          .order('emitido_at', { ascending: false }),
       ]);
       if (!active) return;
       const loadedSystems = systemsResponse.error ? [] : (systemsResponse.data || []);
       const loadedSystemMap = new Map(loadedSystems.map((system) => [system.id, system]));
       if (!systemsResponse.error) setSystems(loadedSystems);
+      if (!emissionsResponse.error) setEmissions(emissionsResponse.data || []);
       if (draftResponse.data) {
         const draft = draftResponse.data;
         setDraftId(draft.id);
@@ -476,7 +524,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
           notas_cabecera_presupuesto: draft.notas_cabecera_presupuesto || '',
           resumen: draft.resumen || '',
           necesidades_cliente: draft.necesidades_cliente || [],
-          datos_pendientes: draft.datos_pendientes || [],
+          datos_pendientes: normalizePendingDecisions(draft.datos_pendientes),
           observaciones: draft.observaciones || [],
           mediciones: (draft.mediciones || []).map(normalizeMeasurement),
           revision_alcance: draft.revision_alcance || [],
@@ -586,7 +634,8 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
     const firstPendingMeasurementIndex = result.mediciones.findIndex((measurement) => (
       usedMeasurementIds.has(measurement.id) && measurement.estado_revision !== 'confirmada'
     ));
-    const pendingData = (result.datos_pendientes || []).filter((item) => String(item || '').trim()).length;
+    const pendingData = normalizePendingDecisions(result.datos_pendientes)
+      .filter((item) => item.estado === 'pendiente' && item.texto.trim()).length;
 
     return [
       {
@@ -658,6 +707,17 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
     ready: preparationChecks.every((check) => check.ok),
     pending: preparationChecks.filter((check) => !check.ok).length,
   }), [preparationChecks]);
+  const pendingDecisionSummary = useMemo(() => normalizePendingDecisions(result.datos_pendientes)
+    .reduce((summary, item) => ({
+      ...summary,
+      [item.estado]: summary[item.estado] + 1,
+    }), { pendiente: 0, confirmado: 0, no_aplica: 0 }), [result.datos_pendientes]);
+  const latestEmission = emissions[0] || null;
+  const documentReference = pdfExportMode === 'final' && pdfEmission
+    ? `${pdfEmission.numero} · v${pdfEmission.version}`
+    : latestEmission
+      ? `${latestEmission.numero} · borrador v${latestEmission.version + 1}`
+      : `PRE-${String(leadId || '').slice(0, 8).toUpperCase()} · borrador`;
 
   const reviewPreparationCheck = (check) => {
     const target = document.getElementById(check.targetId);
@@ -683,7 +743,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
     }));
   };
 
-  const downloadBudgetPdf = async (mode) => {
+  const downloadBudgetPdf = async (mode, emission = null) => {
     if (mode === 'final' && !preparationSummary.ready) {
       toast({ variant: 'destructive', title: 'El presupuesto todavía no está completo', description: `Revisa los ${preparationSummary.pending} grupos pendientes antes de generar el PDF definitivo.` });
       return;
@@ -691,6 +751,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
 
     setPdfGenerating(mode);
     setPdfExportMode(mode);
+    setPdfEmission(mode === 'final' ? emission : null);
     setPreviewOpen(true);
     try {
       await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
@@ -699,7 +760,10 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
       const clientName = lead?.nombre_empresa || lead?.nombre_contacto || 'Cliente';
       const safeClientName = clientName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '') || 'Cliente';
       const date = new Date().toISOString().slice(0, 10);
-      const filename = `Presupuesto_${safeClientName}_${mode === 'draft' ? 'BORRADOR_' : ''}${date}.pdf`;
+      const emittedReference = emission || latestEmission;
+      const filename = mode === 'final' && emittedReference
+        ? `${emittedReference.numero}_v${emittedReference.version}_${safeClientName}.pdf`
+        : `Presupuesto_${safeClientName}_${mode === 'draft' ? 'BORRADOR_' : ''}${date}.pdf`;
       await html2pdf().set({
         margin: [9, 9, 11, 9],
         filename,
@@ -713,6 +777,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
       toast({ variant: 'destructive', title: 'No se pudo generar el PDF', description: error.message });
     } finally {
       setPdfExportMode(null);
+      setPdfEmission(null);
       setPdfGenerating(null);
     }
   };
@@ -769,7 +834,34 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
   };
 
   const addReviewItem = (field) => {
-    setResult((current) => ({ ...current, [field]: [...current[field], ''] }));
+    setResult((current) => ({
+      ...current,
+      [field]: [
+        ...current[field],
+        field === 'datos_pendientes'
+          ? normalizePendingDecision({ texto: '', estado: 'pendiente' })
+          : '',
+      ],
+    }));
+  };
+
+  const updatePendingDecision = (index, patch) => {
+    setResult((current) => ({
+      ...current,
+      datos_pendientes: normalizePendingDecisions(current.datos_pendientes).map((item, itemIndex) => (
+        itemIndex === index
+          ? {
+            ...item,
+            ...patch,
+            decidido_at: patch.estado && patch.estado !== 'pendiente'
+              ? new Date().toISOString()
+              : patch.estado === 'pendiente'
+                ? null
+                : item.decidido_at,
+          }
+          : item
+      )),
+    }));
   };
 
   const setScopeDecision = (ruleId, status) => {
@@ -819,9 +911,10 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
 
     setResult((current) => ({
       ...current,
-      datos_pendientes: current.datos_pendientes.includes(check.question)
-        ? current.datos_pendientes
-        : [...current.datos_pendientes, check.question],
+      datos_pendientes: normalizePendingDecisions(current.datos_pendientes)
+        .some((item) => item.texto === check.question)
+        ? normalizePendingDecisions(current.datos_pendientes)
+        : [...normalizePendingDecisions(current.datos_pendientes), normalizePendingDecision(check.question)],
       revision_alcance: [
         ...(current.revision_alcance || []).filter((decision) => decision.regla_id !== check.id),
         { regla_id: check.id, estado: 'aceptada', fecha: new Date().toISOString() },
@@ -972,6 +1065,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
         ...data,
         objeto_presupuesto: data?.objeto_presupuesto || summarizeBudgetObject(data?.resumen),
         notas_cabecera_presupuesto: data?.notas_cabecera_presupuesto || '',
+        datos_pendientes: normalizePendingDecisions(data?.datos_pendientes),
         mediciones: (data?.mediciones || []).map(normalizeMeasurement),
         partidas: ensureExecutionPlan(normalizedLines, systems),
       });
@@ -986,13 +1080,13 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
     }
   };
 
-  const saveDraft = async () => {
+  const saveDraft = async ({ silent = false } = {}) => {
     const sourceReference = notes.trim()
       || (sourceFile?.name ? `[Archivo PLAUD analizado: ${sourceFile.name}]` : '')
       || (result.mediciones.length ? '[Mediciones introducidas manualmente]' : '');
     if (!sourceReference) {
       toast({ variant: 'destructive', title: 'Falta la transcripción o las notas originales' });
-      return;
+      return null;
     }
     setSaving(true);
     try {
@@ -1063,11 +1157,102 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
         const { error } = await supabase.from('visita_presupuesto_partidas').insert(lines);
         if (error) throw error;
       }
-      toast({ title: 'Borrador guardado', description: 'No se ha creado ninguna obra ni enviado nada a ContaSimple.' });
+      if (!silent) toast({ title: 'Borrador guardado', description: 'No se ha creado ninguna obra ni enviado nada a ContaSimple.' });
+      return visitId;
     } catch (error) {
       toast({ variant: 'destructive', title: 'No se pudo guardar el borrador', description: error.message });
+      return null;
     } finally {
       setSaving(false);
+    }
+  };
+
+  const buildEmissionSnapshot = (visitId) => ({
+    schema_version: 1,
+    visita_id: visitId,
+    lead: {
+      id: leadId,
+      nombre_contacto: lead?.nombre_contacto || null,
+      nombre_empresa: lead?.nombre_empresa || null,
+      cif: lead?.cif || null,
+      telefono: lead?.telefono || null,
+      email: lead?.email || null,
+      direccion: lead?.direccion || null,
+      codigo_postal: lead?.codigo_postal || null,
+      municipio: lead?.municipio || null,
+    },
+    documento: {
+      objeto_presupuesto: result.objeto_presupuesto?.trim() || summarizeBudgetObject(result.resumen),
+      notas_cabecera_presupuesto: result.notas_cabecera_presupuesto?.trim() || null,
+      resumen: result.resumen || null,
+      condicion_alcance: budgetScopeCondition,
+      forma_pago: budgetPaymentTerms,
+    },
+    ajustes_comerciales: normalizeCommercialSettings(commercialSettings),
+    totales: {
+      base_partidas: budgetSummary.base,
+      gastos_generales: commercialSummary.generalExpenses,
+      margen: commercialSummary.margin,
+      base_imponible: commercialSummary.taxableBase,
+      iva: commercialSummary.vat,
+      total: commercialSummary.total,
+    },
+    mediciones: result.mediciones || [],
+    partidas: orderExecutionLines(result.partidas)
+      .filter((line) => line.estado_revision !== 'descartada')
+      .map((line, index) => ({
+        orden: index,
+        sistema_id: line.sistema_id || null,
+        codigo: line.codigo || null,
+        capitulo: line.capitulo || null,
+        descripcion: line.descripcion || '',
+        zona: line.zona || null,
+        unidad: line.unidad || null,
+        cantidad: Number(line.cantidad),
+        medicion_id: line.medicion_id || null,
+        fase_ejecucion: line.fase_ejecucion || inferExecutionPhase(line),
+        precio_unitario: line.precio_unitario === '' || line.precio_unitario === null ? null : Number(line.precio_unitario),
+        desglose_precio: normalizePriceBreakdown(line.desglose_precio).map((item) => ({
+          ...item,
+          cantidad: Number(item.cantidad) || 0,
+          precio_unitario: item.precio_unitario === '' || item.precio_unitario === null ? null : Number(item.precio_unitario),
+        })),
+      })),
+  });
+
+  const emitBudget = async () => {
+    if (!preparationSummary.ready) {
+      toast({ variant: 'destructive', title: 'El presupuesto todavía no puede emitirse', description: `Resuelve los ${preparationSummary.pending} grupos pendientes antes de crear una versión definitiva.` });
+      return;
+    }
+    setEmitting(true);
+    try {
+      const visitId = await saveDraft({ silent: true });
+      if (!visitId) return;
+      const snapshot = buildEmissionSnapshot(visitId);
+      const { data, error } = await supabase.rpc('emitir_presupuesto_visita', {
+        p_visita_id: visitId,
+        p_snapshot: snapshot,
+        p_importes: {
+          base_partidas: budgetSummary.base,
+          gastos_generales: commercialSummary.generalExpenses,
+          margen: commercialSummary.margin,
+          base_imponible: commercialSummary.taxableBase,
+          iva: commercialSummary.vat,
+          total: commercialSummary.total,
+        },
+      });
+      if (error) throw error;
+      const emission = Array.isArray(data) ? data[0] : data;
+      if (!emission?.id) throw new Error('Supabase no devolvió la emisión creada.');
+      setEmissions((current) => [emission, ...current.filter((item) => item.id !== emission.id)]);
+      setEmitDialogOpen(false);
+      toast({ title: `${emission.numero} · versión ${emission.version} emitida`, description: 'La fotografía del presupuesto ha quedado guardada y no puede modificarse.' });
+      await downloadBudgetPdf('final', emission);
+    } catch (error) {
+      toast({ variant: 'destructive', title: 'No se pudo emitir el presupuesto', description: error.message });
+    } finally {
+      setEmitting(false);
     }
   };
 
@@ -1237,17 +1422,51 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
               </div>
             </CardContent>
           </Card>
-          <Card id="datos-pendientes" className="scroll-mt-24 border-amber-200 bg-amber-50/50 shadow-none">
-            <CardHeader className="pb-3"><CardTitle className="flex items-center gap-2 text-base text-amber-900"><AlertTriangle className="h-4 w-4" />Datos por confirmar</CardTitle></CardHeader>
-            <CardContent className="space-y-2">
-              {result.datos_pendientes.map((item, index) => (
-                <div id={`dato-pendiente-${index}`} key={`pending-${index}`} className="scroll-mt-24 flex items-center gap-2">
-                  <Input value={item} onChange={(event) => updateReviewItem('datos_pendientes', index, event.target.value)} disabled={!canEdit} className="border-amber-200 bg-white/80 text-amber-950" />
-                  <Button type="button" variant="ghost" size="icon" className="shrink-0 text-amber-700 hover:text-destructive" onClick={() => removeReviewItem('datos_pendientes', index)} disabled={!canEdit} aria-label="Eliminar dato pendiente"><Trash2 className="h-4 w-4" /></Button>
+          <Card id="datos-pendientes" className="scroll-mt-24 border-border/60 shadow-none">
+            <CardHeader className="border-b border-border/50 pb-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2 text-base"><ClipboardCheck className="h-4 w-4 text-violet-700" />Decisiones de la visita</CardTitle>
+                  <CardDescription className="mt-1">Conserva cada duda y marca cómo quedó resuelta.</CardDescription>
                 </div>
-              ))}
-              {!result.datos_pendientes.length && <p className="text-sm text-amber-800">No se han detectado datos pendientes.</p>}
-              <Button type="button" variant="outline" size="sm" onClick={() => addReviewItem('datos_pendientes')} disabled={!canEdit} className="border-amber-300 bg-white/70 text-amber-950 hover:bg-amber-100"><Plus className="mr-2 h-4 w-4" />Añadir pendiente</Button>
+                <div className="flex flex-wrap gap-1.5 text-[10px]">
+                  <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">{pendingDecisionSummary.pendiente} pendientes</Badge>
+                  <Badge variant="outline" className="border-emerald-300 bg-emerald-50 text-emerald-800">{pendingDecisionSummary.confirmado} confirmados</Badge>
+                  <Badge variant="outline" className="border-slate-300 bg-slate-50 text-slate-600">{pendingDecisionSummary.no_aplica} no aplican</Badge>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3 pt-4">
+              {normalizePendingDecisions(result.datos_pendientes).map((item, index) => {
+                const isPending = item.estado === 'pendiente';
+                const isConfirmed = item.estado === 'confirmado';
+                return (
+                  <article
+                    id={`dato-pendiente-${index}`}
+                    key={item.id}
+                    className={`scroll-mt-24 rounded-md border p-3 ${isPending ? 'border-amber-200 bg-amber-50/50' : isConfirmed ? 'border-emerald-200 bg-emerald-50/40' : 'border-slate-200 bg-slate-50/70'}`}
+                  >
+                    <div className="flex items-start gap-2">
+                      {isPending ? <AlertTriangle className="mt-2.5 h-4 w-4 shrink-0 text-amber-700" /> : isConfirmed ? <CheckCircle2 className="mt-2.5 h-4 w-4 shrink-0 text-emerald-700" /> : <X className="mt-2.5 h-4 w-4 shrink-0 text-slate-500" />}
+                      <Input
+                        value={item.texto}
+                        onChange={(event) => updatePendingDecision(index, { texto: event.target.value })}
+                        disabled={!canEdit}
+                        className="border-border/60 bg-white/90 text-sm"
+                        aria-label={`Decisión ${index + 1}`}
+                      />
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 pl-6">
+                      <Button type="button" variant="outline" size="sm" className={`h-8 ${isPending ? 'border-amber-400 bg-amber-100 text-amber-900' : 'bg-white/80 text-muted-foreground'}`} onClick={() => updatePendingDecision(index, { estado: 'pendiente' })} disabled={!canEdit}>Pendiente</Button>
+                      <Button type="button" variant="outline" size="sm" className={`h-8 ${isConfirmed ? 'border-emerald-400 bg-emerald-100 text-emerald-900' : 'bg-white/80 text-muted-foreground'}`} onClick={() => updatePendingDecision(index, { estado: 'confirmado' })} disabled={!canEdit}>Confirmado</Button>
+                      <Button type="button" variant="outline" size="sm" className={`h-8 ${item.estado === 'no_aplica' ? 'border-slate-400 bg-slate-200 text-slate-800' : 'bg-white/80 text-muted-foreground'}`} onClick={() => updatePendingDecision(index, { estado: 'no_aplica' })} disabled={!canEdit}>No aplica</Button>
+                    </div>
+                  </article>
+                );
+              })}
+              {!result.datos_pendientes.length && <p className="text-sm text-muted-foreground">No se han detectado decisiones pendientes.</p>}
+              <Button type="button" variant="outline" size="sm" onClick={() => addReviewItem('datos_pendientes')} disabled={!canEdit}><Plus className="mr-2 h-4 w-4" />Añadir decisión</Button>
+              {pendingDecisionSummary.pendiente > 0 && <p className="text-xs leading-5 text-amber-800">Solo las decisiones marcadas como <strong>Pendiente</strong> bloquean la emisión del presupuesto.</p>}
             </CardContent>
           </Card>
         </div>
@@ -1549,10 +1768,37 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="outline" onClick={openBudgetPreview}><Eye className="mr-2 h-4 w-4" />Ver vista previa</Button>
                 <Button type="button" variant="outline" onClick={() => downloadBudgetPdf('draft')} disabled={Boolean(pdfGenerating)}>{pdfGenerating === 'draft' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}PDF borrador</Button>
-                <Button type="button" onClick={() => downloadBudgetPdf('final')} disabled={!preparationSummary.ready || Boolean(pdfGenerating)}>{pdfGenerating === 'final' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : preparationSummary.ready ? <Download className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}PDF definitivo</Button>
+                <Button type="button" className="bg-emerald-700 text-white hover:bg-emerald-800" onClick={() => setEmitDialogOpen(true)} disabled={!canEdit || !preparationSummary.ready || emitting || Boolean(pdfGenerating)}>{emitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : preparationSummary.ready ? <ShieldCheck className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}Emitir presupuesto</Button>
               </div>
             </div>
-            <p className="md:col-span-2 text-xs text-muted-foreground">Este control solo valida el borrador interno. No crea una obra ni envía información a ContaSimple.</p>
+            <p className="md:col-span-2 text-xs text-muted-foreground">Emitir crea una versión numerada e inmutable y descarga su PDF. No crea una obra ni envía información a ContaSimple.</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {emissions.length > 0 && (
+        <Card className="overflow-hidden border-emerald-200 shadow-sm">
+          <CardHeader className="border-b border-emerald-200 bg-emerald-50/60 pb-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base"><History className="h-4 w-4 text-emerald-700" />Historial de emisiones</CardTitle>
+                <CardDescription className="mt-1">Cada versión conserva exactamente las partidas, importes y condiciones que se emitieron.</CardDescription>
+              </div>
+              <Badge variant="outline" className="border-emerald-300 bg-white font-mono text-emerald-800">{emissions[0].numero}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="divide-y divide-border/50 p-0">
+            {emissions.map((emission, index) => (
+              <div key={emission.id} className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(180px,1fr)_110px_140px_140px] sm:items-center">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-sm font-semibold">{emission.numero} · v{emission.version}</span>{index === 0 && <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-800">Última</Badge>}</div>
+                  <p className="mt-1 text-xs text-muted-foreground">Emitida el {new Date(emission.emitido_at).toLocaleString('es-ES')}</p>
+                </div>
+                <Badge variant="outline" className="w-fit capitalize">{emission.estado}</Badge>
+                <div><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Base imponible</p><p className="mt-1 font-mono text-sm font-medium">{formatMoney(emission.base_imponible)}</p></div>
+                <div className="sm:text-right"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</p><p className="mt-1 font-mono text-base font-bold">{formatMoney(emission.total)}</p></div>
+              </div>
+            ))}
           </CardContent>
         </Card>
       )}
@@ -1582,7 +1828,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
                     <p className="mt-1 text-sm text-slate-500">Propuesta ordenada según la secuencia prevista de ejecución.</p>
                   </div>
                   <dl className="grid grid-cols-[auto_auto] gap-x-5 gap-y-1 text-right text-xs">
-                    <dt className="text-slate-500">Referencia</dt><dd className="font-mono font-semibold">PRE-{String(leadId || '').slice(0, 8).toUpperCase()}</dd>
+                    <dt className="text-slate-500">Referencia</dt><dd className="font-mono font-semibold">{documentReference}</dd>
                     <dt className="text-slate-500">Fecha</dt><dd className="font-medium">{new Date().toLocaleDateString('es-ES')}</dd>
                     <dt className="text-slate-500">Estado</dt><dd className={`font-semibold ${preparationSummary.ready && pdfExportMode !== 'draft' ? 'text-emerald-700' : 'text-amber-700'}`}>{preparationSummary.ready && pdfExportMode !== 'draft' ? 'Revisión final' : 'Borrador'}</dd>
                   </dl>
@@ -1679,6 +1925,27 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
           <Button onClick={saveDraft} disabled={!canEdit || saving || (!notes.trim() && !sourceFile && !result.mediciones.length)}>{saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Guardar borrador</Button>
         </div>
       )}
+
+      <AlertDialog open={emitDialogOpen} onOpenChange={setEmitDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-emerald-700" />Emitir versión definitiva</AlertDialogTitle>
+            <AlertDialogDescription>
+              Se guardará una fotografía inmutable del presupuesto por {formatMoney(commercialSummary.total)}. {latestEmission ? `Se creará la versión ${latestEmission.version + 1} de ${latestEmission.numero}.` : 'Se asignará el siguiente número anual disponible.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3 text-sm text-emerald-950">
+            <p className="font-semibold">Esta acción no modifica el borrador.</p>
+            <p className="mt-1 text-xs leading-5 text-emerald-800">Después podrás seguir editándolo y emitir una nueva versión. También se descargará el PDF correspondiente a esta emisión.</p>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={emitting}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={(event) => { event.preventDefault(); emitBudget(); }} disabled={emitting} className="bg-emerald-700 text-white hover:bg-emerald-800">
+              {emitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}Confirmar emisión
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
