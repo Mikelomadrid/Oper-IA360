@@ -42,6 +42,7 @@ import LeadAssignmentManager from '@/components/LeadAssignmentManager';
 import LeadDocuments from '@/components/LeadDocuments';
 import LeadPhotoGallery from '@/components/LeadPhotoGallery';
 import LeadStatusSelector from '@/components/LeadStatusSelector';
+import LeadVisitBudget from '@/components/LeadVisitBudget';
 
 const formatDate = (dateString) => {
   if (!dateString) return 'N/A';
@@ -451,6 +452,13 @@ export default function LeadDetail({ leadId, navigate }) {
               </TabsTrigger>
 
               <TabsTrigger
+                value="visit-budget"
+                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none px-4 py-3 font-semibold text-muted-foreground transition-all hover:text-foreground flex items-center gap-2"
+              >
+                <FileText className="w-4 h-4" /> Visita y presupuesto
+              </TabsTrigger>
+
+              <TabsTrigger
                 value="photos"
                 className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none px-4 py-3 font-semibold text-muted-foreground transition-all hover:text-foreground flex items-center gap-2"
               >
@@ -591,6 +599,12 @@ export default function LeadDetail({ leadId, navigate }) {
           <TabsContent value="photos" className="h-full mt-0">
             <ScrollArea className="h-full p-4 md:p-6">
               <LeadPhotoGallery leadId={leadId} />
+            </ScrollArea>
+          </TabsContent>
+
+          <TabsContent value="visit-budget" className="h-full mt-0">
+            <ScrollArea className="h-full p-4 md:p-6">
+              <LeadVisitBudget leadId={leadId} canEdit={canEdit} lead={lead} />
             </ScrollArea>
           </TabsContent>
 
