@@ -18,6 +18,7 @@ const LeadConversionDetail = ({ lead, onBack, onConversionSuccess }) => {
   const [selectedClient, setSelectedClient] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
+  const [projectStartDate, setProjectStartDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
 
@@ -50,13 +51,18 @@ const LeadConversionDetail = ({ lead, onBack, onConversionSuccess }) => {
   }, [clients, searchTerm]);
 
   const handleConvert = async () => {
+    if (!projectStartDate) {
+      toast({ variant: 'destructive', title: 'Indica la fecha de comienzo', description: 'La obra permanecerá pendiente hasta esa fecha.' });
+      return;
+    }
     setLoading(true);
     try {
       // Use the new v2 RPC for robust conversion
-      const { data, error } = await supabase.rpc('approve_lead_to_proyecto_v2', {
+      const { data, error } = await supabase.rpc('convertir_lead_a_obra_pendiente', {
         p_lead_id: lead.id,
         p_proyecto_descripcion: projectDescription || `Proyecto generado desde lead: ${lead.nombre_contacto}`,
-        p_cliente_id: selectedClient === 'none' ? null : selectedClient
+        p_cliente_id: selectedClient === 'none' ? null : selectedClient,
+        p_fecha_inicio: projectStartDate,
       });
 
       if (error) throw error;
@@ -79,7 +85,7 @@ const LeadConversionDetail = ({ lead, onBack, onConversionSuccess }) => {
         description: error.message || 'No se pudo convertir el lead.',
       });
     } finally {
-      if (isMounted.current) setLoading(false);
+      setLoading(false);
     }
   };
 
@@ -196,7 +202,19 @@ const LeadConversionDetail = ({ lead, onBack, onConversionSuccess }) => {
             />
           </div>
 
-          <Button onClick={handleConvert} disabled={loading} className="w-full">
+          <div>
+            <Label htmlFor="project-start-date">Fecha prevista de comienzo *</Label>
+            <Input
+              id="project-start-date"
+              type="date"
+              min={new Date().toISOString().slice(0, 10)}
+              value={projectStartDate}
+              onChange={(event) => setProjectStartDate(event.target.value)}
+            />
+            <p className="mt-2 text-sm text-muted-foreground">La obra aparecerá en Pendiente y pasará a Activo cuando llegue esta fecha.</p>
+          </div>
+
+          <Button onClick={handleConvert} disabled={loading || !projectStartDate} className="w-full">
             {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {loading ? 'Convirtiendo...' : 'Convertir a Proyecto'}
           </Button>

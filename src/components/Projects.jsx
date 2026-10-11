@@ -70,7 +70,7 @@ const KANBAN_DROP_COLUMNS = KANBAN_COLUMNS.filter(c => c !== 'cobrado');
 
 const KANBAN_STYLES = {
     activo:     { label: 'ACTIVO',       bg: '#dcfce7', text: '#15803d', br: '#86efac' },
-    en_espera:  { label: 'EN ESPERA',    bg: '#fef3c7', text: '#b45309', br: '#fcd34d' },
+    en_espera:  { label: 'PENDIENTE',     bg: '#fef3c7', text: '#b45309', br: '#fcd34d' },
     terminado:  { label: 'TERMINADO',    bg: '#dbeafe', text: '#1d4ed8', br: '#93c5fd' },
     facturado:  { label: 'FACTURADO',    bg: '#ede9fe', text: '#6d28d9', br: '#c4b5fd' },
     cobrado:    { label: 'HISTORIAL',    bg: '#d1fae5', text: '#047857', br: '#6ee7b7' },
@@ -309,6 +309,9 @@ const Projects = ({ navigate }) => {
     const fetchProjects = useCallback(async () => {
         setLoading(true);
         try {
+            const { error: activationError } = await supabase.rpc('activar_obras_por_fecha_inicio');
+            if (activationError) console.warn('[Projects] No se pudo sincronizar el inicio automático:', activationError);
+
             // 1. Fetch project KPIs (currently missing labor in the view's costo_total)
             let query = supabase
                 .from('v_proyecto_kpis_con_estado')

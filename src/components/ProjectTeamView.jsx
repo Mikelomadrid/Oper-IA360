@@ -88,7 +88,6 @@ const ProjectTeamView = ({ projectId, canManage }) => {
                 supabase
                     .from('empleados')
                     .select('id, nombre, apellidos, rol, foto_url, activo, baja, vacaciones')
-                    .in('rol', ['tecnico', 'encargado'])
                     .eq('activo', true)
                     .order('nombre'),
                 supabase
@@ -220,7 +219,7 @@ const ProjectTeamView = ({ projectId, canManage }) => {
     const partialCount = employeeRows.filter((employee) => employee.availability === 'parcial').length;
 
     const addEmployee = async (employee) => {
-        if (!canManage || employee.availability === 'no_disponible') return;
+        if (!canManage) return;
         setSavingId(employee.id);
         try {
             const { error } = await supabase.from('obra_equipo').upsert({
@@ -268,7 +267,7 @@ const ProjectTeamView = ({ projectId, canManage }) => {
                     <div className="rounded-lg bg-violet-50 p-2.5 text-violet-700"><Users className="h-5 w-5" /></div>
                     <div>
                         <h2 className="text-xl font-semibold tracking-tight text-slate-950">Equipo disponible para la obra</h2>
-                        <p className="mt-1 text-sm text-slate-600">El encargado forma el equipo. La IA solo recomendará dentro de esta selección.</p>
+                        <p className="mt-1 text-sm text-slate-600">Desde que la obra se acepta, el encargado puede formar el equipo con cualquier empleado activo.</p>
                     </div>
                 </div>
                 <div className="flex items-center gap-2 text-sm text-slate-600">
@@ -289,7 +288,7 @@ const ProjectTeamView = ({ projectId, canManage }) => {
                     <div>
                         <p className="font-medium text-slate-900">Recomendación transparente, decisión humana</p>
                         <p className="mt-1 text-sm leading-6 text-slate-600">
-                            Todavía no hay suficientes ejecuciones comparables para ordenar personas por rentabilidad. El sistema utilizará habilidades, horas, calidad y retrabajos cuando exista una muestra fiable; el encargado conservará siempre la decisión final.
+                            La disponibilidad, las ausencias y los solapes son avisos para decidir mejor, no bloqueos. Todavía no hay suficientes ejecuciones comparables para ordenar personas por rentabilidad; el encargado conserva siempre la decisión final.
                         </p>
                     </div>
                 </CardContent>
@@ -298,7 +297,7 @@ const ProjectTeamView = ({ projectId, canManage }) => {
             <section className="space-y-3">
                 <div>
                     <h3 className="font-semibold text-slate-950">Personal asignado por el encargado</h3>
-                    <p className="text-sm text-slate-500">Este es el único grupo que podrá proponerse después para las tareas de la obra.</p>
+                        <p className="text-sm text-slate-500">Este grupo podrá repartirse después entre las tareas, incluso mientras la obra siga pendiente de comenzar.</p>
                 </div>
                 {selectedRows.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center">
@@ -325,7 +324,7 @@ const ProjectTeamView = ({ projectId, canManage }) => {
                 <section className="space-y-3">
                     <div>
                         <h3 className="font-semibold text-slate-950">Personal de la empresa</h3>
-                        <p className="text-sm text-slate-500">Las coincidencias se calculan con ausencias aprobadas y tareas de otras obras.</p>
+                        <p className="text-sm text-slate-500">Se muestra todo el personal activo. Las ausencias y tareas de otras obras se señalan para que el encargado pueda valorarlas.</p>
                     </div>
                     <div className="grid gap-3 lg:grid-cols-2">
                         {candidateRows.map((employee) => (
@@ -333,7 +332,7 @@ const ProjectTeamView = ({ projectId, canManage }) => {
                                 key={employee.id}
                                 employee={employee}
                                 action="add"
-                                disabled={savingId === employee.id || employee.availability === 'no_disponible'}
+                                disabled={savingId === employee.id}
                                 onAction={() => addEmployee(employee)}
                             />
                         ))}
@@ -402,8 +401,8 @@ const EmployeeCard = ({ employee, action, disabled, onAction }) => {
             <div className="mt-4 flex justify-end border-t border-slate-100 pt-3">
                 {action === 'add' ? (
                     <Button size="sm" variant="outline" disabled={disabled} onClick={onAction}>
-                        {disabled && employee.availability !== 'no_disponible' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
-                        {employee.availability === 'no_disponible' ? 'No asignable' : 'Añadir a la obra'}
+                        {disabled ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
+                        {employee.availability === 'no_disponible' ? 'Añadir con aviso' : 'Añadir a la obra'}
                     </Button>
                 ) : (
                     <Button size="sm" variant="ghost" className="text-slate-500 hover:bg-red-50 hover:text-red-700" disabled={disabled} onClick={onAction}>

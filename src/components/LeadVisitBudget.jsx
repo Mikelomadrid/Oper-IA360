@@ -498,6 +498,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
   const [commercialNotes, setCommercialNotes] = useState('');
   const [commercialUpdating, setCommercialUpdating] = useState(false);
   const [conversionEmission, setConversionEmission] = useState(null);
+  const [conversionStartDate, setConversionStartDate] = useState('');
   const [converting, setConverting] = useState(false);
 
   useEffect(() => {
@@ -1311,11 +1312,16 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
 
   const convertAcceptedBudget = async () => {
     if (!conversionEmission) return;
+    if (!conversionStartDate) {
+      toast({ variant: 'destructive', title: 'Indica la fecha de comienzo', description: 'La obra quedará pendiente hasta ese día.' });
+      return;
+    }
     setConverting(true);
     try {
       const { data, error } = await supabase.rpc('convertir_presupuesto_aceptado_a_obra', {
         p_emision_id: conversionEmission.id,
         p_descripcion: result.objeto_presupuesto?.trim() || null,
+        p_fecha_inicio: conversionStartDate,
       });
       if (error) throw error;
       const conversion = Array.isArray(data) ? data[0] : data;
@@ -1324,7 +1330,8 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
         ? { ...item, proyecto_id: conversion.proyecto_id }
         : item));
       setConversionEmission(null);
-      toast({ title: 'Obra creada desde el presupuesto aceptado', description: `${conversion.partidas_creadas ?? 0} partidas se han trasladado a producción.` });
+      setConversionStartDate('');
+      toast({ title: 'Obra creada y pendiente de comienzo', description: `${conversion.partidas_creadas ?? 0} partidas preparadas sin fechas. Se activará el ${conversionStartDate.split('-').reverse().join('/')}.` });
       if (navigate) navigate(`/gestion/obras/${conversion.proyecto_id}?tab=produccion`);
     } catch (error) {
       toast({ variant: 'destructive', title: 'No se pudo crear la obra', description: error.message });
@@ -2119,7 +2126,10 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
       </AlertDialog>
 
       <AlertDialog open={Boolean(conversionEmission)} onOpenChange={(open) => {
-        if (!open && !converting) setConversionEmission(null);
+        if (!open && !converting) {
+          setConversionEmission(null);
+          setConversionStartDate('');
+        }
       }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -2132,9 +2142,20 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
             <p className="font-semibold">La versión emitida no se modificará.</p>
             <p className="mt-1 text-xs leading-5 text-emerald-800">Las partidas pasarán a Producción para poder planificar y medir su ejecución. Esta acción no crea facturas ni envía datos a ContaSimple.</p>
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="conversion-start-date">Fecha prevista de comienzo *</Label>
+            <Input
+              id="conversion-start-date"
+              type="date"
+              value={conversionStartDate}
+              onChange={(event) => setConversionStartDate(event.target.value)}
+              min={new Date().toISOString().slice(0, 10)}
+            />
+            <p className="text-xs text-muted-foreground">Hasta esa fecha aparecerá en Pendiente. Las partidas se crearán ahora, pero el cronograma no se fechará hasta que el encargado asigne equipo y horas.</p>
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={converting}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={(event) => { event.preventDefault(); convertAcceptedBudget(); }} disabled={converting} className="bg-emerald-700 text-white hover:bg-emerald-800">
+            <AlertDialogAction onClick={(event) => { event.preventDefault(); convertAcceptedBudget(); }} disabled={converting || !conversionStartDate} className="bg-emerald-700 text-white hover:bg-emerald-800">
               {converting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Briefcase className="mr-2 h-4 w-4" />}Crear obra
             </AlertDialogAction>
           </AlertDialogFooter>

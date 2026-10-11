@@ -330,7 +330,13 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
             }
             // ─────────────────────────────────────────────────────────────
 
-            onSave();
+            onSave({
+                taskId: newlySavedTaskId,
+                projectId,
+                fechaInicio: startDate ? format(startDate, 'yyyy-MM-dd') : null,
+                fechaLimite: deadline ? format(deadline, 'yyyy-MM-dd') : null,
+                isNew: !task,
+            });
         } catch (error) {
             console.error('Error saving task:', error);
             toast({ variant: 'destructive', title: 'Error al guardar', description: error.message });

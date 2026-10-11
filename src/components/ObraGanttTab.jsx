@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { supabase } from '@/lib/customSupabaseClient';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, Plus, ServerCrash, RefreshCw, Calendar as CalendarIcon, CheckCircle2, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, Maximize2, Minimize2, Clock, Users, Euro, TrendingUp, ChevronDown, ChevronUp, AlertTriangle, AlertCircle, Bell, XCircle, Trash2 } from 'lucide-react';
+import { Loader2, Plus, ServerCrash, RefreshCw, Calendar as CalendarIcon, CheckCircle2, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, Maximize2, Minimize2, Clock, Users, Euro, TrendingUp, ChevronDown, ChevronUp, AlertTriangle, AlertCircle, Bell, XCircle, Trash2, CalendarClock, MapPin } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { useToast } from '@/components/ui/use-toast';
@@ -13,8 +13,10 @@ import { cn } from '@/lib/utils';
 import NativeGantt, { ViewMode } from '@/components/ui/NativeGantt';
 import TaskCrudModal from '@/components/TaskCrudModal';
 import TaskDetailModal from '@/components/TaskDetailModal';
+import TaskAssignmentPlanner from '@/components/TaskAssignmentPlanner';
 import { Card } from '@/components/ui/card';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { buildTeamHourlySchedule, countWorkingHoursInclusive, getHourlyScheduleBounds } from '@/lib/workSchedule';
 
 const GANTT_COLORS = [
     { base: '#2563eb', prog: '#60a5fa' },
@@ -22,6 +24,12 @@ const GANTT_COLORS = [
     { base: '#7c3aed', prog: '#a78bfa' },
     { base: '#059669', prog: '#34d399' },
 ];
+
+const getTaskZone = (task) => {
+    if (task.zona) return task.zona;
+    const match = String(task.descripcion || '').match(/(?:^|\n)Zona:\s*([^\n]+)/i);
+    return match?.[1]?.trim() || null;
+};
 
 // ─── Helper: calcular fecha fin laborable ────────────────────────────────────
 /**
@@ -251,11 +259,16 @@ const GanttTooltip = ({ task }) => {
                     </div>
                 </div>
                 <div className="flex flex-col gap-1 pt-2">
+                    {task.zona && (
+                        <span className="flex items-center gap-1 text-xs font-medium text-violet-700">
+                            <MapPin className="h-3.5 w-3.5" /> {task.zona}
+                        </span>
+                    )}
                     <span className="text-xs text-muted-foreground flex justify-between">
-                        <span>Inicio:</span> <span className="text-slate-700 dark:text-slate-300 font-medium">{format(task.start, "d MMM yyyy", { locale: es })}</span>
+                        <span>Inicio:</span> <span className="text-slate-700 dark:text-slate-300 font-medium">{format(task.start, "d MMM yyyy · HH:mm", { locale: es })}</span>
                     </span>
                     <span className="text-xs text-muted-foreground flex justify-between">
-                        <span>Fin:</span> <span className="text-slate-700 dark:text-slate-300 font-medium">{format(task.end, "d MMM yyyy", { locale: es })}</span>
+                        <span>Fin:</span> <span className="text-slate-700 dark:text-slate-300 font-medium">{format(task.end, "d MMM yyyy · HH:mm", { locale: es })}</span>
                     </span>
                     <span className="text-xs text-muted-foreground flex justify-between">
                         <span>Progreso:</span> <span className="text-slate-700 dark:text-slate-300 font-medium">{Math.round(task.progress)}%</span>
@@ -282,7 +295,14 @@ const ObraGanttTab = ({ obraId }) => {
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [crudModalState, setCrudModalState] = useState({ isOpen: false, task: null });
     const [detailModalState, setDetailModalState] = useState({ isOpen: false, task: null });
+    const [assignmentPlannerOpen, setAssignmentPlannerOpen] = useState(false);
     const [festivos, setFestivos] = useState([]);
+    const [projectPlanning, setProjectPlanning] = useState({
+        fecha_inicio: null,
+        estado_planificacion: 'sin_planificar',
+        planificacion_confirmada_at: null,
+    });
+    const [confirmingPlan, setConfirmingPlan] = useState(false);
 
     const canManage = useMemo(() => sessionRole?.rol === 'admin' || sessionRole?.rol === 'encargado' || sessionRole?.rol === 'manager', [sessionRole?.rol]);
 
@@ -503,10 +523,12 @@ const ObraGanttTab = ({ obraId }) => {
     }, [tasks, festivosSet, calcularHorasTeoricas, toast, toastRetrasoMostrado]);
 
     useEffect(() => {
-        if (tasks.length > 0) {
+        if (tasks.length > 0 && projectPlanning.estado_planificacion !== 'sin_planificar') {
             calcularAlertas();
+        } else {
+            setAlertasRetraso([]);
         }
-    }, [calcularAlertas]);
+    }, [calcularAlertas, tasks.length, projectPlanning.estado_planificacion]);
 
     const fmtH = (h) => `${Math.floor(h)}h ${Math.round((h % 1) * 60)}min`;
     const fmtEur = (v) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(v || 0);
@@ -516,6 +538,18 @@ const ObraGanttTab = ({ obraId }) => {
         setLoading(true);
         setError(null);
         try {
+            const { data: projectRow, error: projectError } = await supabase
+                .from('proyectos')
+                .select('fecha_inicio, estado_planificacion, planificacion_confirmada_at')
+                .eq('id', obraId)
+                .single();
+            if (projectError) throw projectError;
+            setProjectPlanning({
+                fecha_inicio: projectRow?.fecha_inicio || null,
+                estado_planificacion: projectRow?.estado_planificacion || 'sin_planificar',
+                planificacion_confirmada_at: projectRow?.planificacion_confirmada_at || null,
+            });
+
             const { data: tasksData, error: tasksError } = await supabase
                 .from('v_tareas_ui')
                 .select('id, titulo, empleado_asignado_id, estado, fecha_creacion, tecnico_nombre, fecha_limite, proyecto_id')
@@ -535,7 +569,7 @@ const ObraGanttTab = ({ obraId }) => {
             if (taskIds.length > 0) {
                 const { data: rawTareas, error: rawError } = await supabase
                     .from('tareas')
-                    .select('id, fecha_inicio, empleado_asignado_id, orden, obra_partida_id, origen_generacion')
+                    .select('id, fecha_inicio, empleado_asignado_id, orden, obra_partida_id, origen_generacion, descripcion, duracion_planificada_horas, inicio_planificado_at, fin_planificado_at')
                     .in('id', taskIds);
 
                 if (!rawError && rawTareas) {
@@ -622,6 +656,10 @@ const ObraGanttTab = ({ obraId }) => {
                         orden: rawDataForTask?.orden ?? task.orden ?? null,
                         obra_partida_id: rawDataForTask?.obra_partida_id ?? null,
                         origen_generacion: rawDataForTask?.origen_generacion ?? 'manual',
+                        descripcion: rawDataForTask?.descripcion ?? task.descripcion ?? null,
+                        duracion_planificada_horas: rawDataForTask?.duracion_planificada_horas ?? null,
+                        inicio_planificado_at: rawDataForTask?.inicio_planificado_at ?? null,
+                        fin_planificado_at: rawDataForTask?.fin_planificado_at ?? null,
                         tecnicos: tecnicosDetails,
                         progressPercent
                     };
@@ -704,27 +742,22 @@ const ObraGanttTab = ({ obraId }) => {
             globalMinDate = new Date(currentYear, 0, 1);
         }
 
-        const formatted = tasks.map((task, index) => {
-            const startStr = task.fecha_inicio || task.fecha_creacion || new Date().toISOString();
+        const scheduledTasks = tasks.filter((task) => task.inicio_planificado_at && task.fin_planificado_at);
+        const formatted = scheduledTasks.map((task, index) => {
+            const startStr = task.inicio_planificado_at;
             let startRaw = new Date(startStr);
 
             if (startRaw < globalMinDate) {
                 startRaw = new Date(globalMinDate.getTime());
             }
 
-            // ✅ Ajustar inicio: si cae en fin de semana o festivo, mover al siguiente laborable
-            const start = ajustarInicioLaborable(startRaw, festivosSet);
+            // Las franjas horarias ya vienen normalizadas por el planificador.
+            // Las tareas antiguas conservan el ajuste laboral por fecha.
+            const start = task.inicio_planificado_at
+                ? startRaw
+                : ajustarInicioLaborable(startRaw, festivosSet);
 
-            let end;
-            if (task.fecha_limite) {
-                const endRaw = new Date(task.fecha_limite);
-                // ✅ Calcular fin laborable: misma duración en días laborables
-                end = calcularFinLaborable(start, endRaw, festivosSet);
-            } else {
-                // Sin fecha límite: 1 día laborable
-                end = new Date(start.getTime());
-                end.setHours(23, 59, 59, 999);
-            }
+            let end = new Date(task.fin_planificado_at);
 
             if (end < start) {
                 end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
@@ -765,6 +798,8 @@ const ObraGanttTab = ({ obraId }) => {
                 project_color_hack: color,
                 estado_raw: task.estado,
                 tecnicos: task.tecnicos,
+                zona: getTaskZone(task),
+                duracion_planificada_horas: task.duracion_planificada_horas,
                 es_retrasada: esRetrasada,
                 es_en_riesgo: esEnRiesgo,
             };
@@ -790,79 +825,98 @@ const ObraGanttTab = ({ obraId }) => {
         return formatted;
     }, [tasks, canManage, ganttScale, festivosSet]); // ✅ festivosSet como dependencia
 
+    const handleConfirmPlan = async () => {
+        setConfirmingPlan(true);
+        try {
+            const { error: confirmError } = await supabase.rpc('confirmar_planificacion_obra', {
+                p_proyecto_id: obraId,
+            });
+            if (confirmError) throw confirmError;
+            toast({
+                title: 'Cronograma confirmado',
+                description: 'La planificación queda lista para ejecución. Cualquier cambio posterior volverá a dejarla en borrador.',
+            });
+            fetchData();
+        } catch (confirmError) {
+            toast({ variant: 'destructive', title: 'No se pudo confirmar el cronograma', description: confirmError.message });
+        } finally {
+            setConfirmingPlan(false);
+        }
+    };
+
     const handleGanttTaskChange = async (gTask) => {
         try {
             const originalTask = tasks.find(t => t.id === gTask.id);
             if (!originalTask) return;
 
-            const getNoon = (dateStrOrObj) => {
-                const d = new Date(dateStrOrObj);
-                d.setHours(12, 0, 0, 0);
-                return d;
-            };
+            const durationHours = Object.fromEntries(tasks.map((task) => [
+                task.id,
+                task.id === gTask.id
+                    ? (Number(task.duracion_planificada_horas)
+                        || countWorkingHoursInclusive(gTask.start, gTask.end, festivosSet))
+                    : (Number(task.duracion_planificada_horas)
+                        || countWorkingHoursInclusive(task.fecha_inicio, task.fecha_limite, festivosSet)),
+            ]));
+            const assignments = Object.fromEntries(tasks.map((task) => [
+                task.id,
+                (task.tecnicos || []).map((employee) => employee.id).filter(Boolean),
+            ]));
+            const schedule = buildTeamHourlySchedule(
+                tasks,
+                durationHours,
+                assignments,
+                festivosSet,
+                tasks[0]?.fecha_inicio || gTask.start,
+                { [gTask.id]: gTask.start },
+            );
+            const affectedTasks = tasks.filter((task) => (
+                schedule[task.id]
+                && (schedule[task.id].fecha_inicio !== task.fecha_inicio
+                    || schedule[task.id].fecha_limite !== task.fecha_limite
+                    || schedule[task.id].inicio_planificado_at !== task.inicio_planificado_at
+                    || schedule[task.id].fin_planificado_at !== task.fin_planificado_at
+                    || Number(schedule[task.id].duracion_planificada_horas) !== Number(task.duracion_planificada_horas))
+            ));
 
-            const oldStart = getNoon(originalTask.fecha_inicio);
-            const newStart = getNoon(gTask.start);
-            const diffStart = Math.round((newStart.getTime() - oldStart.getTime()) / (1000 * 3600 * 24));
+            const updateResults = await Promise.all(affectedTasks.map((task) => supabase
+                .from('tareas')
+                .update({
+                    fecha_inicio: schedule[task.id].fecha_inicio,
+                    fecha_limite: schedule[task.id].fecha_limite,
+                    duracion_planificada_horas: schedule[task.id].duracion_planificada_horas,
+                    inicio_planificado_at: schedule[task.id].inicio_planificado_at,
+                    fin_planificado_at: schedule[task.id].fin_planificado_at,
+                })
+                .eq('id', task.id)));
+            const failedUpdate = updateResults.find((result) => result.error);
+            if (failedUpdate?.error) throw failedUpdate.error;
 
-            const oldEnd = getNoon(originalTask.fecha_limite);
-            const newEnd = getNoon(gTask.end);
-            const diffEnd = Math.round((newEnd.getTime() - oldEnd.getTime()) / (1000 * 3600 * 24));
+            const nextTasks = tasks.map((task) => schedule[task.id]
+                ? {
+                    ...task,
+                    fecha_inicio: schedule[task.id].fecha_inicio,
+                    fecha_limite: schedule[task.id].fecha_limite,
+                    duracion_planificada_horas: schedule[task.id].duracion_planificada_horas,
+                    inicio_planificado_at: schedule[task.id].inicio_planificado_at,
+                    fin_planificado_at: schedule[task.id].fin_planificado_at,
+                }
+                : task);
+            setTasks(nextTasks);
 
-            let targetStart = new Date(originalTask.fecha_inicio + "T12:00:00");
-            let targetEnd = new Date(originalTask.fecha_limite + "T12:00:00");
-
-            if (diffStart !== 0 && diffEnd !== 0) {
-                targetStart.setDate(targetStart.getDate() + diffStart);
-                targetEnd.setDate(targetEnd.getDate() + diffStart);
-            } else if (diffStart !== 0 && diffEnd === 0) {
-                targetStart.setDate(targetStart.getDate() + diffStart);
-            } else if (diffStart === 0 && diffEnd !== 0) {
-                targetEnd.setDate(targetEnd.getDate() + diffEnd);
-            } else {
-                return;
+            if (obraId && nextTasks.length > 0) {
+                const { start: projectStart, end: projectEnd } = getHourlyScheduleBounds(schedule);
+                if (projectStart && projectEnd) {
+                    const { error: projectError } = await supabase
+                        .from('proyectos')
+                        .update({ fecha_inicio: projectStart.slice(0, 10), fecha_fin_estimada: projectEnd.slice(0, 10) })
+                        .eq('id', obraId);
+                    if (projectError) console.error('Error syncing project boundaries:', projectError);
+                }
             }
 
-            const startISO = format(targetStart, 'yyyy-MM-dd');
-            const endISO = format(targetEnd, 'yyyy-MM-dd');
-
-            const { error } = await supabase
-                .from('tareas')
-                .update({ fecha_inicio: startISO, fecha_limite: endISO })
-                .eq('id', gTask.id);
-
-            if (error) throw error;
-
-            toast({ title: 'Cronograma actualizado', description: 'Las fechas de la tarea se han guardado automáticamente.' });
-
-            setTasks(prev => {
-                const nextTasks = prev.map(t => t.id === gTask.id ? {
-                    ...t,
-                    fecha_inicio: startISO,
-                    fecha_limite: endISO
-                } : t);
-
-                if (obraId) {
-                    let pMin = null;
-                    let pMax = null;
-                    nextTasks.forEach(t => {
-                        if (t.id === '__gantt_phantom_range__') return;
-                        const st = new Date(t.fecha_inicio || t.fecha_creacion || new Date());
-                        const ed = t.fecha_limite ? new Date(t.fecha_limite) : new Date(st.getTime() + 86400000);
-                        if (!pMin || st < pMin) pMin = st;
-                        if (!pMax || ed > pMax) pMax = ed;
-                    });
-
-                    if (pMin && pMax) {
-                        supabase.from('proyectos').update({
-                            fecha_inicio: format(pMin, 'yyyy-MM-dd'),
-                            fecha_fin_estimada: format(pMax, 'yyyy-MM-dd')
-                        }).eq('id', obraId).then(({ error: pErr }) => {
-                            if (pErr) console.error("Error syncing project boundaries:", pErr);
-                        });
-                    }
-                }
-                return nextTasks;
+            toast({
+                title: 'Cronograma reajustado',
+                description: `${affectedTasks.length} tarea${affectedTasks.length === 1 ? '' : 's'} reajustada${affectedTasks.length === 1 ? '' : 's'}. Los equipos distintos pueden coincidir; una misma persona nunca se solapa.`,
             });
         } catch (e) {
             console.error(e);
@@ -974,14 +1028,41 @@ const ObraGanttTab = ({ obraId }) => {
                         <CalendarIcon className="w-6 h-6 text-blue-600" />
                     </div>
                     <div>
-                        <h2 className="text-2xl font-bold tracking-tight text-slate-900">Cronograma de Tareas</h2>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="text-2xl font-bold tracking-tight text-slate-900">Cronograma de Tareas</h2>
+                            {projectPlanning.estado_planificacion === 'confirmado' ? (
+                                <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-50">Confirmado</Badge>
+                            ) : projectPlanning.estado_planificacion === 'borrador' ? (
+                                <Badge className="border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-50">Borrador</Badge>
+                            ) : (
+                                <Badge className="border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-50">Sin planificar</Badge>
+                            )}
+                        </div>
                         <p className="text-sm text-slate-500 font-medium">
-                            Planifica y ajusta las fechas de las tareas de la obra interactuando con el gráfico.
+                            Las partidas nacen sin fechas. El cronograma se construye al asignar equipo y horas.
                         </p>
                     </div>
                 </div>
                 {canManage && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                            variant="outline"
+                            onClick={() => setAssignmentPlannerOpen(true)}
+                            disabled={tasks.length === 0}
+                            className="border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 hover:text-violet-800 font-semibold rounded-xl h-11 px-4 transition-all"
+                        >
+                            <CalendarClock className="w-4 h-4 mr-2" /> Planificar equipo y tiempos
+                        </Button>
+                        {projectPlanning.estado_planificacion === 'borrador' && (
+                            <Button
+                                onClick={handleConfirmPlan}
+                                disabled={confirmingPlan}
+                                className="bg-emerald-700 text-white hover:bg-emerald-800 font-semibold rounded-xl h-11 px-4"
+                            >
+                                {confirmingPlan ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                                Confirmar cronograma
+                            </Button>
+                        )}
                         {!confirmLimpiar ? (
                             <Button
                                 variant="outline"
@@ -1023,7 +1104,7 @@ const ObraGanttTab = ({ obraId }) => {
             </div>
 
             {/* ✅ PANEL DE ALERTAS DE RETRASO */}
-            {alertasRetraso.length > 0 && showPanelAlertas && (
+            {projectPlanning.estado_planificacion !== 'sin_planificar' && alertasRetraso.length > 0 && showPanelAlertas && (
                 <div className="bg-red-50 border border-red-200 rounded-2xl p-5">
                     <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
@@ -1099,7 +1180,7 @@ const ObraGanttTab = ({ obraId }) => {
             )}
 
             {/* Botón para mostrar alertas si están ocultas */}
-            {alertasRetraso.length > 0 && !showPanelAlertas && (
+            {projectPlanning.estado_planificacion !== 'sin_planificar' && alertasRetraso.length > 0 && !showPanelAlertas && (
                 <button
                     onClick={() => setShowPanelAlertas(true)}
                     className="flex items-center gap-2 text-sm text-red-600 hover:text-red-800 bg-red-50 border border-red-200 rounded-xl px-4 py-2 transition-colors"
@@ -1110,7 +1191,7 @@ const ObraGanttTab = ({ obraId }) => {
             )}
 
             {/* ✅ RESUMEN DE HORAS DE MANO DE OBRA */}
-            {horasData && (
+            {projectPlanning.estado_planificacion !== 'sin_planificar' && horasData && (
                 <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm p-5">
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
                         <div className="flex items-center gap-3">
@@ -1119,7 +1200,7 @@ const ObraGanttTab = ({ obraId }) => {
                             </div>
                             <div>
                                 <h3 className="font-bold text-slate-900 text-base">Resumen de Mano de Obra</h3>
-                                <p className="text-xs text-slate-500">Calculado sobre el cronograma actual · L-J 8,5h/día · V 6h/día</p>
+                                <p className="text-xs text-slate-500">Calculado sobre el cronograma actual · L-J 08:30–14:00 y 15:00–18:00 · V 08:30–14:30</p>
                             </div>
                         </div>
                         <button
@@ -1239,7 +1320,7 @@ const ObraGanttTab = ({ obraId }) => {
                     </div>
 
                     <div className="flex flex-col md:flex-row gap-0 border-t border-slate-200 bg-slate-50 relative" ref={chartContainerRef}>
-                        {tasks.length > 0 ? (
+                        {extendedGanttData.some((task) => task.id !== '__gantt_phantom_range__') ? (
                             <div className="flex flex-row w-full" style={{ maxHeight: isFullscreen ? 'calc(100vh - 180px)' : '600px', overflow: 'hidden' }}>
                                 <div
                                     className="w-[300px] flex-shrink-0 bg-white border-r border-slate-200 overflow-y-auto overflow-x-hidden"
@@ -1297,8 +1378,16 @@ const ObraGanttTab = ({ obraId }) => {
                                         TooltipContent={(props) => (
                                             <div className="bg-white p-3 shadow-xl border border-slate-200 rounded-lg max-w-[200px] text-xs font-sans z-50">
                                                 <div className="font-bold text-slate-800 mb-1">{props.task.name}</div>
-                                                <div className="text-slate-500">Inicio: {format(new Date(props.task.start), 'dd MMM yyyy', { locale: es })}</div>
-                                                <div className="text-slate-500">Fin: {format(new Date(props.task.end), 'dd MMM yyyy', { locale: es })}</div>
+                                                {props.task.zona && (
+                                                    <div className="mb-2 flex items-center gap-1 text-violet-700">
+                                                        <MapPin className="h-3 w-3" /> {props.task.zona}
+                                                    </div>
+                                                )}
+                                                <div className="text-slate-500">Inicio: {format(new Date(props.task.start), 'dd MMM yyyy · HH:mm', { locale: es })}</div>
+                                                <div className="text-slate-500">Fin: {format(new Date(props.task.end), 'dd MMM yyyy · HH:mm', { locale: es })}</div>
+                                                {props.task.duracion_planificada_horas && (
+                                                    <div className="mt-1 font-mono text-violet-700">{props.task.duracion_planificada_horas} h previstas</div>
+                                                )}
                                                 <div className="mt-2 text-blue-600 font-semibold text-[10px] uppercase">Doble clic para ver detalles</div>
                                             </div>
                                         )}
@@ -1310,16 +1399,24 @@ const ObraGanttTab = ({ obraId }) => {
                                 <div className="bg-slate-50 p-6 rounded-full mb-6">
                                     <CalendarIcon className="w-12 h-12 text-slate-300" />
                                 </div>
-                                <h3 className="text-xl font-bold text-slate-900 mb-2">No hay tareas programadas</h3>
+                                <h3 className="text-xl font-bold text-slate-900 mb-2">
+                                    {tasks.length > 0 ? 'Partidas pendientes de planificar' : 'No hay partidas operativas'}
+                                </h3>
                                 <p className="text-slate-500 max-w-sm mb-8">
-                                    Aún no se ha definido el cronograma de esta obra. Comienza añadiendo la primera partida o fase de trabajo.
+                                    {tasks.length > 0
+                                        ? 'Asigna el equipo y las horas previstas. Al guardar el borrador aparecerán aquí las fechas y franjas reales.'
+                                        : 'Esta obra todavía no tiene partidas o tareas desde las que preparar el cronograma.'}
                                 </p>
                                 {canManage && (
                                     <Button
-                                        onClick={() => setCrudModalState({ isOpen: true, task: null })}
-                                        className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-8 h-12 rounded-xl shadow-lg shadow-blue-200 transition-all hover:scale-105 active:scale-95"
+                                        onClick={() => tasks.length > 0
+                                            ? setAssignmentPlannerOpen(true)
+                                            : setCrudModalState({ isOpen: true, task: null })}
+                                        className="bg-violet-700 hover:bg-violet-800 text-white font-bold px-8 h-12 rounded-xl shadow-lg shadow-violet-200 transition-all hover:scale-105 active:scale-95"
                                     >
-                                        <Plus className="w-5 h-5 mr-2" /> Añadir Primera Tarea
+                                        {tasks.length > 0
+                                            ? <><CalendarClock className="w-5 h-5 mr-2" /> Planificar equipo y tiempos</>
+                                            : <><Plus className="w-5 h-5 mr-2" /> Añadir primera tarea</>}
                                     </Button>
                                 )}
                             </div>
@@ -1331,9 +1428,38 @@ const ObraGanttTab = ({ obraId }) => {
             <TaskCrudModal
                 isOpen={crudModalState.isOpen}
                 onClose={() => setCrudModalState({ isOpen: false, task: null })}
-                onSave={() => { setCrudModalState({ isOpen: false, task: null }); fetchData(); }}
+                onSave={async (savedTask) => {
+                    setCrudModalState({ isOpen: false, task: null });
+                    if (
+                        !savedTask?.isNew
+                        && savedTask?.taskId
+                        && savedTask?.fechaInicio
+                        && savedTask?.fechaLimite
+                        && tasks.some((task) => task.id === savedTask.taskId)
+                    ) {
+                        await handleGanttTaskChange({
+                            id: savedTask.taskId,
+                            start: new Date(`${savedTask.fechaInicio}T12:00:00`),
+                            end: new Date(`${savedTask.fechaLimite}T12:00:00`),
+                        });
+                    } else {
+                        fetchData();
+                    }
+                }}
                 task={crudModalState.task}
                 defaultProjectId={obraId}
+            />
+
+            <TaskAssignmentPlanner
+                isOpen={assignmentPlannerOpen}
+                onClose={() => setAssignmentPlannerOpen(false)}
+                projectId={obraId}
+                tasks={tasks}
+                holidays={festivos}
+                onApplied={() => {
+                    setAssignmentPlannerOpen(false);
+                    fetchData();
+                }}
             />
 
             <TaskDetailModal
