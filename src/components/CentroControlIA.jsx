@@ -87,7 +87,16 @@ const getInvoiceAmount = (invoice) => {
   return Number.isFinite(amount) ? amount : 0;
 };
 
-const buildRadar = ({ tareas, partes, leads, proyectos, gastos }) => {
+const buildRadar = ({
+  tareas,
+  partes,
+  leads,
+  proyectos,
+  gastos,
+  facturasContasimple = [],
+  devolucionesPendientes = [],
+  materialesAuditados = [],
+}) => {
   const today = startOfDay();
   const nextWeek = new Date(today.getTime() + (7 * DAY_MS));
   const items = [];
@@ -186,6 +195,65 @@ const buildRadar = ({ tareas, partes, leads, proyectos, gastos }) => {
       detail: remaining < 0 ? `Pago vencido hace ${Math.abs(remaining)} día(s)` : remaining === 0 ? 'Pago vence hoy' : `Pago vence en ${remaining} día(s)`,
       date: gasto.fecha_vencimiento,
       href: '/administracion/gastos',
+    });
+  });
+
+  facturasContasimple.forEach((factura) => {
+    const state = factura.estado_contasimple;
+    if (!['lista_para_contasimple', 'posible_duplicado_contasimple', 'error_contasimple'].includes(state)) return;
+    const hasError = ['posible_duplicado_contasimple', 'error_contasimple'].includes(state);
+    const reference = factura.numero_factura || `#${String(factura.factura_id).slice(0, 8)}`;
+    const statusLabel = state === 'lista_para_contasimple'
+      ? 'Preparada pero pendiente de registrar'
+      : state === 'posible_duplicado_contasimple'
+        ? 'Posible duplicado: requiere revisión'
+        : factura.contasimple_error || 'Error al registrar en ContaSimple';
+    items.push({
+      id: `contasimple-${factura.factura_id}`,
+      lane: hasError ? 'urgente' : 'sin_seguimiento',
+      kind: 'ContaSimple',
+      icon: Link2,
+      title: `${reference} · ${factura.proveedor_nombre || 'Proveedor sin identificar'}`,
+      detail: `${statusLabel} · ${formatCurrency(factura.total)}`,
+      date: factura.fecha_registro || factura.fecha_factura,
+      href: '/contabilidad?subtab=bandeja',
+    });
+  });
+
+  devolucionesPendientes.forEach((devolucion) => {
+    const createdAt = validDate(devolucion.created_at);
+    const ageDays = createdAt
+      ? Math.max(0, Math.floor((today.getTime() - startOfDay(createdAt).getTime()) / DAY_MS))
+      : 0;
+    items.push({
+      id: `abono-${devolucion.id}`,
+      lane: ageDays >= 7 ? 'urgente' : 'sin_seguimiento',
+      kind: 'Abono',
+      icon: Euro,
+      title: `${devolucion.proveedor_nombre || 'Proveedor'} · ${devolucion.obra_nombre || 'Obra'}`,
+      detail: `${formatCurrency(devolucion.importe_base_estimado)} pendientes de abono${ageDays ? ` · ${ageDays} día(s)` : ''}`,
+      date: devolucion.created_at,
+      href: `/gestion/obras/${devolucion.obra_id}?tab=materiales`,
+    });
+  });
+
+  materialesAuditados.forEach((material) => {
+    const state = material.estado_auditoria;
+    const stateLabel = {
+      no_previsto: 'Material no previsto en esta obra',
+      unidad_incompatible: 'Unidad incompatible con la prevista',
+      exceso_cantidad: 'Cantidad superior a la prevista',
+      pendiente_revision: 'Conciliación pendiente de revisión',
+    }[state] || 'Material pendiente de revisar';
+    items.push({
+      id: `material-${material.linea_ocr_id}`,
+      lane: ['unidad_incompatible', 'exceso_cantidad'].includes(state) ? 'urgente' : 'sin_seguimiento',
+      kind: 'Material',
+      icon: SearchCheck,
+      title: `${material.descripcion || material.referencia || 'Material sin descripción'} · ${material.nombre_proyecto || 'Obra'}`,
+      detail: material.motivo_auditoria || stateLabel,
+      date: material.fecha_factura,
+      href: `/gestion/obras/${material.obra_id}?tab=materiales`,
     });
   });
 
@@ -333,17 +401,44 @@ const CentroControlIA = ({ navigate }) => {
 
     try {
       const activeTaskStates = ['pendiente', 'en_progreso', 'en_revision', 'pendiente_revision', 'en_proceso'];
-      const [taskResult, partResult, leadResult, projectResult, expenseResult] = await Promise.all([
+      const [
+        taskResult,
+        partResult,
+        leadResult,
+        projectResult,
+        expenseResult,
+        contasimpleResult,
+        returnsResult,
+        materialAuditResult,
+      ] = await Promise.all([
         supabase.from('tareas').select('id,titulo,estado,fecha_limite,proyecto_id,empleado_asignado_id').in('estado', activeTaskStates).limit(300),
         supabase.from('partes').select('id,custom_id,estado,cliente_nombre,fecha_visita,visita_agendada_at,created_at,deleted_at').is('deleted_at', null).limit(300),
         supabase.from('leads').select('id,nombre_contacto,nombre_empresa,estado,archivado,fecha_creacion,created_at,updated_at,visto_primera_vez_at').eq('archivado', false).limit(300),
         supabase.from('proyectos').select('id,nombre_proyecto,estado,fecha_finalizacion_estimada,fecha_fin_estimada').in('estado', ['activo', 'en_espera']).limit(300),
         supabase.from('gastos').select('id,numero_factura,concepto,estado_pago,fecha_vencimiento,total_con_iva').in('estado_pago', ['pendiente_pago', 'parcialmente_pagada', 'vencida']).limit(300),
+        supabase
+          .from('v_contasimple_admin_bandeja_facturas')
+          .select('factura_id,fecha_registro,proveedor_nombre,numero_factura,fecha_factura,total,estado_contasimple,contasimple_error')
+          .in('estado_contasimple', ['lista_para_contasimple', 'posible_duplicado_contasimple', 'error_contasimple'])
+          .limit(150),
+        supabase
+          .from('v_devoluciones_proveedor_pendientes_abono')
+          .select('id,obra_id,obra_nombre,proveedor_nombre,importe_base_estimado,created_at,numero_factura_origen')
+          .limit(150),
+        supabase
+          .from('v_factura_material_auditoria')
+          .select('factura_id,obra_id,nombre_proyecto,fecha_factura,linea_ocr_id,referencia,descripcion,estado_auditoria,motivo_auditoria')
+          .in('estado_auditoria', ['no_previsto', 'unidad_incompatible', 'exceso_cantidad', 'pendiente_revision'])
+          .limit(200),
       ]);
 
       const results = [taskResult, partResult, leadResult, projectResult, expenseResult];
       const firstError = results.find((result) => result.error)?.error;
       if (firstError) throw firstError;
+
+      [contasimpleResult, returnsResult, materialAuditResult].forEach((result) => {
+        if (result.error) console.warn('Optional IA360 control source unavailable:', result.error.message);
+      });
 
       setItems(buildRadar({
         tareas: taskResult.data || [],
@@ -351,6 +446,9 @@ const CentroControlIA = ({ navigate }) => {
         leads: leadResult.data || [],
         proyectos: projectResult.data || [],
         gastos: expenseResult.data || [],
+        facturasContasimple: contasimpleResult.error ? [] : (contasimpleResult.data || []),
+        devolucionesPendientes: returnsResult.error ? [] : (returnsResult.data || []),
+        materialesAuditados: materialAuditResult.error ? [] : (materialAuditResult.data || []),
       }));
       setLastUpdated(new Date());
       if (silent) {

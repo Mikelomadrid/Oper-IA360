@@ -11,14 +11,21 @@ import { Loader2, FileText, Trash2, Download, Upload, Eye, AlertCircle } from 'l
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 
-// Helper: Async Signed URL fetcher
-const getSignedUrl = async (path) => {
+// Resuelve la ruta relativa dentro de un bucket dado. Un documento puede ser propio
+// del parte (bucket 'partes-data') o heredado de un lead (bucket 'lead_docs').
+const cleanPathForBucket = (path, bucket) => {
+    if (!path) return path;
+    const marker = `${bucket}/`;
+    return path.includes(marker) ? path.split(marker)[1] : path;
+};
+
+// Helper: Async Signed URL fetcher (ahora consciente del bucket)
+const getSignedUrl = async (path, bucket = 'partes-data') => {
     if (!path) return null;
-    let cleanPath = path;
-    if (path.includes('partes-data/')) cleanPath = path.split('partes-data/')[1];
-    
+    const cleanPath = cleanPathForBucket(path, bucket);
+
     const { data, error } = await supabase.storage
-        .from('partes-data')
+        .from(bucket)
         .createSignedUrl(cleanPath, 3600);
     
     if (error) {
@@ -132,7 +139,7 @@ export default function ParteDocuments({ parteId, canEdit, canDelete }) {
             const { error: uploadError } = await supabase.storage.from('partes-data').upload(storagePath, file);
             if (uploadError) throw uploadError;
 
-            // 2. Insert DB
+            // 2. Insert DB (bucket se deja en su DEFAULT 'partes-data', correcto aquí)
             const { error: insertError } = await supabase.from('partes_archivos').insert({
                 parte_id: parteId,
                 archivo_url: storagePath,
@@ -169,19 +176,27 @@ export default function ParteDocuments({ parteId, canEdit, canDelete }) {
     };
 
     const handleDelete = async (doc) => {
-        if (!window.confirm(`¿Eliminar ${doc.nombre_archivo}?`)) return;
+        const bucket = doc.bucket || 'partes-data';
+        const isInherited = bucket !== 'partes-data';
+        const confirmMsg = isInherited
+            ? `"${doc.nombre_archivo}" viene del lead original. Se quitará de este parte, pero el archivo seguirá existiendo en el lead. ¿Continuar?`
+            : `¿Eliminar ${doc.nombre_archivo}?`;
+        if (!window.confirm(confirmMsg)) return;
 
         try {
-            let path = doc.archivo_url;
-            if (path.includes('partes-data/')) path = path.split('partes-data/')[1];
-
-            const { error: storageError } = await supabase.storage.from('partes-data').remove([path]);
-            if (storageError) console.warn("Storage delete warning:", storageError);
+            // Solo se borra el archivo físico si es propio del parte. Si es un
+            // documento HEREDADO del lead (bucket 'lead_docs'), es solo una
+            // referencia: no se toca el archivo original, solo se desvincula.
+            if (!isInherited) {
+                const path = cleanPathForBucket(doc.archivo_url, bucket);
+                const { error: storageError } = await supabase.storage.from(bucket).remove([path]);
+                if (storageError) console.warn("Storage delete warning:", storageError);
+            }
 
             const { error: dbError } = await supabase.from('partes_archivos').delete().eq('id', doc.id);
             if (dbError) throw dbError;
 
-            toast({ title: 'Eliminado', description: 'El documento ha sido eliminado.' });
+            toast({ title: isInherited ? 'Quitado' : 'Eliminado', description: isInherited ? 'Se ha desvinculado del parte (el archivo del lead no se ha borrado).' : 'El documento ha sido eliminado.' });
             setDocuments(prev => prev.filter(d => d.id !== doc.id));
         } catch (error) {
             console.error('Delete error:', error);
@@ -190,7 +205,7 @@ export default function ParteDocuments({ parteId, canEdit, canDelete }) {
     };
 
     const handleDownload = async (doc) => {
-        const url = await getSignedUrl(doc.archivo_url);
+        const url = await getSignedUrl(doc.archivo_url, doc.bucket || 'partes-data');
         if (url) window.open(url, '_blank');
         else toast({ variant: 'destructive', title: 'Error', description: 'No se pudo obtener el enlace del archivo.' });
     };
@@ -202,7 +217,7 @@ export default function ParteDocuments({ parteId, canEdit, canDelete }) {
         setPreviewFile(doc.nombre_archivo);
 
         try {
-            const url = await getSignedUrl(doc.archivo_url);
+            const url = await getSignedUrl(doc.archivo_url, doc.bucket || 'partes-data');
             if (!url) throw new Error("No se pudo generar el enlace.");
             setPreviewUrl(url);
         } catch (error) {
@@ -246,13 +261,21 @@ export default function ParteDocuments({ parteId, canEdit, canDelete }) {
                         ) : (
                             documents.map((doc) => {
                                 const isPdf = doc.nombre_archivo?.toLowerCase().endsWith('.pdf');
+                                const isInherited = doc.bucket && doc.bucket !== 'partes-data';
                                 return (
                                     <TableRow key={doc.id}>
                                         <TableCell className="font-medium">
                                             <div className="flex items-center gap-3">
                                                 <div className="bg-blue-50 p-2 rounded text-blue-600"><FileText className="w-4 h-4" /></div>
                                                 <div className="flex flex-col">
-                                                    <span className="truncate font-semibold text-sm" title={doc.nombre_archivo}>{doc.nombre_archivo}</span>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="truncate font-semibold text-sm" title={doc.nombre_archivo}>{doc.nombre_archivo}</span>
+                                                        {isInherited && (
+                                                            <Badge variant="secondary" className="text-[9px] px-1.5 py-0 h-4 bg-indigo-100 text-indigo-700 border-indigo-200">
+                                                                Del lead
+                                                            </Badge>
+                                                        )}
+                                                    </div>
                                                     <span className="text-[10px] text-muted-foreground">Por: {doc.subido_por_user?.nombre || 'Desconocido'}</span>
                                                 </div>
                                             </div>

@@ -140,6 +140,12 @@ export default function LeadDetail({ leadId, navigate }) {
   const canEdit = isAdminOrEncargado || isOwner || isAssigned;
   const canDeleteLead = isAdminOrEncargado || isOwner;
 
+  // Quién puede cambiar el estado del lead desde el selector: admin, encargado,
+  // o el técnico asignado a este lead (por empleado_asignado_id o por
+  // leads_asignaciones, vía isAssigned). Refleja lo que ya permite la RLS
+  // (leads_update_policy_v2), solo faltaba habilitarlo en el frontend.
+  const canEditLeadStatus = isAdminOrEncargado || isAssigned || (lead?.empleado_asignado_id === empleadoId);
+
   // For sub-resources
   const canUploadMedia = canEdit;
 
@@ -147,6 +153,18 @@ export default function LeadDetail({ leadId, navigate }) {
     isMounted.current = true;
     return () => { isMounted.current = false; };
   }, []);
+
+  // Aviso de admin: al entrar a un lead como Mikelo, se marcan como leídos
+  // todos los avisos pendientes (comentario/cambio_estado/archivo) de este
+  // lead, para que desaparezca la bolita verde en listados y Kanban.
+  useEffect(() => {
+    if (!leadId || !isAdmin) return;
+    supabase
+      .rpc('api_marcar_avisos_leidos', { p_tipo_entidad: 'lead', p_entidad_id: leadId })
+      .then(({ error }) => {
+        if (error) console.error('Error marcando avisos de lead como leídos:', error);
+      });
+  }, [leadId, isAdmin]);
 
   // Fetch admin categories if user is admin
   useEffect(() => {
@@ -218,7 +236,7 @@ export default function LeadDetail({ leadId, navigate }) {
           empleado_asignado:empleados!leads_empleado_asignado_id_fkey(id, nombre, apellidos),
           colaborador:empleados!leads_colaborador_id_fkey(id, nombre, apellidos),
           proyecto:proyectos(id, nombre_proyecto),
-          categoria:categorias(codigo)
+          categoria:categorias(codigo, nombre)
         `)
         .eq('id', leadId)
         .maybeSingle();
@@ -373,6 +391,31 @@ export default function LeadDetail({ leadId, navigate }) {
     }
   };
 
+  const handleConvertToParte = async () => {
+    setSaving(true);
+    try {
+      const { data, error } = await supabase.rpc('convert_lead_to_parte', {
+        p_lead_id: leadId
+      });
+      if (error) throw error;
+
+      if (data && data.parte_id) {
+        toast({
+          title: data.already_existed ? 'Parte ya existente' : 'Parte de trabajo creado',
+          description: data.custom_id ? `Nº ${data.custom_id}` : undefined,
+        });
+        navigate(`/gestion/partes/detail/${data.parte_id}`);
+      } else {
+        toast({ variant: 'destructive', title: 'Error', description: 'No se recibió el ID del parte.' });
+      }
+    } catch (error) {
+      console.error('Convert to parte error:', error);
+      toast({ variant: 'destructive', title: 'Error', description: error.message || 'No se pudo convertir el lead a parte.' });
+    } finally {
+      if (isMounted.current) setSaving(false);
+    }
+  };
+
   const handleEditClick = () => {
     if (isTechnician) setIsTechEditModalOpen(true);
     else setIsEditModalOpen(true);
@@ -404,16 +447,49 @@ export default function LeadDetail({ leadId, navigate }) {
             </Button>
 
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-lg md:text-xl font-bold flex items-center gap-2 truncate">{lead.nombre_contacto} <span className="text-muted-foreground ml-1">({lead.nombre_empresa})</span></h1>
 
-                {/* Updated Status Selector Component: Visible for Admins, Badge for others */}
+                {/* Updated Status Selector Component: editable para admin, encargado y técnico asignado */}
                 <LeadStatusSelector
                   currentStatus={lead.estado}
                   leadId={lead.id}
                   userRole={sessionRole?.rol}
+                  canEdit={canEditLeadStatus}
                   onStatusChange={handleStatusChangeCallback}
                 />
+
+                {/* Selector de Categoría (Asignar a) - Solo Admin, junto al estado */}
+                {isAdmin && (
+                  <Select
+                    value={categories.some(c => c.codigo === lead?.categoria?.codigo) ? lead.categoria.codigo : ""}
+                    onValueChange={handleCategoryChange}
+                    disabled={isAssigningCategory || loadingCategories}
+                  >
+                    <SelectTrigger className="h-8 text-sm w-auto min-w-[140px] max-w-[220px] shrink-0">
+                      <span className="flex items-center gap-1 truncate">
+                        <Tag className="w-3.5 h-3.5 shrink-0" />
+                        <SelectValue placeholder={loadingCategories ? "Cargando..." : "Sin categoría"} />
+                      </span>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">-- Sin asignar --</SelectItem>
+                      {/* Grouping Logic */}
+                      {Object.entries(groupedCategories).map(([type, groupCats]) => (
+                        <SelectGroup key={type}>
+                          <SelectLabel className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50 capitalize">
+                            {type === 'persona' ? 'Personas' : type === 'origen' ? 'Orígenes' : type}
+                          </SelectLabel>
+                          {groupCats.map((cat) => (
+                            <SelectItem key={cat.codigo} value={cat.codigo}>
+                              {cat.nombre}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
               <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-3"><span className="flex items-center gap-1"><Clock className="w-3 h-3" /> Creado: {formatDate(lead.fecha_creacion)}</span>{lead.empleado_asignado && (<span className="flex items-center gap-1"><User className="w-3 h-3" /> Asignado a: {lead.empleado_asignado.nombre} {lead.empleado_asignado.apellidos}</span>)}</div>
             </div>
@@ -426,6 +502,14 @@ export default function LeadDetail({ leadId, navigate }) {
 
             {canDeleteLead && lead.estado !== 'aceptado' && (
               <Button variant="destructive" size="icon" onClick={() => setIsDeleteAlertOpen(true)}><Trash2 className="w-4 h-4" /></Button>
+            )}
+
+            {/* Convertir a Parte de Trabajo: técnico/encargado/admin o asignado, si no está finalizado/aceptado */}
+            {(isAdminOrEncargado || isTechnician || isAssigned || isOwner) && lead.estado !== 'aceptado' && lead.estado !== 'finalizado' && (
+              <>
+                <Button onClick={handleConvertToParte} disabled={saving} className="bg-amber-600 hover:bg-amber-700 text-white hidden sm:flex"><HardHat className="w-4 h-4 mr-2" /> Convertir a Parte</Button>
+                <Button onClick={handleConvertToParte} disabled={saving} className="bg-amber-600 hover:bg-amber-700 text-white sm:hidden" size="icon" title="Convertir a Parte de Trabajo"><HardHat className="w-4 h-4" /></Button>
+              </>
             )}
 
             {isAdminOrEncargado && lead.estado !== 'aceptado' && (
@@ -493,17 +577,22 @@ export default function LeadDetail({ leadId, navigate }) {
           <TabsContent value="info" className="h-full mt-0">
             <ScrollArea className="h-full p-4 md:p-6">
               <div className="space-y-6 pb-10">
-                <Card><CardHeader><CardTitle className="text-lg flex items-center gap-2"><Megaphone className="w-5 h-5" /> Información General</CardTitle></CardHeader>
-                  <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+                {/* ====================================================================== */}
+                {/* SECCIÓN 1: Información General + Ubicación y Asignación (UNIFICADAS)    */}
+                {/* ====================================================================== */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <Megaphone className="w-5 h-5" /> Información General y Ubicación
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3">
                     <div><Label className="text-xs text-muted-foreground">Nombre de Contacto</Label><p className="font-medium">{lead.nombre_contacto}</p></div>
                     <div><Label className="text-xs text-muted-foreground">Nombre de Empresa</Label><p className="font-medium">{lead.nombre_empresa || 'N/A'}</p></div>
                     <div><Label className="text-xs text-muted-foreground">Teléfono</Label><a href={`tel:${lead.telefono}`} className="flex items-center gap-2 text-primary hover:underline"><Phone className="w-4 h-4" /> {lead.telefono || 'N/A'}</a></div>
                     <div><Label className="text-xs text-muted-foreground">Email</Label><a href={`mailto:${lead.email}`} className="flex items-center gap-2 text-primary hover:underline"><Mail className="w-4 h-4" /> {lead.email || 'N/A'}</a></div>
                     <div><Label className="text-xs text-muted-foreground">CIF</Label><p>{lead.cif || 'N/A'}</p></div>
-                    <div><Label className="text-xs text-muted-foreground">Estado</Label>
-                      {/* Legacy simple badge fallback, but we use the Selector in Header */}
-                      <div className="mt-1"><Badge className="capitalize">{lead.estado}</Badge></div>
-                    </div>
                     {lead.base_imponible !== null && lead.base_imponible !== undefined && (
                       <div>
                         <Label className="text-xs text-muted-foreground">Presupuesto</Label>
@@ -513,51 +602,7 @@ export default function LeadDetail({ leadId, navigate }) {
                       </div>
                     )}
 
-                    {/* Origen Field */}
-                    {lead.origen && <div><Label className="text-xs text-muted-foreground">Origen</Label><p className="font-medium">{lead.origen}</p></div>}
-
-                    {/* Asignar a (Category Selector) - Only for Admin */}
-                    {isAdmin && (
-                      <div className="mt-1">
-                        <Label className="text-xs text-muted-foreground flex items-center gap-1 mb-1.5">
-                          <Tag className="w-3 h-3" /> Asignar a (Categoría)
-                        </Label>
-                        <Select
-                          value={categories.some(c => c.codigo === lead?.categoria?.codigo) ? lead.categoria.codigo : ""}
-                          onValueChange={handleCategoryChange}
-                          disabled={isAssigningCategory || loadingCategories}
-                        >
-                          <SelectTrigger className="h-8 text-sm w-full md:max-w-[250px]">
-                            <SelectValue placeholder={loadingCategories ? "Cargando..." : "Sin asignar"} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">-- Sin asignar --</SelectItem>
-                            {/* Grouping Logic */}
-                            {Object.entries(groupedCategories).map(([type, groupCats]) => (
-                              <SelectGroup key={type}>
-                                <SelectLabel className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50 capitalize">
-                                  {type === 'persona' ? 'Personas' : type === 'origen' ? 'Orígenes' : type}
-                                </SelectLabel>
-                                {groupCats.map((cat) => (
-                                  <SelectItem key={cat.codigo} value={cat.codigo}>
-                                    {cat.nombre}
-                                  </SelectItem>
-                                ))}
-                              </SelectGroup>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    )}
-
-                    {lead.proyecto && <div><Label className="text-xs text-muted-foreground">Proyecto Asociado</Label><p className="font-medium flex items-center gap-2"><Briefcase className="w-4 h-4 text-purple-500" />{lead.proyecto.nombre_proyecto}</p></div>}
-                    <div className="md:col-span-2"><Label className="text-xs text-muted-foreground">Descripción/Comentario</Label><p className="whitespace-pre-wrap">{lead.comentario || 'Sin comentario'}</p></div>
-                    {lead.created_by_name && <div><Label className="text-xs text-muted-foreground">Creador</Label><p className="font-medium">{lead.created_by_name}</p></div>}
-                  </CardContent>
-                </Card>
-
-                <Card><CardHeader><CardTitle className="text-lg flex items-center gap-2"><MapPin className="w-5 h-5" /> Ubicación y Asignación</CardTitle></CardHeader>
-                  <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Campos de Ubicación y Asignación (fundidos en el mismo grid) */}
                     <div><Label className="text-xs text-muted-foreground">Dirección</Label><p className="flex items-center gap-2"><MapPin className="w-4 h-4 text-primary shrink-0" /> {lead.direccion || 'N/A'}</p></div>
                     <div><Label className="text-xs text-muted-foreground">Código Postal</Label><p>{lead.codigo_postal || 'N/A'}</p></div>
                     <div><Label className="text-xs text-muted-foreground">Municipio</Label><p>{lead.municipio || 'N/A'}</p></div>
@@ -565,10 +610,25 @@ export default function LeadDetail({ leadId, navigate }) {
                     <div><Label className="text-xs text-muted-foreground">Responsable Principal</Label><p className="flex items-center gap-2"><HardHat className="w-4 h-4 text-primary shrink-0" />{lead.empleado_asignado ? `${lead.empleado_asignado.nombre} ${lead.empleado_asignado.apellidos || ''}` : 'Sin asignar'}</p></div>
                     <div><Label className="text-xs text-muted-foreground">Colaborador</Label><p className="flex items-center gap-2"><User className="w-4 h-4 text-primary shrink-0" />{lead.colaborador ? `${lead.colaborador.nombre} ${lead.colaborador.apellidos || ''}` : 'N/A'}</p></div>
                     <div><Label className="text-xs text-muted-foreground">Fecha de Visita</Label><p className="flex items-center gap-2"><CalendarDays className="w-4 h-4 text-primary shrink-0" />{lead.fecha_visita ? formatDate(lead.fecha_visita) : 'N/A'}</p></div>
+
+                    {/* Descripción ocupa fila completa al final */}
+                    <div className="col-span-full"><Label className="text-xs text-muted-foreground">Descripción/Comentario</Label><p className="whitespace-pre-wrap">{lead.comentario || 'Sin comentario'}</p></div>
+
+                    {/* Creador y Categoría van juntos en la última fila, uno al lado del otro */}
+                    {lead.created_by_name && <div><Label className="text-xs text-muted-foreground">Creador</Label><p className="font-medium">{lead.created_by_name}</p></div>}
+                    <div><Label className="text-xs text-muted-foreground">Categoría</Label><p className="font-medium">{lead.categoria?.nombre || 'N/A'}</p></div>
                   </CardContent>
                 </Card>
 
-                <Card><CardHeader><CardTitle className="text-lg flex items-center gap-2"><MessageSquare className="w-5 h-5" /> Historial de Actividad y Comentarios</CardTitle></CardHeader>
+                {/* ====================================================================== */}
+                {/* SECCIÓN 2: Historial de Actividad y Comentarios                        */}
+                {/* ====================================================================== */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <MessageSquare className="w-5 h-5" /> Historial de Actividad y Comentarios
+                    </CardTitle>
+                  </CardHeader>
                   <CardContent className="flex flex-col">
                     <div className="space-y-6">
                       {comments.length === 0 ? (
@@ -583,12 +643,23 @@ export default function LeadDetail({ leadId, navigate }) {
                         ))
                       )}
                     </div>
-                    <div className="flex gap-2 items-end shrink-0 mt-6">
-                      <Textarea placeholder="Escribe un nuevo comentario..." value={newComment} onChange={(e) => setNewComment(e.target.value)} rows={1} className="min-h-[40px] flex-1 resize-none focus:min-h-[80px] transition-all" disabled={saving} />
-                      <Button onClick={handleAddComment} disabled={!newComment.trim() || saving}>
-                        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlusCircle className="h-4 w-4" />}
-                        <span className="sr-only">Añadir Comentario</span>
-                      </Button>
+                    
+                    {/* MODIFICADO: Textarea más grande y mejor distribuido */}
+                    <div className="flex flex-col gap-3 shrink-0 mt-6 pt-4 border-t">
+                      <Textarea 
+                        placeholder="Escribe un nuevo comentario..." 
+                        value={newComment} 
+                        onChange={(e) => setNewComment(e.target.value)} 
+                        rows={3} 
+                        className="min-h-[80px] flex-1 resize-y focus:min-h-[180px] focus:ring-2 focus:ring-primary/20 transition-all duration-300" 
+                        disabled={saving} 
+                      />
+                      <div className="flex justify-end">
+                        <Button onClick={handleAddComment} disabled={!newComment.trim() || saving} className="min-w-[160px]">
+                          {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <PlusCircle className="h-4 w-4 mr-2" />}
+                          Añadir Comentario
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -604,7 +675,7 @@ export default function LeadDetail({ leadId, navigate }) {
 
           <TabsContent value="visit-budget" className="h-full mt-0">
             <ScrollArea className="h-full p-4 md:p-6">
-              <LeadVisitBudget leadId={leadId} canEdit={canEdit} lead={lead} />
+              <LeadVisitBudget leadId={leadId} canEdit={canEdit} lead={lead} navigate={navigate} />
             </ScrollArea>
           </TabsContent>
 

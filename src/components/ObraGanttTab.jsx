@@ -535,7 +535,7 @@ const ObraGanttTab = ({ obraId }) => {
             if (taskIds.length > 0) {
                 const { data: rawTareas, error: rawError } = await supabase
                     .from('tareas')
-                    .select('id, fecha_inicio, empleado_asignado_id, orden')
+                    .select('id, fecha_inicio, empleado_asignado_id, orden, obra_partida_id, origen_generacion')
                     .in('id', taskIds);
 
                 if (!rawError && rawTareas) {
@@ -615,18 +615,38 @@ const ObraGanttTab = ({ obraId }) => {
                     return {
                         ...task,
                         fecha_inicio: rawDate,
+                        // El orden operativo vive en la tabla base de tareas; la
+                        // vista de presentación no lo expone en todos los entornos.
+                        // Conservarlo aquí garantiza que lista y barras compartan
+                        // la misma secuencia: primera actuación arriba.
+                        orden: rawDataForTask?.orden ?? task.orden ?? null,
+                        obra_partida_id: rawDataForTask?.obra_partida_id ?? null,
+                        origen_generacion: rawDataForTask?.origen_generacion ?? 'manual',
                         tecnicos: tecnicosDetails,
                         progressPercent
                     };
                 });
 
                 formattedTasks.sort((a, b) => {
-                    const ordenA = a.orden ?? 0;
-                    const ordenB = b.orden ?? 0;
+                    // El plan contractual es la columna vertebral del cronograma.
+                    // Las tareas manuales adicionales se muestran después para que
+                    // sus órdenes históricos no se intercalen con las partidas.
+                    const grupoA = a.obra_partida_id ? 0 : 1;
+                    const grupoB = b.obra_partida_id ? 0 : 1;
+                    if (grupoA !== grupoB) return grupoA - grupoB;
+
+                    const ordenA = Number.isFinite(Number(a.orden)) ? Number(a.orden) : Number.MAX_SAFE_INTEGER;
+                    const ordenB = Number.isFinite(Number(b.orden)) ? Number(b.orden) : Number.MAX_SAFE_INTEGER;
                     if (ordenA !== ordenB) return ordenA - ordenB;
+
+                    const inicioA = a.fecha_inicio ? new Date(a.fecha_inicio).getTime() : Number.MAX_SAFE_INTEGER;
+                    const inicioB = b.fecha_inicio ? new Date(b.fecha_inicio).getTime() : Number.MAX_SAFE_INTEGER;
+                    if (inicioA !== inicioB) return inicioA - inicioB;
+
                     const fechaA = new Date(a.fecha_creacion).getTime();
                     const fechaB = new Date(b.fecha_creacion).getTime();
-                    return fechaA - fechaB;
+                    if (fechaA !== fechaB) return fechaA - fechaB;
+                    return String(a.id).localeCompare(String(b.id));
                 });
 
                 setTasks(formattedTasks);

@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, Plus, RefreshCw, Warehouse, Briefcase, Trash2, Pencil, AlertCircle, Filter, FileText, List as ListIcon, PauseCircle, PlayCircle, Euro, PieChart, Building2, Download, MessageCircle } from 'lucide-react';
+import { Loader2, Plus, RefreshCw, Warehouse, Briefcase, Trash2, Pencil, AlertCircle, Filter, FileText, List as ListIcon, PauseCircle, PlayCircle, Euro, PieChart, Building2, Download, MessageCircle, Eye } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -24,12 +24,22 @@ import * as XLSX from 'xlsx';
  * AdminFichajes
  * - Listado de fichajes utilizando 'v_fichajes_admin_ui' para obtener nombres de proyecto y detalles.
  * - Reporte de costes utilizando 'v_fichajes_admin_neto_v5' y enriquecimiento cliente-side.
+ *
+ * Modo solo lectura:
+ * - Cuando sessionRole.rol === 'encargado', el componente oculta "Nuevo Fichaje" y las
+ *   acciones de editar/eliminar por fila. El encargado puede ver todo (propios y del resto
+ *   de empleados) pero no puede crear, modificar ni borrar fichajes.
+ * - Esto es solo una capa de UX: el bloqueo real está en la base de datos (RLS + checks
+ *   de rol en los RPC admin_create_fichaje_full / admin_update_fichaje_full / fichaje_delete),
+ *   así que aunque alguien manipule el frontend, la escritura sigue estando bloqueada.
  */
 
 const AdminFichajes = () => {
   const {
     sessionRole
   } = useAuth();
+
+  const isReadOnly = sessionRole?.rol === 'encargado';
 
   // --- List State ---
   const [fichajes, setFichajes] = useState([]);
@@ -358,6 +368,7 @@ const AdminFichajes = () => {
   // --- Handlers ---
 
   const openCreateModal = () => {
+    if (isReadOnly) return;
     setModalMode('create');
     const now = new Date();
     const localIso = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
@@ -368,6 +379,7 @@ const AdminFichajes = () => {
     setIsModalOpen(true);
   };
   const openEditModal = record => {
+    if (isReadOnly) return;
     setModalMode('edit');
     const formatForInput = dateStr => {
       if (!dateStr) return '';
@@ -393,6 +405,7 @@ const AdminFichajes = () => {
     setDetailModalOpen(true);
   };
   const handleSave = async () => {
+    if (isReadOnly) return;
     if (!formData.empleado_id) {
       toast({
         variant: "destructive",
@@ -471,11 +484,13 @@ const AdminFichajes = () => {
     }
   };
   const handleDeleteClick = record => {
+    if (isReadOnly) return;
     if (!record || !record.id) return;
     setRecordToDelete(record);
     setDeleteAlertOpen(true);
   };
   const confirmDelete = async () => {
+    if (isReadOnly) return;
     if (!recordToDelete || !recordToDelete.id) {
       setDeleteAlertOpen(false);
       return;
@@ -510,8 +525,19 @@ const AdminFichajes = () => {
     {/* Header */}
     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mx-auto w-full">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">Fichajes</h1>
-        <p className="text-muted-foreground">Gestión de tiempos, ubicaciones y costes por obra.</p>
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100 flex items-center gap-3">
+          Fichajes
+          {isReadOnly && (
+            <Badge variant="outline" className="text-xs font-medium bg-slate-50 text-slate-600 border-slate-200 flex items-center gap-1">
+              <Eye className="w-3 h-3" /> Solo lectura
+            </Badge>
+          )}
+        </h1>
+        <p className="text-muted-foreground">
+          {isReadOnly
+            ? 'Consulta de tiempos, ubicaciones y costes por obra de todos los empleados.'
+            : 'Gestión de tiempos, ubicaciones y costes por obra.'}
+        </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button onClick={() => {
@@ -523,9 +549,11 @@ const AdminFichajes = () => {
           <Download className="w-4 h-4 text-green-600" />
           <span className="hidden sm:inline">Exportar Excel</span>
         </Button>
-        <Button onClick={openCreateModal} className="gap-2 rounded-xl shadow-sm bg-primary hover:bg-primary/90 text-primary-foreground">
-          <Plus className="w-4 h-4" /> Nuevo Fichaje
-        </Button>
+        {!isReadOnly && (
+          <Button onClick={openCreateModal} className="gap-2 rounded-xl shadow-sm bg-primary hover:bg-primary/90 text-primary-foreground">
+            <Plus className="w-4 h-4" /> Nuevo Fichaje
+          </Button>
+        )}
       </div>
     </div>
 
@@ -609,18 +637,18 @@ const AdminFichajes = () => {
                     <TableHead className="text-right w-[100px] font-semibold">Duración</TableHead>
                     <TableHead className="text-center w-[120px] font-semibold">Estado</TableHead>
                     <TableHead className="text-center w-[60px] font-semibold">Notas</TableHead>
-                    <TableHead className="text-right w-[100px] font-semibold"></TableHead>
+                    {!isReadOnly && <TableHead className="text-right w-[100px] font-semibold"></TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {loading ? <TableRow>
-                    <TableCell colSpan={8} className="h-32 text-center">
+                    <TableCell colSpan={isReadOnly ? 7 : 8} className="h-32 text-center">
                       <div className="flex items-center justify-center gap-2 text-muted-foreground">
                         <Loader2 className="w-5 h-5 animate-spin" /> Cargando fichajes...
                       </div>
                     </TableCell>
                   </TableRow> : fichajes.length === 0 ? <TableRow>
-                    <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
+                    <TableCell colSpan={isReadOnly ? 7 : 8} className="h-32 text-center text-muted-foreground">
                       No se encontraron registros.
                     </TableCell>
                   </TableRow> : fichajes.map(f => <TableRow key={f.id} className="hover:bg-blue-50/50 dark:hover:bg-blue-950/20 transition-colors cursor-pointer group border-b border-border/50" onClick={() => handleRowClick(f)}>
@@ -689,22 +717,24 @@ const AdminFichajes = () => {
                         </Button>
                       )}
                     </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={e => {
-                          e.stopPropagation();
-                          openEditModal(f);
-                        }}>
-                          <Pencil className="w-4 h-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:text-red-600 hover:bg-red-50" onClick={e => {
-                          e.stopPropagation();
-                          handleDeleteClick(f);
-                        }}>
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
+                    {!isReadOnly && (
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={e => {
+                            e.stopPropagation();
+                            openEditModal(f);
+                          }}>
+                            <Pencil className="w-4 h-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:text-red-600 hover:bg-red-50" onClick={e => {
+                            e.stopPropagation();
+                            handleDeleteClick(f);
+                          }}>
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
                   </TableRow>)}
                 </TableBody>
               </Table>
@@ -814,133 +844,137 @@ const AdminFichajes = () => {
       </TabsContent>
     </Tabs>
 
-    {/* --- CREATE / EDIT MODAL --- */}
-    <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-      <DialogContent className="sm:max-w-[500px] rounded-xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-xl">
-            {modalMode === 'create' ? <><Plus className="w-5 h-5 text-primary" /> Registrar Fichaje Manual</> : <><Pencil className="w-5 h-5 text-primary" /> Editar Fichaje</>}
-          </DialogTitle>
-          <DialogDescription>
-            {modalMode === 'create' ? 'Introduce los detalles para registrar un nuevo turno. Selecciona Obra o Nave.' : 'Modifica los tiempos, empleado o ubicación del registro.'}
-          </DialogDescription>
-        </DialogHeader>
+    {/* --- CREATE / EDIT MODAL (nunca se abre en modo solo lectura) --- */}
+    {!isReadOnly && (
+      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DialogContent className="sm:max-w-[500px] rounded-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl">
+              {modalMode === 'create' ? <><Plus className="w-5 h-5 text-primary" /> Registrar Fichaje Manual</> : <><Pencil className="w-5 h-5 text-primary" /> Editar Fichaje</>}
+            </DialogTitle>
+            <DialogDescription>
+              {modalMode === 'create' ? 'Introduce los detalles para registrar un nuevo turno. Selecciona Obra o Nave.' : 'Modifica los tiempos, empleado o ubicación del registro.'}
+            </DialogDescription>
+          </DialogHeader>
 
-        <div className="grid gap-5 py-4">
-          {/* Empleado */}
-          <div className="space-y-2">
-            <Label htmlFor="empleado">Empleado</Label>
-            <Select value={formData.empleado_id} onValueChange={v => setFormData({
-              ...formData,
-              empleado_id: v
-            })}>
-              <SelectTrigger id="empleado" className="rounded-lg">
-                <SelectValue placeholder="Seleccionar empleado..." />
-              </SelectTrigger>
-              <SelectContent>
-                {employees.map(e => <SelectItem key={e.value} value={e.value}>{e.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
+          <div className="grid gap-5 py-4">
+            {/* Empleado */}
+            <div className="space-y-2">
+              <Label htmlFor="empleado">Empleado</Label>
+              <Select value={formData.empleado_id} onValueChange={v => setFormData({
+                ...formData,
+                empleado_id: v
+              })}>
+                <SelectTrigger id="empleado" className="rounded-lg">
+                  <SelectValue placeholder="Seleccionar empleado..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {employees.map(e => <SelectItem key={e.value} value={e.value}>{e.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
 
-          {/* Tipo Destino */}
-          <div className="p-4 bg-muted/30 rounded-lg border border-border/50 space-y-4">
-            <Label className="text-xs font-bold uppercase text-muted-foreground">Asignación de Costes</Label>
+            {/* Tipo Destino */}
+            <div className="p-4 bg-muted/30 rounded-lg border border-border/50 space-y-4">
+              <Label className="text-xs font-bold uppercase text-muted-foreground">Asignación de Costes</Label>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Tipo de Ubicación</Label>
+                  <Select value={formData.tipo_destino} onValueChange={v => setFormData({
+                    ...formData,
+                    tipo_destino: v,
+                    proyecto_id: ''
+                  })}>
+                    <SelectTrigger className="rounded-lg bg-background">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="obra"><Briefcase className="w-3 h-3 inline mr-2 text-blue-500" /> Obra / Proyecto</SelectItem>
+                      <SelectItem value="nave"><Warehouse className="w-3 h-3 inline mr-2 text-orange-500" /> Nave / Taller</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="proyecto">
+                    {formData.tipo_destino === 'obra' ? 'Seleccionar Proyecto' : 'Centro de Coste'}
+                  </Label>
+                  {formData.tipo_destino === 'obra' ? <Select value={formData.proyecto_id} onValueChange={v => setFormData({
+                    ...formData,
+                    proyecto_id: v
+                  })}>
+                    <SelectTrigger id="proyecto" className="rounded-lg bg-background">
+                      <SelectValue placeholder="Seleccionar..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {projects.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select> : <div className="flex items-center px-3 h-10 rounded-lg border bg-orange-50 text-orange-700 text-sm font-medium">
+                    <Warehouse className="w-4 h-4 mr-2" /> Gastos Generales
+                  </div>}
+                </div>
+              </div>
+            </div>
+
+            {/* Fechas */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Tipo de Ubicación</Label>
-                <Select value={formData.tipo_destino} onValueChange={v => setFormData({
+                <Label htmlFor="entrada" className="text-green-700 font-medium">Hora Entrada</Label>
+                <Input id="entrada" type="datetime-local" className="rounded-lg" value={formData.hora_entrada} onChange={e => setFormData({
                   ...formData,
-                  tipo_destino: v,
-                  proyecto_id: ''
-                })}>
-                  <SelectTrigger className="rounded-lg bg-background">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="obra"><Briefcase className="w-3 h-3 inline mr-2 text-blue-500" /> Obra / Proyecto</SelectItem>
-                    <SelectItem value="nave"><Warehouse className="w-3 h-3 inline mr-2 text-orange-500" /> Nave / Taller</SelectItem>
-                  </SelectContent>
-                </Select>
+                  hora_entrada: e.target.value
+                })} />
               </div>
-
               <div className="space-y-2">
-                <Label htmlFor="proyecto">
-                  {formData.tipo_destino === 'obra' ? 'Seleccionar Proyecto' : 'Centro de Coste'}
-                </Label>
-                {formData.tipo_destino === 'obra' ? <Select value={formData.proyecto_id} onValueChange={v => setFormData({
+                <Label htmlFor="salida" className="text-red-700 font-medium">Hora Salida (Opcional)</Label>
+                <Input id="salida" type="datetime-local" className="rounded-lg" value={formData.hora_salida} onChange={e => setFormData({
                   ...formData,
-                  proyecto_id: v
-                })}>
-                  <SelectTrigger id="proyecto" className="rounded-lg bg-background">
-                    <SelectValue placeholder="Seleccionar..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {projects.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}
-                  </SelectContent>
-                </Select> : <div className="flex items-center px-3 h-10 rounded-lg border bg-orange-50 text-orange-700 text-sm font-medium">
-                  <Warehouse className="w-4 h-4 mr-2" /> Gastos Generales
-                </div>}
+                  hora_salida: e.target.value
+                })} />
               </div>
             </div>
+
           </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setIsModalOpen(false)} className="rounded-lg">Cancelar</Button>
+            <Button onClick={handleSave} disabled={actionLoading} className="rounded-lg min-w-[100px]">
+              {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Guardar'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )}
 
-          {/* Fechas */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="entrada" className="text-green-700 font-medium">Hora Entrada</Label>
-              <Input id="entrada" type="datetime-local" className="rounded-lg" value={formData.hora_entrada} onChange={e => setFormData({
-                ...formData,
-                hora_entrada: e.target.value
-              })} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="salida" className="text-red-700 font-medium">Hora Salida (Opcional)</Label>
-              <Input id="salida" type="datetime-local" className="rounded-lg" value={formData.hora_salida} onChange={e => setFormData({
-                ...formData,
-                hora_salida: e.target.value
-              })} />
-            </div>
-          </div>
-
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => setIsModalOpen(false)} className="rounded-lg">Cancelar</Button>
-          <Button onClick={handleSave} disabled={actionLoading} className="rounded-lg min-w-[100px]">
-            {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Guardar'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    {/* --- DELETE ALERT --- */}
-    <AlertDialog open={deleteAlertOpen} onOpenChange={setDeleteAlertOpen}>
-      <AlertDialogContent className="rounded-xl">
-        <AlertDialogHeader>
-          <AlertDialogTitle className="text-red-600 flex items-center gap-2">
-            <AlertCircle className="w-5 h-5" /> Confirmar Eliminación
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            ¿Estás seguro de que deseas eliminar este registro de fichaje?
-            <br />
-            <span className="font-semibold text-gray-700 block mt-2">
-              {recordToDelete && <>
-                {recordToDelete.empleado_nombre || 'Empleado'} - {fmtMadrid(recordToDelete.hora_entrada, 'short')}
-              </>}
-            </span>
-            <span className="block mt-2 text-xs text-muted-foreground">
-              Esta acción eliminará también las pausas asociadas y no se puede deshacer.
-            </span>
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel className="rounded-lg">Cancelar</AlertDialogCancel>
-          <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700 text-white rounded-lg">
-            Eliminar
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    {/* --- DELETE ALERT (nunca se abre en modo solo lectura) --- */}
+    {!isReadOnly && (
+      <AlertDialog open={deleteAlertOpen} onOpenChange={setDeleteAlertOpen}>
+        <AlertDialogContent className="rounded-xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-red-600 flex items-center gap-2">
+              <AlertCircle className="w-5 h-5" /> Confirmar Eliminación
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ¿Estás seguro de que deseas eliminar este registro de fichaje?
+              <br />
+              <span className="font-semibold text-gray-700 block mt-2">
+                {recordToDelete && <>
+                  {recordToDelete.empleado_nombre || 'Empleado'} - {fmtMadrid(recordToDelete.hora_entrada, 'short')}
+                </>}
+              </span>
+              <span className="block mt-2 text-xs text-muted-foreground">
+                Esta acción eliminará también las pausas asociadas y no se puede deshacer.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-lg">Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700 text-white rounded-lg">
+              Eliminar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    )}
 
     {/* --- FICHAJE DETAIL MODAL --- */}
     {detailModalOpen && <FichajeDetailModal fichajeId={selectedFichajeId} isOpen={detailModalOpen} onClose={() => {

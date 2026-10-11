@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Briefcase,
   Calculator,
   CheckCircle2,
   ClipboardCheck,
@@ -70,6 +71,15 @@ const budgetPaymentTerms = [
   { percentage: '25 %', description: 'A la mitad de la ejecución de los trabajos.' },
   { percentage: '25 %', description: 'A la finalización de los trabajos.' },
 ];
+
+const commercialStatusMeta = {
+  emitido: { label: 'Emitido', className: 'border-slate-300 bg-slate-50 text-slate-700' },
+  enviado: { label: 'Enviado', className: 'border-violet-300 bg-violet-50 text-violet-800' },
+  aceptado: { label: 'Aceptado', className: 'border-emerald-300 bg-emerald-50 text-emerald-800' },
+  cambios_solicitados: { label: 'Cambios solicitados', className: 'border-amber-300 bg-amber-50 text-amber-900' },
+  rechazado: { label: 'Rechazado', className: 'border-red-300 bg-red-50 text-red-800' },
+  anulado: { label: 'Anulado', className: 'border-slate-300 bg-slate-100 text-slate-600' },
+};
 
 const normalizeCommercialSettings = (settings = {}) => ({
   gastos_generales_pct: Math.max(0, Number(settings.gastos_generales_pct) || 0),
@@ -464,7 +474,7 @@ const toDataUrl = (file) => new Promise((resolve, reject) => {
 
 const isTextFile = (file) => /\.(txt|md|srt)$/i.test(file?.name || '');
 
-export default function LeadVisitBudget({ leadId, canEdit, lead }) {
+export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
   const { toast } = useToast();
   const fileRef = useRef(null);
   const budgetPreviewRef = useRef(null);
@@ -484,6 +494,11 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
   const [emissions, setEmissions] = useState([]);
   const [emitting, setEmitting] = useState(false);
   const [emitDialogOpen, setEmitDialogOpen] = useState(false);
+  const [commercialAction, setCommercialAction] = useState(null);
+  const [commercialNotes, setCommercialNotes] = useState('');
+  const [commercialUpdating, setCommercialUpdating] = useState(false);
+  const [conversionEmission, setConversionEmission] = useState(null);
+  const [converting, setConverting] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -505,7 +520,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
           .maybeSingle(),
         supabase
           .from('presupuesto_emisiones')
-          .select('id,visita_id,numero,version,estado,base_imponible,iva,total,emitido_at')
+          .select('id,visita_id,numero,version,estado,base_imponible,iva,total,emitido_at,enviado_at,respondido_at,respuesta_notas,proyecto_id')
           .eq('lead_id', leadId)
           .order('emitido_at', { ascending: false }),
       ]);
@@ -1256,6 +1271,68 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
     }
   };
 
+  const openCommercialAction = (emission, status) => {
+    setCommercialAction({ emission, status });
+    setCommercialNotes('');
+  };
+
+  const updateCommercialStatus = async () => {
+    if (!commercialAction) return;
+    const requiresReason = ['cambios_solicitados', 'rechazado'].includes(commercialAction.status);
+    if (requiresReason && !commercialNotes.trim()) {
+      toast({ variant: 'destructive', title: 'Añade el motivo', description: 'La explicación quedará asociada a esta versión del presupuesto.' });
+      return;
+    }
+    setCommercialUpdating(true);
+    try {
+      const { data, error } = await supabase.rpc('registrar_estado_presupuesto', {
+        p_emision_id: commercialAction.emission.id,
+        p_estado: commercialAction.status,
+        p_observaciones: commercialNotes.trim() || null,
+      });
+      if (error) throw error;
+      const updated = Array.isArray(data) ? data[0] : data;
+      if (!updated?.id) throw new Error('Supabase no devolvió la versión actualizada.');
+      setEmissions((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
+      setCommercialAction(null);
+      setCommercialNotes('');
+      toast({
+        title: `${updated.numero} · v${updated.version}: ${commercialStatusMeta[updated.estado]?.label || updated.estado}`,
+        description: updated.estado === 'cambios_solicitados'
+          ? 'El borrador puede corregirse y emitirse como una versión nueva.'
+          : 'El cambio ha quedado registrado en el historial comercial.',
+      });
+    } catch (error) {
+      toast({ variant: 'destructive', title: 'No se pudo actualizar el presupuesto', description: error.message });
+    } finally {
+      setCommercialUpdating(false);
+    }
+  };
+
+  const convertAcceptedBudget = async () => {
+    if (!conversionEmission) return;
+    setConverting(true);
+    try {
+      const { data, error } = await supabase.rpc('convertir_presupuesto_aceptado_a_obra', {
+        p_emision_id: conversionEmission.id,
+        p_descripcion: result.objeto_presupuesto?.trim() || null,
+      });
+      if (error) throw error;
+      const conversion = Array.isArray(data) ? data[0] : data;
+      if (!conversion?.proyecto_id) throw new Error('Supabase no devolvió el identificador de la obra.');
+      setEmissions((current) => current.map((item) => item.id === conversionEmission.id
+        ? { ...item, proyecto_id: conversion.proyecto_id }
+        : item));
+      setConversionEmission(null);
+      toast({ title: 'Obra creada desde el presupuesto aceptado', description: `${conversion.partidas_creadas ?? 0} partidas se han trasladado a producción.` });
+      if (navigate) navigate(`/gestion/obras/${conversion.proyecto_id}?tab=produccion`);
+    } catch (error) {
+      toast({ variant: 'destructive', title: 'No se pudo crear la obra', description: error.message });
+    } finally {
+      setConverting(false);
+    }
+  };
+
   if (loadingDraft) {
     return <div className="flex min-h-[280px] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin text-primary" />Cargando visita…</div>;
   }
@@ -1788,17 +1865,52 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
             </div>
           </CardHeader>
           <CardContent className="divide-y divide-border/50 p-0">
-            {emissions.map((emission, index) => (
-              <div key={emission.id} className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(180px,1fr)_110px_140px_140px] sm:items-center">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-sm font-semibold">{emission.numero} · v{emission.version}</span>{index === 0 && <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-800">Última</Badge>}</div>
-                  <p className="mt-1 text-xs text-muted-foreground">Emitida el {new Date(emission.emitido_at).toLocaleString('es-ES')}</p>
+            {emissions.map((emission, index) => {
+              const statusMeta = commercialStatusMeta[emission.estado] || commercialStatusMeta.emitido;
+              const isLatest = index === 0;
+              const canRegisterResponse = isLatest && ['emitido', 'enviado'].includes(emission.estado) && canEdit;
+              return (
+                <div key={emission.id} className="px-4 py-4">
+                  <div className="grid gap-3 sm:grid-cols-[minmax(200px,1fr)_150px_140px_140px] sm:items-center">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-sm font-semibold">{emission.numero} · v{emission.version}</span>
+                        {isLatest && <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-800">Última versión</Badge>}
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">Emitida el {new Date(emission.emitido_at).toLocaleString('es-ES')}</p>
+                      {emission.enviado_at && <p className="mt-0.5 text-xs text-muted-foreground">Enviada el {new Date(emission.enviado_at).toLocaleString('es-ES')}</p>}
+                    </div>
+                    <Badge variant="outline" className={`w-fit ${statusMeta.className}`}>{statusMeta.label}</Badge>
+                    <div><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Base imponible</p><p className="mt-1 font-mono text-sm font-medium">{formatMoney(emission.base_imponible)}</p></div>
+                    <div className="sm:text-right"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</p><p className="mt-1 font-mono text-base font-bold">{formatMoney(emission.total)}</p></div>
+                  </div>
+
+                  {emission.respuesta_notas && <p className="mt-3 border-l-2 border-slate-200 pl-3 text-xs leading-5 text-slate-600">{emission.respuesta_notas}</p>}
+
+                  {canRegisterResponse && (
+                    <div className="mt-3 flex flex-wrap gap-2 border-t border-border/40 pt-3">
+                      {emission.estado === 'emitido' && <Button type="button" size="sm" variant="outline" onClick={() => openCommercialAction(emission, 'enviado')}><Send className="mr-2 h-3.5 w-3.5" />Marcar enviado</Button>}
+                      <Button type="button" size="sm" className="bg-emerald-700 text-white hover:bg-emerald-800" onClick={() => openCommercialAction(emission, 'aceptado')}><CheckCircle2 className="mr-2 h-3.5 w-3.5" />Aceptar</Button>
+                      <Button type="button" size="sm" variant="outline" className="border-amber-300 text-amber-900 hover:bg-amber-50" onClick={() => openCommercialAction(emission, 'cambios_solicitados')}><PenLine className="mr-2 h-3.5 w-3.5" />Solicita cambios</Button>
+                      <Button type="button" size="sm" variant="outline" className="border-red-200 text-red-700 hover:bg-red-50" onClick={() => openCommercialAction(emission, 'rechazado')}><X className="mr-2 h-3.5 w-3.5" />Rechazar</Button>
+                    </div>
+                  )}
+
+                  {isLatest && emission.estado === 'cambios_solicitados' && (
+                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs leading-5 text-amber-900">Corrige el borrador y emite una versión nueva. Esta versión permanece cerrada y no se sobrescribe.</div>
+                  )}
+
+                  {isLatest && emission.estado === 'aceptado' && (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50/60 px-3 py-3">
+                      <div><p className="text-sm font-semibold text-emerald-950">Presupuesto aceptado por el cliente</p><p className="mt-0.5 text-xs text-emerald-800">La obra se creará con esta versión exacta y sus partidas.</p></div>
+                      {emission.proyecto_id
+                        ? <Button type="button" size="sm" variant="outline" className="border-emerald-300 bg-white text-emerald-900" onClick={() => navigate?.(`/gestion/obras/${emission.proyecto_id}?tab=produccion`)}><Briefcase className="mr-2 h-4 w-4" />Ver obra</Button>
+                        : <Button type="button" size="sm" className="bg-emerald-700 text-white hover:bg-emerald-800" disabled={!canEdit} onClick={() => setConversionEmission(emission)}><Briefcase className="mr-2 h-4 w-4" />Convertir en obra</Button>}
+                    </div>
+                  )}
                 </div>
-                <Badge variant="outline" className="w-fit capitalize">{emission.estado}</Badge>
-                <div><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Base imponible</p><p className="mt-1 font-mono text-sm font-medium">{formatMoney(emission.base_imponible)}</p></div>
-                <div className="sm:text-right"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</p><p className="mt-1 font-mono text-base font-bold">{formatMoney(emission.total)}</p></div>
-              </div>
-            ))}
+              );
+            })}
           </CardContent>
         </Card>
       )}
@@ -1852,12 +1964,31 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
                     const renderPreviewLine = ({ line, index }) => {
                       const pricing = getLinePricing(line);
                       return (
-                        <div key={`preview-line-${line.id || index}`} className="pdf-avoid-break grid gap-3 py-4 text-sm sm:grid-cols-[70px_minmax(0,1fr)_90px_105px_110px] sm:items-start">
-                          <span className="font-mono text-[11px] font-semibold text-slate-500">{line.codigo || 'SIN-CÓD.'}</span>
-                          <div><p className="font-medium leading-5">{line.descripcion || 'Partida pendiente de definir'}</p>{line.zona && <p className="mt-1 text-xs text-slate-500">Zona: {line.zona}</p>}{pricing.breakdown.length > 0 && <ul className="mt-2 space-y-1 border-l-2 border-violet-100 pl-3 text-xs text-slate-500">{pricing.breakdown.filter((item) => Number(item.cantidad) > 0).map((item) => <li key={item.id}>{item.concepto || 'Componente'} · {item.cantidad} {item.unidad} × {item.precio_unitario === '' || item.precio_unitario === null ? 'pendiente' : formatMoney(item.precio_unitario)}</li>)}</ul>}</div>
-                          <span className="font-mono text-xs">{line.cantidad || '—'} {line.unidad || ''}</span>
-                          <span className={`font-mono text-xs ${pricing.pendingPrices ? 'font-semibold text-amber-700' : ''}`}>{pricing.breakdown.length ? 'Desglose' : pricing.hasAnyPrice ? formatMoney(line.precio_unitario) : 'Pendiente'}</span>
-                          <span className={`text-right font-mono font-semibold ${pricing.pendingPrices ? 'text-amber-700' : ''}`}>{pricing.hasAnyPrice ? `${formatMoney(pricing.total)}${pricing.pendingPrices ? ' *' : ''}` : 'Pendiente'}</span>
+                        <div key={`preview-line-${line.id || index}`} className="pdf-avoid-break py-4 text-sm">
+                          <div>
+                            <span className="font-mono text-[10px] font-semibold text-slate-500">{line.codigo || 'SIN-CÓD.'}</span>
+                            <p className="mt-1 font-medium leading-5">{line.descripcion || 'Partida pendiente de definir'}</p>
+                            {line.zona && <p className="mt-1 text-xs text-slate-500">Zona: {line.zona}</p>}
+                            {pricing.breakdown.length > 0 && <ul className="mt-2 space-y-1 border-l-2 border-violet-100 pl-3 text-xs text-slate-500">{pricing.breakdown.filter((item) => Number(item.cantidad) > 0).map((item) => <li key={item.id}>{item.concepto || 'Componente'} · {item.cantidad} {item.unidad} × {item.precio_unitario === '' || item.precio_unitario === null ? 'pendiente' : formatMoney(item.precio_unitario)}</li>)}</ul>}
+                          </div>
+                          <dl className="mt-3 grid grid-cols-4 gap-x-4 border-t border-slate-100 pt-2.5">
+                            <div>
+                              <dt className="text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">Cantidad</dt>
+                              <dd className="mt-0.5 font-mono text-xs font-medium">{line.cantidad || '—'}</dd>
+                            </div>
+                            <div>
+                              <dt className="text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">Unidad</dt>
+                              <dd className="mt-0.5 font-mono text-xs font-medium">{line.unidad || '—'}</dd>
+                            </div>
+                            <div>
+                              <dt className="text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">Precio unitario</dt>
+                              <dd className={`mt-0.5 font-mono text-xs font-medium ${pricing.pendingPrices ? 'text-amber-700' : ''}`}>{pricing.breakdown.length ? 'Según desglose' : pricing.hasAnyPrice ? formatMoney(line.precio_unitario) : 'Pendiente'}</dd>
+                            </div>
+                            <div className="text-right">
+                              <dt className="text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">Total</dt>
+                              <dd className={`mt-0.5 font-mono text-sm font-semibold ${pricing.pendingPrices ? 'text-amber-700' : ''}`}>{pricing.hasAnyPrice ? `${formatMoney(pricing.total)}${pricing.pendingPrices ? ' *' : ''}` : 'Pendiente'}</dd>
+                            </div>
+                          </dl>
                         </div>
                       );
                     };
@@ -1942,6 +2073,69 @@ export default function LeadVisitBudget({ leadId, canEdit, lead }) {
             <AlertDialogCancel disabled={emitting}>Cancelar</AlertDialogCancel>
             <AlertDialogAction onClick={(event) => { event.preventDefault(); emitBudget(); }} disabled={emitting} className="bg-emerald-700 text-white hover:bg-emerald-800">
               {emitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}Confirmar emisión
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={Boolean(commercialAction)} onOpenChange={(open) => {
+        if (!open && !commercialUpdating) {
+          setCommercialAction(null);
+          setCommercialNotes('');
+        }
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{commercialAction ? commercialStatusMeta[commercialAction.status]?.label : 'Actualizar presupuesto'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {commercialAction && `${commercialAction.emission.numero} · v${commercialAction.emission.version}`}. El cambio quedará fechado en el historial comercial y no modificará el contenido emitido.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="respuesta-comercial-presupuesto">
+              Observaciones {commercialAction && ['cambios_solicitados', 'rechazado'].includes(commercialAction.status) ? '(obligatorias)' : '(opcionales)'}
+            </Label>
+            <Textarea
+              id="respuesta-comercial-presupuesto"
+              value={commercialNotes}
+              onChange={(event) => setCommercialNotes(event.target.value)}
+              rows={4}
+              placeholder={commercialAction?.status === 'cambios_solicitados'
+                ? 'Indica exactamente qué solicita cambiar el cliente.'
+                : commercialAction?.status === 'rechazado'
+                  ? 'Indica, si se conoce, el motivo del rechazo.'
+                  : 'Añade cualquier detalle útil para el seguimiento.'}
+              disabled={commercialUpdating}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={commercialUpdating}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={(event) => { event.preventDefault(); updateCommercialStatus(); }} disabled={commercialUpdating} className={commercialAction?.status === 'rechazado' ? 'bg-red-700 text-white hover:bg-red-800' : commercialAction?.status === 'aceptado' ? 'bg-emerald-700 text-white hover:bg-emerald-800' : ''}>
+              {commercialUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : commercialAction?.status === 'aceptado' ? <CheckCircle2 className="mr-2 h-4 w-4" /> : <Send className="mr-2 h-4 w-4" />}
+              Confirmar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={Boolean(conversionEmission)} onOpenChange={(open) => {
+        if (!open && !converting) setConversionEmission(null);
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2"><Briefcase className="h-5 w-5 text-emerald-700" />Convertir presupuesto aceptado en obra</AlertDialogTitle>
+            <AlertDialogDescription>
+              Se creará la obra desde {conversionEmission?.numero} · v{conversionEmission?.version}, conservando cliente, emplazamiento, importe aceptado y todas las partidas de esta versión.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3 text-sm text-emerald-950">
+            <p className="font-semibold">La versión emitida no se modificará.</p>
+            <p className="mt-1 text-xs leading-5 text-emerald-800">Las partidas pasarán a Producción para poder planificar y medir su ejecución. Esta acción no crea facturas ni envía datos a ContaSimple.</p>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={converting}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={(event) => { event.preventDefault(); convertAcceptedBudget(); }} disabled={converting} className="bg-emerald-700 text-white hover:bg-emerald-800">
+              {converting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Briefcase className="mr-2 h-4 w-4" />}Crear obra
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

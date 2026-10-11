@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
+import SeleccionTareaModal from '@/components/SeleccionTareaModal';
 import {
   Card,
   CardContent,
@@ -84,6 +85,10 @@ const TechnicianFichajeView = ({ navigate }) => {
   // --- STATE FOR FONTANERIA MODAL ---
   const [fontaneriaModalOpen, setFontaneriaModalOpen] = useState(false);
   const [fechaSalida, setFechaSalida] = useState(null);
+
+  // --- STATE FOR TASK SELECTION MODAL ---
+  const [tareaModalOpen, setTareaModalOpen] = useState(false);
+  const [proyectoFichado, setProyectoFichado] = useState(null);
 
   // Detectar si el usuario actual es Fran
   const esFran = user?.email?.toLowerCase() === FRAN_EMAIL;
@@ -239,6 +244,12 @@ const TechnicianFichajeView = ({ navigate }) => {
       });
 
       await fetchCurrentStatus();
+
+      // ✅ Si es fichaje de ENTRADA en OBRA (no nave), abrir modal de tareas
+      if (actionType === 'entrada' && selectedProject && selectedProject !== 'nave') {
+        setProyectoFichado(selectedProject);
+        setTareaModalOpen(true);
+      }
 
       if (actionType === 'salida') {
         setSelectedProject(null);
@@ -779,6 +790,17 @@ const TechnicianFichajeView = ({ navigate }) => {
         isOpen={fontaneriaModalOpen}
         onClose={() => setFontaneriaModalOpen(false)}
         fecha={fechaSalida}
+      />
+
+      {/* ✅ MODAL SELECCIÓN DE TAREA — Se muestra al fichar entrada en obra */}
+      <SeleccionTareaModal
+        isOpen={tareaModalOpen}
+        onClose={() => setTareaModalOpen(false)}
+        proyectoId={proyectoFichado}
+        empleadoId={sessionRole?.empleadoId}
+        onTareaSeleccionada={(tarea) => {
+          console.log('Tarea seleccionada:', tarea);
+        }}
       />
 
     </div>

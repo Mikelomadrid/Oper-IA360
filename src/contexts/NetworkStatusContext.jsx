@@ -61,37 +61,19 @@ export const NetworkStatusProvider = ({ children }) => {
     }
 
     try {
-      // Lightweight query to a public or system table to check health
-      // Using abort controller to prevent hanging requests
+      // Check Supabase Auth health without reading any business table.
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
 
-      const { error } = await supabase
-        .from('app_ok')
-        .select('status')
-        .limit(1)
-        .maybeSingle()
-        .abortSignal(controller.signal);
+      const response = await fetch(`${supabase.supabaseUrl}/auth/v1/health`, {
+        headers: { apikey: supabase.supabaseKey },
+        signal: controller.signal,
+      });
       
       clearTimeout(timeoutId);
       
-      if (error) {
-        // Don't mark as disconnected immediately on 401/403 (auth issues), only on network errors
-        if (error.message && (
-            error.message.toLowerCase().includes('fetch') || 
-            error.message.toLowerCase().includes('network') || 
-            error.message.toLowerCase().includes('connection') ||
-            error.status === 503 || 
-            error.status === 504
-        )) {
-           pingFailures.current += 1;
-           if (prevStatus.current.connected) {
-             console.error("[Network] Supabase unreachable:", error.message);
-           }
-           setIsSupabaseConnected(false);
-           prevStatus.current.connected = false;
-           return false;
-        }
+      if (!response.ok) {
+        throw new Error(`Supabase health check failed with status ${response.status}`);
       }
       
       // Success

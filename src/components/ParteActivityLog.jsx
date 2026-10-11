@@ -178,7 +178,10 @@ const ActivityItem = ({ item, index, totalItems, currentEmployee }) => {
                             {fileComment && <p className="text-gray-700 dark:text-muted-foreground whitespace-pre-wrap mt-2 border-l-2 border-gray-200 pl-2 dark:border-border">{fileComment}</p>}
                         </div>
                     ) : (
-                        content
+                        // whitespace-pre-wrap: conserva saltos de línea, espacios múltiples y
+                        // párrafos tal cual se escribieron (incluye comentarios heredados del
+                        // lead, que antes se pegaban todo seguido en una sola línea).
+                        <span className="whitespace-pre-wrap">{content}</span>
                     )}
                 </div>
             </div>

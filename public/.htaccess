@@ -1,6 +1,11 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
+
+  # Do not rewrite real asset requests to index.html.
+  # Missing JS/CSS files must return 404, not HTML with the wrong MIME type.
+  RewriteRule ^assets/ - [L]
+
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteRule ^ index.html [L]
@@ -9,11 +14,13 @@
 <IfModule mod_headers.c>
   Header set X-Powered-By "Hostinger Horizons"
 
-  # Cache everything on CDN by default
-  Header set Cache-Control "public, s-maxage=604800, max-age=0"
-  
-  # Cache in browser all assets
+  # Never cache the app shell or runtime config, otherwise old builds mix with new assets.
+  <FilesMatch "^(index\.html|config\.js)$">
+    Header set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+  </FilesMatch>
+
+  # Versioned assets can be cached safely.
   <If "%{REQUEST_URI} =~ m#^/assets/.*$#">
-    Header set Cache-Control "public, max-age=604800"
+    Header set Cache-Control "public, max-age=604800, immutable"
   </If>
 </IfModule>

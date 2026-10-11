@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { ArrowLeft, Loader2, User, Mail, Phone, MapPin, Briefcase, Euro, TrendingUp, ChevronRight, Pencil, Trash2, Building2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { ClientForm } from './Clients';
+import { fetchProjectMaterialBaseTotals } from '@/lib/projectMaterialCosts';
 
 const formatCurrency = (value) => {
     if (value === undefined || value === null) return '0,00 €';
@@ -89,31 +90,41 @@ const ClientDetail = ({ clientId, navigate }) => {
         }
 
         if (projectsData && projectsData.length > 0) {
-            // 3. Fetch Real KPIs (Costes y Margen) from View
+            // 3. Recalcular costes con materiales sin IVA y mano de obra real.
             const projectIds = projectsData.map(p => p.id);
-            const { data: kpisData, error: kpisError } = await supabase
-                .from('v_proyecto_kpis')
-                .select('proyecto_id, costo_total, margen, rentabilidad_real_pct')
-                .in('proyecto_id', projectIds);
+            const [laborResult, materialBaseTotals] = await Promise.all([
+                supabase
+                    .from('ui_v_proyecto_mano_obra_totales_v2')
+                    .select('proyecto_id, coste_total_mano_obra')
+                    .in('proyecto_id', projectIds),
+                fetchProjectMaterialBaseTotals(projectIds),
+            ]);
 
-            if (kpisError) {
-                console.error("Error fetching KPIs", kpisError);
+            const laborData = laborResult.data || [];
+
+            if (laborResult.error) {
+                console.error("Error fetching labor costs", laborResult.error);
             }
 
             // 4. Merge Data
             const mergedProjects = projectsData.map(p => {
-                const kpi = kpisData?.find(k => k.proyecto_id === p.id) || {};
+                const labor = laborData.find(l => l.proyecto_id === p.id);
+                const materialCost = materialBaseTotals[String(p.id)] || 0;
+                const laborCost = Number(labor?.coste_total_mano_obra || 0);
+                const totalCost = materialCost + laborCost;
+                const revenue = Number(p.presupuesto_aceptado || 0);
+                const margin = revenue - totalCost;
                 return {
                     proyecto_id: p.id,
                     nombre_proyecto: p.nombre_proyecto,
                     estado: p.estado,
                     // Revenue = Presupuesto Aceptado (Ingresos)
-                    total_ingresos: p.presupuesto_aceptado || 0,
+                    total_ingresos: revenue,
                     // Costs = Coste Total (Materiales + Mano de Obra)
-                    total_costes: kpi.costo_total || 0,
+                    total_costes: totalCost,
                     // Margin = Beneficio
-                    margen: kpi.margen || 0,
-                    rentabilidad_pct: kpi.rentabilidad_real_pct || 0
+                    margen: margin,
+                    rentabilidad_pct: revenue > 0 ? (margin / revenue) * 100 : 0
                 };
             });
 

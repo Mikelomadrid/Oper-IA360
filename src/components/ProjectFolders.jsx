@@ -23,6 +23,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import AsyncImage from '@/components/AsyncImage';
 import { Dialog as RadixDialog, DialogContent as RadixDialogContent } from "@/components/ui/dialog";
 import { X, Maximize2 } from 'lucide-react';
+import { generateThumbnail } from '@/utils/generateThumbnail';
 
 // --- Galería con navegación entre fotos ---
 const GaleriaNavegable = ({ previewOpen, fotos, onClose, onDownload, onDownloadBulk, formatCreatorName }) => {
@@ -123,7 +124,7 @@ const GaleriaNavegable = ({ previewOpen, fotos, onClose, onDownload, onDownloadB
                                 style={{ aspectRatio: '1' }}
                             >
                                 <AsyncImage
-                                    path={f.url}
+                                    path={f.thumbnail_url || f.url}
                                     alt={f.nombre}
                                     className="w-full h-full object-cover"
                                 />
@@ -561,7 +562,9 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
                 // Do not delete legacy lead files from storage to avoid breaking the original lead
                 if (selectedItem.url && !selectedItem.url.startsWith('lead_')) {
                     const deleteBucket = tipo === 'foto' ? 'proyecto_fotos' : 'proyecto_docs';
-                    await supabase.storage.from(deleteBucket).remove([selectedItem.url]);
+                    const pathsToRemove = [selectedItem.url];
+                    if (selectedItem.thumbnail_url) pathsToRemove.push(selectedItem.thumbnail_url);
+                    await supabase.storage.from(deleteBucket).remove(pathsToRemove);
                 }
                 const { error } = await supabase.from('archivos').delete().eq('id', selectedItem.id);
                 if (error) throw error;
@@ -640,7 +643,8 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
             const uploads = Array.from(fileList).map(async (file) => {
                 const folderSegment = currentFolderId ? currentFolderId : 'root';
                 const sanitizedName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                const filePath = `obras/${projectId}/${tipo}/${folderSegment}/${Date.now()}_${sanitizedName}`;
+                const ts = Date.now();
+                const filePath = `obras/${projectId}/${tipo}/${folderSegment}/${ts}_${sanitizedName}`;
                 const uploadBucket = tipo === 'foto' ? 'proyecto_fotos' : 'proyecto_docs';
 
                 const { error: uploadError } = await supabase.storage
@@ -649,11 +653,29 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
 
                 if (uploadError) throw uploadError;
 
+                // Miniatura comprimida (solo galería de fotos). Si falla, no rompe la subida del original.
+                let thumbnailPath = null;
+                if (tipo === 'foto') {
+                    const thumbBlob = await generateThumbnail(file);
+                    if (thumbBlob) {
+                        thumbnailPath = `obras/${projectId}/${tipo}/${folderSegment}/thumbs/${ts}_${sanitizedName}.webp`;
+                        const { error: thumbError } = await supabase.storage
+                            .from(uploadBucket)
+                            .upload(thumbnailPath, thumbBlob, { contentType: 'image/webp' });
+
+                        if (thumbError) {
+                            console.error('Error subiendo thumbnail:', thumbError);
+                            thumbnailPath = null;
+                        }
+                    }
+                }
+
                 const { error: dbError } = await supabase.from('archivos').insert([{
                     proyecto_id: projectId,
                     carpeta_id: currentFolderId,
                     nombre: file.name,
                     url: filePath,
+                    thumbnail_url: thumbnailPath,
                     size: file.size,
                     mime_type: file.type,
                     tipo: tipo,
@@ -1052,7 +1074,7 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
                                                         {isGalleryMode ? (
                                                             <>
                                                                 <AsyncImage
-                                                                    path={file.url}
+                                                                    path={file.thumbnail_url || file.url}
                                                                     alt={file.nombre}
                                                                     className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                                                                 />

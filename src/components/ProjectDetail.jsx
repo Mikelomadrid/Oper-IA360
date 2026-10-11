@@ -1,15 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
-import { Loader2, ArrowLeft, Building, LayoutDashboard, Package, HardHat, Image as ImageIcon, FileText, View, ShieldAlert, Banknote, ListChecks, MessageSquare, Share2, Pencil, Ruler, Brain } from 'lucide-react';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Loader2, ArrowLeft, Building, LayoutDashboard, Package, HardHat, Image as ImageIcon, FileText, View, ShieldAlert, Banknote, ListChecks, MessageSquare, Share2, Pencil, Ruler, Brain, FileImage, ChevronDown, ClipboardList, ClipboardCheck, Users } from 'lucide-react';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { Helmet } from 'react-helmet';
+import {
+    TIPOS_PRINCIPALES_TRABAJO,
+    OFICIOS_DOMINANTES,
+    TAMANOS_OPERATIVOS,
+    ESTADOS_VALIDEZ_ANALISIS,
+    ETIQUETAS_RENTABILIDAD,
+    labelFor,
+    ESTADO_VALIDEZ_BADGE_CLASSES,
+} from '@/lib/obraClasificacion';
 
 // Import Tab Components
 import ProjectDashboard from '@/components/ProjectDashboard';
@@ -19,24 +29,26 @@ import ProjectPhotosView from '@/components/ProjectPhotosView';
 import ProjectDocuments from '@/components/ProjectDocuments';
 import ProjectPhotos360 from '@/components/ProjectPhotos360';
 import ProjectPayments from '@/components/ProjectPayments';
-import ObraProcesosTab from '@/components/ObraProcesosTab';
 import ObraGanttTab from '@/components/ObraGanttTab';
 import CommentsSection from '@/components/CommentsSection';
 import SharedProjectSettlementTab from '@/components/SharedProjectSettlementTab';
 import ProjectForm from '@/components/ProjectForm';
 import PresupuestoScanner from '@/components/PresupuestoScanner';
 import ReplanteoTab from '@/components/ReplanteoTab';
+import PlanosTab from '@/components/PlanosTab';
+import SeguimientoLeadTab from '@/components/SeguimientoLeadTab';
+import ProjectPedidosView from '@/components/ProjectPedidosView';
+import ProjectProductionView from '@/components/ProjectProductionView';
+import ProjectTeamView from '@/components/ProjectTeamView';
 
 const ProjectDetail = ({ projectId: propProjectId }) => {
     const navigate = useNavigate();
     const { toast } = useToast();
     const { sessionRole } = useAuth();
 
-    // Resolve Project ID
     const params = useParams();
     const location = useLocation();
 
-    // Task: Sync activeTab with query parameter
     const searchParams = new URLSearchParams(location.search);
     const initialTab = searchParams.get('tab') || 'dashboard';
     const [activeTab, setActiveTab] = useState(initialTab);
@@ -45,7 +57,6 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
 
     const canManage = React.useMemo(() => sessionRole?.rol === 'admin' || sessionRole?.rol === 'encargado', [sessionRole]);
 
-    // Ensure URL is updated when tab changes
     const handleTabChange = (val) => {
         setActiveTab(val);
         const params = new URLSearchParams(location.search);
@@ -60,7 +71,6 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
         if (match) projectId = match[1];
     }
 
-    // Redirect if no ID
     useEffect(() => {
         if (!projectId) {
             console.warn('[ProjectDetail] No Project ID found, redirecting.');
@@ -68,7 +78,6 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
         }
     }, [projectId, navigate]);
 
-    // Fetch Project Basic Info
     const { data: project, isLoading, error } = useQuery({
         queryKey: ['project_basic', projectId],
         queryFn: async () => {
@@ -131,9 +140,8 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
 
             <div className="flex flex-col h-full min-h-screen bg-background/50 animate-in fade-in duration-500">
 
-                <div className="sticky top-0 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b shadow-sm">
+                <div className="sticky top-0 z-30 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b shadow-sm" style={{ overflow: 'visible' }}>
                     <div className="w-full p-4 md:p-6 pb-2 space-y-4">
-                        {/* Breadcrumbs & Title */}
                         <div className="flex flex-col gap-2">
                             <div className="flex items-center gap-2 text-muted-foreground text-xs md:text-sm">
                                 <span
@@ -167,33 +175,20 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
                                             <span>{project.cliente.nombre}</span>
                                         </div>
                                     )}
+                                    <ClasificacionBadges project={project} />
                                 </div>
                             </div>
                         </div>
 
-                        {/* Tabs Navigation */}
-                        <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-                            <TabsList className="w-full justify-start overflow-x-auto bg-transparent p-0 h-auto rounded-none space-x-2 md:space-x-4 border-b border-border/50 no-scrollbar">
-                                <ProjectTabTrigger value="dashboard" icon={<LayoutDashboard className="w-4 h-4" />} label="Dashboard" />
-                                <ProjectTabTrigger value="cronograma" icon={<ListChecks className="w-4 h-4" />} label="Cronograma" />
-                                <ProjectTabTrigger value="replanteo" icon={<Brain className="w-4 h-4" />} label="Replanteo IA" />
-                                <ProjectTabTrigger value="procesos" icon={<ListChecks className="w-4 h-4" />} label="Procesos" />
-                                <ProjectTabTrigger value="pagos" icon={<Banknote className="w-4 h-4" />} label="Pagos" />
-                                <ProjectTabTrigger value="materiales" icon={<Package className="w-4 h-4" />} label="Materiales" />
-                                <ProjectTabTrigger value="mano_obra" icon={<HardHat className="w-4 h-4" />} label="Mano de Obra" />
-                                <ProjectTabTrigger value="fotos" icon={<ImageIcon className="w-4 h-4" />} label="Fotos" />
-                                <ProjectTabTrigger value="documentacion" icon={<FileText className="w-4 h-4" />} label="Documentación" />
-                                <ProjectTabTrigger value="fotos_360" icon={<View className="w-4 h-4" />} label="Fotos 360º" />
-                                <ProjectTabTrigger value="comentarios" icon={<MessageSquare className="w-4 h-4" />} label="Comentarios" />
-                                {project.es_compartida && (
-                                    <ProjectTabTrigger value="liquidacion" icon={<Share2 className="w-4 h-4" />} label="Liquidación" />
-                                )}
-                            </TabsList>
-                        </Tabs>
+                        <GroupedNav
+                            activeTab={activeTab}
+                            onTabChange={handleTabChange}
+                            esCompartida={project.es_compartida}
+                            tieneLeadId={!!project.lead_id}
+                        />
                     </div>
                 </div>
 
-                {/* Main Content Area */}
                 <div className="w-full p-4 md:p-6 min-h-0 flex-1">
                     <Tabs value={activeTab} className="space-y-6">
 
@@ -205,12 +200,12 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
                             <ObraGanttTab obraId={projectId} />
                         </TabsContent>
 
-                        <TabsContent value="replanteo" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
-                            <ReplanteoTab proyectoId={projectId} />
+                        <TabsContent value="equipo" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
+                            <ProjectTeamView projectId={projectId} canManage={canManage} />
                         </TabsContent>
 
-                        <TabsContent value="procesos" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
-                            <ObraProcesosTab obraId={projectId} />
+                        <TabsContent value="replanteo" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
+                            <ReplanteoTab proyectoId={projectId} />
                         </TabsContent>
 
                         <TabsContent value="pagos" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
@@ -223,6 +218,10 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
 
                         <TabsContent value="mano_obra" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
                             <ProjectLaborView projectId={projectId} />
+                        </TabsContent>
+
+                        <TabsContent value="produccion" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
+                            <ProjectProductionView projectId={projectId} canManage={canManage} />
                         </TabsContent>
 
                         <TabsContent value="fotos" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
@@ -246,6 +245,11 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
                             <ProjectDocuments projectId={projectId} canManage={canManage} canUpload={true} />
                         </TabsContent>
 
+                        {/* NUEVO: subsección "Pedidos" dentro del grupo Documentación */}
+                        <TabsContent value="pedidos" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
+                            <ProjectPedidosView projectId={projectId} />
+                        </TabsContent>
+
                         <TabsContent value="fotos_360" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
                             <ProjectPhotos360 projectId={projectId} />
                         </TabsContent>
@@ -254,6 +258,14 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
                             <div className="p-4 md:p-6 bg-card rounded-lg border shadow-sm max-w-4xl mx-auto w-full">
                                 <CommentsSection obraId={projectId} isVisible={activeTab === 'comentarios'} />
                             </div>
+                        </TabsContent>
+
+                        <TabsContent value="seguimiento" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
+                            <SeguimientoLeadTab projectId={projectId} />
+                        </TabsContent>
+
+                        <TabsContent value="planos" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
+                            <PlanosTab proyectoId={projectId} />
                         </TabsContent>
 
                         {project.es_compartida && (
@@ -270,7 +282,6 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
                 </div>
             </div>
 
-            {/* Modal Escáner de Presupuesto */}
             {canManage && (
                 <Dialog open={presupuestoScannerOpen} onOpenChange={setPresupuestoScannerOpen}>
                     <DialogContent className="max-w-5xl w-full max-h-[90vh] overflow-y-auto p-0">
@@ -283,7 +294,6 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
                 </Dialog>
             )}
 
-            {/* Edit Obra Modal */}
             {canManage && (
                 <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
                     <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto w-11/12 p-0 border-0 bg-transparent shadow-none">
@@ -302,15 +312,199 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
     );
 };
 
-const ProjectTabTrigger = ({ value, icon, label }) => (
-    <TabsTrigger
-        value={value}
-        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none px-4 py-3 font-semibold text-muted-foreground transition-all hover:text-foreground flex items-center gap-2"
-    >
-        {icon}
-        <span className="hidden md:inline">{label}</span>
-        <span className="md:hidden">{label}</span>
-    </TabsTrigger>
-);
+// ─── Badges de clasificación (tipo de trabajo, oficio, tamaño, validez, etiquetas) ────
+// Solo lectura: la edición se hace desde el modal "Editar Obra" (ProjectForm).
+const ClasificacionBadges = ({ project }) => {
+    const tieneClasificacion = project.tipo_principal_trabajo || project.oficio_dominante || project.tamano_operativo;
+    const etiquetas = project.etiquetas_rentabilidad || [];
+
+    if (!tieneClasificacion && etiquetas.length === 0 && !project.estado_validez_analisis) return null;
+
+    return (
+        <div className="flex flex-wrap items-center gap-2 mt-2">
+            {project.tipo_principal_trabajo && (
+                <Badge variant="outline">{labelFor(TIPOS_PRINCIPALES_TRABAJO, project.tipo_principal_trabajo)}</Badge>
+            )}
+            {project.oficio_dominante && (
+                <Badge variant="outline">{labelFor(OFICIOS_DOMINANTES, project.oficio_dominante)}</Badge>
+            )}
+            {project.tamano_operativo && (
+                <Badge variant="outline">{labelFor(TAMANOS_OPERATIVOS, project.tamano_operativo)}</Badge>
+            )}
+            {project.estado_validez_analisis && (
+                <Badge className={ESTADO_VALIDEZ_BADGE_CLASSES[project.estado_validez_analisis] || 'bg-muted text-muted-foreground border-border'}>
+                    {labelFor(ESTADOS_VALIDEZ_ANALISIS, project.estado_validez_analisis)}
+                </Badge>
+            )}
+            {etiquetas.map((tag) => (
+                <Badge key={tag} variant="secondary" className="text-xs">
+                    {labelFor(ETIQUETAS_RENTABILIDAD, tag)}
+                </Badge>
+            ))}
+        </div>
+    );
+};
+
+// ─── Grupos de navegación ─────────────────────────────────────────────────────
+const NAV_GROUPS = (esCompartida, tieneLeadId) => [
+    {
+        id: 'dashboard',
+        label: 'Dashboard',
+        icon: <LayoutDashboard className="w-4 h-4" />,
+        children: [
+            { value: 'dashboard',   label: 'Dashboard',     icon: <LayoutDashboard className="w-3.5 h-3.5" /> },
+            { value: 'cronograma',  label: 'Cronograma',    icon: <ListChecks className="w-3.5 h-3.5" /> },
+            { value: 'equipo',      label: 'Equipo de obra', icon: <Users className="w-3.5 h-3.5" /> },
+            { value: 'replanteo',   label: 'Replanteo IA',  icon: <Brain className="w-3.5 h-3.5" /> },
+            ...(esCompartida ? [{ value: 'liquidacion', label: 'Liquidación', icon: <Share2 className="w-3.5 h-3.5" /> }] : []),
+        ],
+    },
+    {
+        id: 'documentacion',
+        label: 'Documentación',
+        icon: <FileText className="w-4 h-4" />,
+        children: [
+            { value: 'planos',        label: 'Planos',        icon: <FileImage className="w-3.5 h-3.5" /> },
+            { value: 'fotos',         label: 'Fotos',         icon: <ImageIcon className="w-3.5 h-3.5" /> },
+            { value: 'fotos_360',     label: 'Fotos 360º',    icon: <View className="w-3.5 h-3.5" /> },
+            { value: 'documentacion', label: 'Documentación', icon: <FileText className="w-3.5 h-3.5" /> },
+            { value: 'pedidos',       label: 'Pedidos',       icon: <ClipboardList className="w-3.5 h-3.5" /> },
+        ],
+    },
+    {
+        id: 'costes',
+        label: 'Costes',
+        icon: <Banknote className="w-4 h-4" />,
+        children: [
+            { value: 'produccion', label: 'Producción',    icon: <ClipboardCheck className="w-3.5 h-3.5" /> },
+            { value: 'pagos',      label: 'Pagos',         icon: <Banknote className="w-3.5 h-3.5" /> },
+            { value: 'materiales', label: 'Materiales',    icon: <Package className="w-3.5 h-3.5" /> },
+            { value: 'mano_obra',  label: 'Mano de Obra',  icon: <HardHat className="w-3.5 h-3.5" /> },
+        ],
+    },
+    {
+        id: 'informacion',
+        label: 'Información',
+        icon: <MessageSquare className="w-4 h-4" />,
+        children: [
+            { value: 'comentarios',  label: 'Comentarios',  icon: <MessageSquare className="w-3.5 h-3.5" /> },
+            { value: 'seguimiento',  label: 'Seguimiento',  icon: <ClipboardList className="w-3.5 h-3.5" /> },
+        ],
+    },
+];
+
+// ─── Componente de navegación agrupada ────────────────────────────────────────
+// Navegación basada en click/tap (funciona igual en desktop y móvil).
+// No depende de hover (mouseEnter/mouseLeave no existen de forma fiable en táctil).
+const GroupedNav = ({ activeTab, onTabChange, esCompartida, tieneLeadId }) => {
+    const [openGroup, setOpenGroup] = useState(null);
+    const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
+    const navRef = useRef(null);
+    const groups = NAV_GROUPS(esCompartida, tieneLeadId);
+    const activeGroup = groups.find(g => g.children.some(c => c.value === activeTab))?.id;
+    const openGroupData = groups.find(g => g.id === openGroup);
+
+    const DROPDOWN_WIDTH = 220;
+
+    const handleGroupClick = (group, el) => {
+        if (openGroup === group.id) {
+            setOpenGroup(null);
+            return;
+        }
+        const rect = el.getBoundingClientRect();
+        // Clamp horizontal para que no se salga por la derecha en pantallas estrechas (móvil)
+        const maxLeft = window.scrollX + window.innerWidth - DROPDOWN_WIDTH - 8;
+        const left = Math.max(window.scrollX + 8, Math.min(rect.left + window.scrollX, maxLeft));
+        setDropdownPos({ top: rect.bottom + window.scrollY + 4, left });
+        setOpenGroup(group.id);
+    };
+
+    // Cerrar al tocar/clicar fuera. Imprescindible en móvil, donde no se dispara mouseLeave.
+    useEffect(() => {
+        if (!openGroup) return;
+        const handlePointerDown = (e) => {
+            if (navRef.current && navRef.current.contains(e.target)) return;
+            if (e.target.closest && e.target.closest('[data-grouped-nav-dropdown]')) return;
+            setOpenGroup(null);
+        };
+        document.addEventListener('pointerdown', handlePointerDown);
+        return () => document.removeEventListener('pointerdown', handlePointerDown);
+    }, [openGroup]);
+
+    return (
+        <div ref={navRef} style={{ borderBottom: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                {groups.map((group) => {
+                    const isActive = activeGroup === group.id;
+                    const isOpen = openGroup === group.id;
+
+                    return (
+                        <div key={group.id} style={{ flexShrink: 0 }}>
+                            <button
+                                type="button"
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: 8,
+                                    padding: '12px 16px', fontSize: 14, fontWeight: 600,
+                                    whiteSpace: 'nowrap', border: 'none', background: 'transparent',
+                                    cursor: 'pointer',
+                                    borderBottom: isActive ? '2px solid var(--primary)' : '2px solid transparent',
+                                    color: isActive ? 'var(--primary)' : 'var(--muted-foreground)',
+                                }}
+                                onClick={(e) => handleGroupClick(group, e.currentTarget)}
+                            >
+                                {group.icon}
+                                <span>{group.label}</span>
+                                <ChevronDown style={{ width: 12, height: 12, transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+                            </button>
+                        </div>
+                    );
+                })}
+            </div>
+
+            {openGroup && openGroupData && createPortal(
+                <div
+                    data-grouped-nav-dropdown
+                    style={{
+                        position: 'absolute',
+                        top: dropdownPos.top,
+                        left: dropdownPos.left,
+                        zIndex: 99999,
+                        minWidth: DROPDOWN_WIDTH,
+                        background: 'hsl(var(--card))',
+                        border: '1px solid hsl(var(--border))',
+                        borderRadius: 8,
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+                        padding: '4px 0',
+                    }}
+                >
+                    {openGroupData.children.map((item) => {
+                        const isItemActive = activeTab === item.value;
+                        return (
+                            <button
+                                key={item.value}
+                                type="button"
+                                onClick={() => { onTabChange(item.value); setOpenGroup(null); }}
+                                style={{
+                                    width: '100%', display: 'flex', alignItems: 'center',
+                                    gap: 10, padding: '12px 16px', fontSize: 14,
+                                    border: 'none', cursor: 'pointer', textAlign: 'left',
+                                    backgroundColor: isItemActive ? 'hsl(var(--primary) / 0.1)' : 'transparent',
+                                    color: isItemActive ? 'hsl(var(--primary))' : 'hsl(var(--muted-foreground))',
+                                    fontWeight: isItemActive ? 600 : 400,
+                                }}
+                                onMouseEnter={e => { if (!isItemActive) { e.currentTarget.style.backgroundColor = 'hsl(var(--muted))'; e.currentTarget.style.color = 'hsl(var(--foreground))'; }}}
+                                onMouseLeave={e => { if (!isItemActive) { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = 'hsl(var(--muted-foreground))'; }}}
+                            >
+                                {item.icon}
+                                {item.label}
+                            </button>
+                        );
+                    })}
+                </div>,
+                document.body
+            )}
+        </div>
+    );
+};
 
 export default ProjectDetail;

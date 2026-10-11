@@ -4,13 +4,18 @@ import { toast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { Loader2 } from 'lucide-react';
+import { Loader2, CheckCircle2, Clock, Lock } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 
 const TecnicoTaskModal = ({ isOpen, onClose, onSave, task, onAllSubtasksComplete }) => {
     const [subtasks, setSubtasks] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isFetchingDetails, setIsFetchingDetails] = useState(false);
+
+    // ✅ NUEVO: Detectar si la tarea está bloqueada (pendiente de revisión o completada)
+    const isLocked = task?.estado === 'pendiente_revision' || 
+                     task?.estado === 'completada' || 
+                     task?.estado === 'completada_validada';
 
     const fetchSubtasks = useCallback(async () => {
         if (!task) return;
@@ -59,10 +64,6 @@ const TecnicoTaskModal = ({ isOpen, onClose, onSave, task, onAllSubtasksComplete
 
             if (rpcError) throw rpcError;
             
-            toast({ title: 'Progreso guardado', description: 'Se han actualizado las subtareas.' });
-            
-            await onSave();
-            
             // Re-fetch task details to check for completion
             const { data: updatedTask, error: taskDetailsError } = await supabase
                 .from('v_tareas_detalle_para_ui')
@@ -75,14 +76,17 @@ const TecnicoTaskModal = ({ isOpen, onClose, onSave, task, onAllSubtasksComplete
             const allDone = updatedTask && updatedTask.total_subtareas > 0 && updatedTask.total_subtareas === updatedTask.subtareas_completadas;
 
             if (allDone) {
-                onClose(); // Close this modal first
-                // Use a timeout to ensure the UI transitions smoothly
-                setTimeout(() => {
-                    onAllSubtasksComplete(task, subtasks[0].id);
-                }, 150);
+                toast({ 
+                    title: '¡Tarea completada!', 
+                    description: 'La tarea ha pasado a revisión.',
+                    className: 'bg-green-600 text-white'
+                });
             } else {
-                 onClose();
+                toast({ title: 'Progreso guardado', description: 'Se han actualizado las subtareas.' });
             }
+            
+            await onSave();
+            onClose();
 
         } catch (error) {
             console.error('Error saving subtasks via RPC:', error);

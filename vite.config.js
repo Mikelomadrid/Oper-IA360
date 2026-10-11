@@ -235,6 +235,19 @@ logger.error = (msg, options) => {
 
 export default defineConfig(({ mode }) => {
 	const isDev = mode !== 'production';
+	const supabaseProxyTarget = process.env.SUPABASE_PROXY_TARGET;
+	const supabaseProxy = supabaseProxyTarget
+		? {
+			'/backend-dev': {
+				target: supabaseProxyTarget,
+				changeOrigin: true,
+				// Solo para el proxy local: Windows puede interponer su certificado corporativo.
+				secure: false,
+				ws: true,
+				rewrite: (requestPath) => requestPath.replace(/^\/backend-dev/, ''),
+			},
+		}
+		: undefined;
 
 	return {
 		base: './',
@@ -249,6 +262,10 @@ export default defineConfig(({ mode }) => {
 				'Cross-Origin-Embedder-Policy': 'credentialless',
 			},
 			allowedHosts: true,
+			proxy: supabaseProxy,
+		},
+		preview: {
+			proxy: supabaseProxy,
 		},
 		resolve: {
 			extensions: ['.jsx', '.js', '.tsx', '.ts', '.json',],
@@ -263,7 +280,10 @@ export default defineConfig(({ mode }) => {
 					'@babel/traverse',
 					'@babel/generator',
 					'@babel/types'
-				]
+				],
+				output: {
+					inlineDynamicImports: true,
+				}
 			}
 		}
 	};

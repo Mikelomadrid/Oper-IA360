@@ -70,3 +70,11 @@ Nunca utilizar la eliminación como única forma de resolver una decisión. Most
 - Cada bloqueo debe explicar la causa y ofrecer una acción “Revisar”.
 - El usuario debe llegar directamente al primer elemento que requiere decisión.
 - No habilitar la acción final mientras existan bloqueos reales.
+
+### Partidas de obra y avance
+
+- Cada partida contractual muestra previsto, ejecutado, pendiente y porcentaje de avance.
+- La línea de progreso es el elemento principal: violeta en curso, verde completado y ámbar cuando existe exceso.
+- Los valores se presentan con cifras tabulares; la descripción conserva la mayor anchura disponible.
+- El registro de producción parte siempre de una partida de la obra, nunca de la biblioteca completa.
+- Las partidas sin vínculo técnico permanecen visibles, pero explican por qué todavía no permiten registrar producción.

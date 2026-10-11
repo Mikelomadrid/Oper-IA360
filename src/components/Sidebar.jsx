@@ -213,10 +213,15 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                     });
                 }
 
-                if (['admin', 'encargado'].includes(sessionRole?.rol) && !items.some(i => i.key === 'sistemas_rendimiento')) {
+                if (['admin', 'encargado'].includes(sessionRole?.rol)) {
+                    // Forzamos una única entrada canónica: algunas configuraciones antiguas
+                    // contienen la clave con otro padre y eso la oculta en el menú.
+                    items = items.filter(item =>
+                        item.key !== 'sistemas_rendimiento' && item.path !== '/inventario/rendimientos'
+                    );
                     items.push({
                         key: 'sistemas_rendimiento',
-                        label: 'SISTEMAS Y RENDIMIENTOS',
+                        label: 'PARTIDAS Y RENDIMIENTOS',
                         path: '/inventario/rendimientos',
                         parent: 'inventario',
                         orden: 47,

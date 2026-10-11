@@ -74,6 +74,9 @@ const VehiculoDetail = ({ vehiculoId, navigate }) => {
     // Editing State for Maintenance
     const [editingMaintenance, setEditingMaintenance] = useState(null);
 
+    // Editing State for Kilometraje
+    const [editingKm, setEditingKm] = useState(null);
+
     // Modals State
     const [modalOpen, setModalOpen] = useState({
         editGeneral: false,
@@ -87,6 +90,21 @@ const VehiculoDetail = ({ vehiculoId, navigate }) => {
 
     const canManage = ['admin', 'encargado'].includes(sessionRole?.rol);
     const canRegisterKm = ['admin', 'encargado', 'tecnico'].includes(sessionRole?.rol);
+
+    const openNewKmModal = () => {
+        setEditingKm(null);
+        setIsKmModalOpen(true);
+    };
+
+    const openEditKmModal = (record) => {
+        setEditingKm(record);
+        setIsKmModalOpen(true);
+    };
+
+    const closeKmModal = () => {
+        setIsKmModalOpen(false);
+        setEditingKm(null);
+    };
 
     // --- Fetching Data ---
 
@@ -155,6 +173,29 @@ const VehiculoDetail = ({ vehiculoId, navigate }) => {
             if (error) throw error;
             toast({ title: 'Mantenimiento eliminado' });
             refreshTab('mantenimiento');
+        } catch (error) {
+            toast({ title: 'Error', description: error.message, variant: 'destructive' });
+        }
+    };
+
+    const handleDeleteKm = async (id) => {
+        if (!window.confirm('¿Estás seguro de que deseas eliminar este registro de kilometraje? Esta acción no se puede deshacer.')) return;
+        try {
+            const { error } = await supabase.from('vehiculo_km_registro').delete().eq('id', id);
+            if (error) throw error;
+
+            // Recalculamos el km_actuales del vehículo por si el registro eliminado era el más alto
+            const { data: maxRow } = await supabase
+                .from('vehiculo_km_registro')
+                .select('km')
+                .eq('vehiculo_id', vehiculoId)
+                .order('km', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+            await supabase.from('vehiculos').update({ km_actuales: maxRow?.km ?? 0 }).eq('id', vehiculoId);
+
+            toast({ title: 'Registro de kilometraje eliminado' });
+            refreshTab('km');
         } catch (error) {
             toast({ title: 'Error', description: error.message, variant: 'destructive' });
         }
@@ -589,7 +630,7 @@ const VehiculoDetail = ({ vehiculoId, navigate }) => {
                                 </div>
                                 <div className="flex gap-2">
                                     {canRegisterKm && (
-                                        <Button onClick={() => setIsKmModalOpen(true)} className="bg-green-600 hover:bg-green-700 text-white">
+                                        <Button onClick={openNewKmModal} className="bg-green-600 hover:bg-green-700 text-white">
                                             <Gauge className="mr-2 h-4 w-4" /> Registrar KM
                                         </Button>
                                     )}
@@ -908,37 +949,70 @@ const VehiculoDetail = ({ vehiculoId, navigate }) => {
                     </TabsContent>
 
                     <TabsContent value="km">
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                            <Card className="lg:col-span-2">
+                        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                            <Card className="lg:col-span-3 overflow-hidden">
                                 <CardHeader className="flex flex-row items-center justify-between">
                                     <CardTitle>Historial de Kilometraje</CardTitle>
                                     {canRegisterKm && (
-                                        <Button onClick={() => setIsKmModalOpen(true)}>
+                                        <Button onClick={openNewKmModal}>
                                             <Plus className="mr-2 h-4 w-4" /> Registrar KM
                                         </Button>
                                     )}
                                 </CardHeader>
-                                <CardContent>
-                                    <Table>
-                                        <TableHeader><TableRow><TableHead>Fecha</TableHead><TableHead>Lectura (KM)</TableHead><TableHead>Registrado Por</TableHead><TableHead>Observación</TableHead><TableHead>Foto</TableHead></TableRow></TableHeader>
+                                <CardContent className="px-2 sm:px-4">
+                                    <div className="overflow-x-auto">
+                                    <Table className="text-sm">
+                                        <TableHeader>
+                                            <TableRow>
+                                                <TableHead className="px-2 whitespace-nowrap">Fecha</TableHead>
+                                                <TableHead className="px-2 whitespace-nowrap">KM</TableHead>
+                                                <TableHead className="px-2 whitespace-nowrap">Por</TableHead>
+                                                <TableHead className="px-2">Obs.</TableHead>
+                                                <TableHead className="px-2 whitespace-nowrap">Foto</TableHead>
+                                                {canManage && <TableHead className="px-2 text-right whitespace-nowrap">Acciones</TableHead>}
+                                            </TableRow>
+                                        </TableHeader>
                                         <TableBody>
-                                            {kms.length === 0 ? <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">No hay lecturas.</TableCell></TableRow> :
+                                            {kms.length === 0 ? <TableRow><TableCell colSpan={canManage ? 6 : 5} className="text-center text-muted-foreground">No hay lecturas.</TableCell></TableRow> :
                                             kms.map(k => (
                                                 <TableRow key={k.id}>
-                                                    <TableCell>{new Date(k.fecha).toLocaleDateString()}</TableCell>
-                                                    <TableCell className="font-mono font-bold">{k.km.toLocaleString()}</TableCell>
-                                                    <TableCell>{k.empleados?.nombre} {k.empleados?.apellidos}</TableCell>
-                                                    <TableCell className="text-muted-foreground italic max-w-[200px] truncate">{k.observacion || '-'}</TableCell>
-                                                    <TableCell>{k.foto_contador ? 
+                                                    <TableCell className="px-2 whitespace-nowrap">{new Date(k.fecha).toLocaleDateString()}</TableCell>
+                                                    <TableCell className="px-2 font-mono font-bold whitespace-nowrap">{k.km.toLocaleString()}</TableCell>
+                                                    <TableCell className="px-2 max-w-[90px] truncate" title={`${k.empleados?.nombre || ''} ${k.empleados?.apellidos || ''}`}>{k.empleados?.nombre}</TableCell>
+                                                    <TableCell className="px-2 text-muted-foreground italic max-w-[110px] truncate" title={k.observacion || ''}>{k.observacion || '-'}</TableCell>
+                                                    <TableCell className="px-2">{k.foto_contador ? 
                                                         <Dialog>
-                                                            <DialogTrigger asChild><Button variant="ghost" size="sm"><ExternalLink className="h-4 w-4" /></Button></DialogTrigger>
+                                                            <DialogTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7"><ExternalLink className="h-4 w-4" /></Button></DialogTrigger>
                                                             <DialogContent className="max-w-3xl"><img src={k.foto_contador} alt="Contador" className="w-full h-auto rounded" /></DialogContent>
                                                         </Dialog> : '-'}
                                                     </TableCell>
+                                                    {canManage && (
+                                                        <TableCell className="px-2 text-right whitespace-nowrap">
+                                                            <div className="flex justify-end gap-1">
+                                                                <Button 
+                                                                    variant="ghost" 
+                                                                    size="icon" 
+                                                                    className="h-7 w-7"
+                                                                    onClick={() => openEditKmModal(k)}
+                                                                >
+                                                                    <Edit className="h-4 w-4" />
+                                                                </Button>
+                                                                <Button 
+                                                                    variant="ghost" 
+                                                                    size="icon" 
+                                                                    className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10" 
+                                                                    onClick={() => handleDeleteKm(k.id)}
+                                                                >
+                                                                    <Trash2 className="h-4 w-4" />
+                                                                </Button>
+                                                            </div>
+                                                        </TableCell>
+                                                    )}
                                                 </TableRow>
                                             ))}
                                         </TableBody>
                                     </Table>
+                                    </div>
                                 </CardContent>
                             </Card>
                             <Card>
@@ -985,8 +1059,9 @@ const VehiculoDetail = ({ vehiculoId, navigate }) => {
 
             <KilometrajeModal 
                 isOpen={isKmModalOpen} 
-                onClose={() => setIsKmModalOpen(false)} 
+                onClose={closeKmModal} 
                 vehicle={vehicle} 
+                editingRecord={editingKm}
                 onSave={() => refreshTab('km')} 
             />
         </div>

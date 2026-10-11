@@ -45,7 +45,7 @@ const AuthCallback = ({ navigate }) => {
                     if (userRole === 'colaborador') {
                         destination = '/leads';
                     } else if (userRole === 'tecnico') {
-                        destination = '/dashboard/tecnico';
+                        destination = '/personal/fichajes';
                     } else if (userRole === 'admin' || userRole === 'encargado') {
                         destination = '/inicio';
                     }

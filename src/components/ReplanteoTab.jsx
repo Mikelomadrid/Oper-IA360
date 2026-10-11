@@ -386,10 +386,8 @@ export default function ReplanteoTab({ proyectoId }) {
         .eq("id", proyectoId)
         .single();
 
-      // 4. Construir prompt para Claude
-      const apiKey = window.ANTHROPIC_CONFIG?.apiKey;
-      if (!apiKey) throw new Error("No se encontró la API key de Anthropic en window.ANTHROPIC_CONFIG");
-
+      // 4. Construir el prompt. Las credenciales del proveedor de IA
+      // pertenecen exclusivamente a la Edge Function, nunca al navegador.
       const promptPartidas =
         partidas && partidas.length > 0
           ? partidas.map((p) => `- ${p.descripcion || p.codigo || JSON.stringify(p)} (${p.cantidad_total || ''} ${p.unidad || ''} x ${p.precio_unitario || ''}€)`).join("\n")

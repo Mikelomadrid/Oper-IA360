@@ -335,13 +335,13 @@ const HomeView = () => {
       let tareasBaseQuery;
       let tareasQuery;
       if (isAdminOrEncargado) {
-        tareasBaseQuery = supabase.from('tareas').select('created_at', { count: 'exact' }).in('estado', ['pendiente', 'en_progreso', 'pendiente_revision']);
-        tareasQuery = supabase.from('tareas').select('created_at', { count: 'exact' }).in('estado', ['pendiente', 'en_progreso', 'pendiente_revision']);
+        tareasBaseQuery = supabase.from('tareas').select('fecha_creacion', { count: 'exact' }).in('estado', ['pendiente', 'en_progreso', 'pendiente_revision']);
+        tareasQuery = supabase.from('tareas').select('fecha_creacion', { count: 'exact' }).in('estado', ['pendiente', 'en_progreso', 'pendiente_revision']);
       } else {
         const { data: misAsignaciones } = await supabase.from('tarea_empleados').select('tarea_id').eq('empleado_id', empleadoId);
         const misTareasIdsTemp = misAsignaciones?.map(a => a.tarea_id) || [];
-        tareasBaseQuery = supabase.from('tareas').select('created_at', { count: 'exact' }).in('estado', ['pendiente', 'en_progreso', 'pendiente_revision']);
-        tareasQuery = supabase.from('tareas').select('created_at', { count: 'exact' }).in('estado', ['pendiente', 'en_progreso', 'pendiente_revision']);
+        tareasBaseQuery = supabase.from('tareas').select('fecha_creacion', { count: 'exact' }).in('estado', ['pendiente', 'en_progreso', 'pendiente_revision']);
+        tareasQuery = supabase.from('tareas').select('fecha_creacion', { count: 'exact' }).in('estado', ['pendiente', 'en_progreso', 'pendiente_revision']);
         if (misTareasIdsTemp.length > 0) {
           tareasBaseQuery = tareasBaseQuery.or(`empleado_asignado_id.eq.${empleadoId},id.in.(${misTareasIdsTemp.join(',')})`);
           tareasQuery = tareasQuery.or(`empleado_asignado_id.eq.${empleadoId},id.in.(${misTareasIdsTemp.join(',')})`);
@@ -351,7 +351,7 @@ const HomeView = () => {
         }
       }
       const tareasBaseTask = tareasBaseQuery.then(res => ({ raw: res.count || 0 }));
-      if (viewsMap['tareas']) tareasQuery = tareasQuery.gt('created_at', viewsMap['tareas']);
+      if (viewsMap['tareas']) tareasQuery = tareasQuery.gt('fecha_creacion', viewsMap['tareas']);
 
       // 3. HERRAMIENTAS
       let toolsBaseQuery = supabase.from('herramienta_asignaciones').select('created_at', { count: 'exact' }).eq('entregada_a', empleadoId).eq('estado', 'pendiente_aceptacion');
@@ -360,19 +360,19 @@ const HomeView = () => {
       if (viewsMap['herramientas']) toolsQuery = toolsQuery.gt('created_at', viewsMap['herramientas']);
 
       // 4. MATERIALES
-      let materialsBaseQuery = supabase.from('solicitudes_material').select('created_at', { count: 'exact' }).eq('empleado_solicitante_id', empleadoId).in('estado_solicitud', ['gestionada', 'en_reparto', 'entregada']);
-      let materialsQuery = supabase.from('solicitudes_material').select('created_at', { count: 'exact' }).eq('empleado_solicitante_id', empleadoId).in('estado_solicitud', ['gestionada', 'en_reparto', 'entregada']);
+      let materialsBaseQuery = supabase.from('solicitudes_material').select('fecha_solicitud', { count: 'exact' }).eq('empleado_solicitante_id', empleadoId).in('estado_solicitud', ['gestionada', 'entregada']);
+      let materialsQuery = supabase.from('solicitudes_material').select('fecha_solicitud', { count: 'exact' }).eq('empleado_solicitante_id', empleadoId).in('estado_solicitud', ['gestionada', 'entregada']);
       const materialsBaseTask = materialsBaseQuery.then(res => ({ raw: res.count || 0 }));
-      if (viewsMap['materiales']) materialsQuery = materialsQuery.gt('created_at', viewsMap['materiales']);
+      if (viewsMap['materiales']) materialsQuery = materialsQuery.gt('fecha_solicitud', viewsMap['materiales']);
 
       // 5. PEDIDOS
       let pedidosQuery;
       let pedidosBaseTask;
       if (isAdminOrEncargado) {
-        let pedidosBaseQuery = supabase.from('solicitudes_material').select('created_at', { count: 'exact' }).eq('estado_solicitud', 'pendiente');
-        pedidosQuery = supabase.from('solicitudes_material').select('created_at', { count: 'exact' }).eq('estado_solicitud', 'pendiente');
+        let pedidosBaseQuery = supabase.from('solicitudes_material').select('fecha_solicitud', { count: 'exact' }).eq('estado_solicitud', 'pendiente');
+        pedidosQuery = supabase.from('solicitudes_material').select('fecha_solicitud', { count: 'exact' }).eq('estado_solicitud', 'pendiente');
         pedidosBaseTask = pedidosBaseQuery.then(res => ({ raw: res.count || 0 }));
-        if (viewsMap['pedidos']) pedidosQuery = pedidosQuery.gt('created_at', viewsMap['pedidos']);
+        if (viewsMap['pedidos']) pedidosQuery = pedidosQuery.gt('fecha_solicitud', viewsMap['pedidos']);
       } else {
         pedidosQuery = Promise.resolve({ count: 0 });
         pedidosBaseTask = Promise.resolve({ raw: 0 });

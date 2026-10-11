@@ -2,8 +2,10 @@
  * LeadStatusSelector.jsx
  * 
  * ROLE BEHAVIOR:
- * - Admin ('admin'): Can interact with the dropdown to change the lead status.
- * - Non-Admin (Encargado, Tecnico, Colaborador): Read-only view. The status is displayed as a colored badge.
+ * - El padre (LeadDetail) decide quién puede editar mediante el prop `canEdit`.
+ *   Actualmente: admin, encargado, y técnico asignado al lead (por empleado_asignado_id
+ *   o por leads_asignaciones) pueden interactuar con el desplegable.
+ * - Cualquier otro caso: vista de solo lectura. El estado se muestra como badge de color.
  * 
  * Implementation Details:
  * - Fetches status options from @/utils/leadStatus.js
@@ -14,10 +16,17 @@
  * (a) Status selector is visible in detail view.
  * (b) Status colors are synchronized with donut chart (STATUS_COLORS).
  * (c) Color consistency maintained across views.
+ *
+ * NUEVO (visita agendada):
+ * - Al pasar el estado a 'visita_agendada' desde este selector, se abre un popup que
+ *   pide la fecha y hora de la visita y guarda `estado` + `fecha_visita` a la vez.
+ * - Si el lead ya tenía `fecha_visita`, se precarga en el popup.
+ * - Esto evita que un lead quede en 'visita_agendada' sin fecha (caso que dejaba la
+ *   ficha en "N/A" y la visita fuera del calendario).
  */
 
 import React, { useState } from 'react';
-import { Loader2, Check } from 'lucide-react';
+import { Loader2, Check, CalendarDays } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useToast } from '@/components/ui/use-toast';
 import {
@@ -27,30 +36,60 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 import { EstadoBadge } from '@/components/LeadStatusBadge';
 import { FORM_STATUS_OPTIONS, STATUS_COLORS } from '@/utils/leadStatus';
 import BudgetPopup from '@/components/BudgetPopup';
 
-const LeadStatusSelector = ({ currentStatus, leadId, userRole, onStatusChange }) => {
+// Convierte un ISO/timestamptz a string compatible con <input type="datetime-local">
+const toDatetimeLocal = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return '';
+  const offset = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - offset).toISOString().slice(0, 16);
+};
+
+const LeadStatusSelector = ({ currentStatus, leadId, userRole, canEdit = false, onStatusChange }) => {
   const { toast } = useToast();
   const [isUpdating, setIsUpdating] = useState(false);
   const [status, setStatus] = useState(currentStatus);
   const [isBudgetPopupOpen, setIsBudgetPopupOpen] = useState(false);
   const [pendingStatus, setPendingStatus] = useState(null);
 
+  // Popup de fecha de visita
+  const [isVisitPopupOpen, setIsVisitPopupOpen] = useState(false);
+  const [visitDate, setVisitDate] = useState('');
+  const [loadingVisitPrefill, setLoadingVisitPrefill] = useState(false);
+
   // Sync internal state if prop changes
   React.useEffect(() => {
     setStatus(currentStatus);
   }, [currentStatus]);
 
-  const isAdmin = userRole === 'admin';
-
-  const executeStatusUpdate = async (newStatus, baseImponible = null) => {
+  const executeStatusUpdate = async (newStatus, baseImponible = null, fechaVisita = undefined) => {
     setIsUpdating(true);
     try {
       const updatePayload = { estado: newStatus };
       if (baseImponible !== null) {
         updatePayload.base_imponible = baseImponible;
+      }
+      // Si se pasa fechaVisita (incluido null explícito), se actualiza la fecha.
+      // Al agendar visita guardamos también el estado previo para poder restaurarlo
+      // si más adelante se elimina la fecha desde el modal de edición.
+      if (fechaVisita !== undefined) {
+        updatePayload.fecha_visita = fechaVisita;
+        updatePayload.previous_status = status;
       }
 
       const { error } = await supabase
@@ -82,18 +121,41 @@ const LeadStatusSelector = ({ currentStatus, leadId, userRole, onStatusChange })
     } finally {
       setIsUpdating(false);
       setIsBudgetPopupOpen(false);
+      setIsVisitPopupOpen(false);
       setPendingStatus(null);
     }
   };
 
+  // Abre el popup de visita y precarga la fecha existente (si la hubiera)
+  const openVisitPopup = async () => {
+    setPendingStatus('visita_agendada');
+    setVisitDate('');
+    setIsVisitPopupOpen(true);
+    setLoadingVisitPrefill(true);
+    try {
+      const { data } = await supabase
+        .from('leads')
+        .select('fecha_visita')
+        .eq('id', leadId)
+        .single();
+      if (data?.fecha_visita) {
+        setVisitDate(toDatetimeLocal(data.fecha_visita));
+      }
+    } catch (e) {
+      // Si falla la precarga, simplemente se deja vacío.
+    } finally {
+      setLoadingVisitPrefill(false);
+    }
+  };
+
   const handleUpdateStatus = (newStatus) => {
-    console.log("=== handleUpdateStatus TRIGGERED ===", newStatus, "Current Status:", status);
     if (newStatus === status) return;
 
     if (newStatus === 'presupuestado') {
-      console.log("Opening Budget Popup for PRESUPUESTADO");
       setPendingStatus(newStatus);
       setIsBudgetPopupOpen(true);
+    } else if (newStatus === 'visita_agendada') {
+      openVisitPopup();
     } else {
       executeStatusUpdate(newStatus);
     }
@@ -110,17 +172,30 @@ const LeadStatusSelector = ({ currentStatus, leadId, userRole, onStatusChange })
     setStatus(currentStatus);
   };
 
+  const handleVisitConfirm = () => {
+    if (!visitDate) return;
+    const iso = new Date(visitDate).toISOString();
+    executeStatusUpdate('visita_agendada', null, iso);
+  };
+
+  const handleVisitClose = () => {
+    setIsVisitPopupOpen(false);
+    setPendingStatus(null);
+    setVisitDate('');
+    // El cambio se cancela: restauramos el select al estado actual
+    setStatus(currentStatus);
+  };
 
   // Render Logic - Read Only
-  if (!isAdmin) {
+  if (!canEdit) {
     return (
-      <div title="Solo administradores pueden cambiar el estado">
+      <div title="No tienes permiso para cambiar el estado de este lead">
         <EstadoBadge estado={status} />
       </div>
     );
   }
 
-  // Admin Editable View
+  // Editable View (admin, encargado, o técnico asignado a este lead)
   return (
     <>
       <div className="flex items-center">
@@ -175,6 +250,48 @@ const LeadStatusSelector = ({ currentStatus, leadId, userRole, onStatusChange })
         onConfirm={handleBudgetConfirm}
         isSubmitting={isUpdating}
       />
+
+      {/* Popup de fecha y hora de la visita */}
+      <Dialog open={isVisitPopupOpen} onOpenChange={(open) => { if (!open) handleVisitClose(); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarDays className="h-5 w-5 text-primary" />
+              Agendar visita
+            </DialogTitle>
+            <DialogDescription>
+              Indica la fecha y la hora de la visita. Se guardará junto con el estado
+              "Visita Agendada" y aparecerá en el calendario del técnico asignado.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2 py-2">
+            <Label htmlFor="visit-date">Fecha y hora de la visita</Label>
+            <Input
+              id="visit-date"
+              type="datetime-local"
+              value={visitDate}
+              onChange={(e) => setVisitDate(e.target.value)}
+              disabled={loadingVisitPrefill || isUpdating}
+            />
+            {loadingVisitPrefill && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" /> Cargando fecha previa...
+              </p>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={handleVisitClose} disabled={isUpdating}>
+              Cancelar
+            </Button>
+            <Button onClick={handleVisitConfirm} disabled={!visitDate || isUpdating}>
+              {isUpdating ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CalendarDays className="h-4 w-4 mr-2" />}
+              Agendar visita
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };

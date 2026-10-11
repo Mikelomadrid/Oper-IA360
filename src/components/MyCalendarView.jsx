@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Calendar } from '@/components/ui/calendar';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -8,32 +9,76 @@ import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { supabase } from '@/lib/customSupabaseClient';
 import { format, isSameDay, startOfMonth, endOfMonth, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { Loader2, Calendar as CalendarIcon, Info, Briefcase, User, MapPin, CheckCircle2, AlertTriangle, Palmtree, AlertCircle, Banknote, Users } from 'lucide-react';
+import { Loader2, Calendar as CalendarIcon, Info, Briefcase, User, MapPin, CheckCircle2, AlertTriangle, Palmtree, AlertCircle, Banknote, Users, HeartPulse, Building2, FileWarning } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import DashboardCalendar from '@/components/DashboardCalendar';
 import { filterEventsByRole } from '@/utils/calendarPermissions';
 
 // --- HELPER CONSTANTS & FUNCTIONS ---
 
+// Tipos de evento que NO son ausencias (ausencias se resuelven aparte, ver AUSENCIA_TIPOS)
 const EVENT_TYPES = {
   FESTIVO: { color: 'bg-red-500', text: 'Festivo', icon: Palmtree },
-  VACACIONES: { color: 'bg-green-500', text: 'Vacaciones', icon: Palmtree },
-  AUSENCIA: { color: 'bg-purple-500', text: 'Ausencia', icon: AlertCircle },
+  AUSENCIA: { color: 'bg-purple-500', text: 'Ausencia', icon: AlertCircle }, // fallback si el tipo no está mapeado
   TAREA: { color: 'bg-blue-500', text: 'Tarea', icon: CheckCircle2 },
   PARTE: { color: 'bg-orange-500', text: 'Parte Trabajo', icon: Briefcase },
   VISITA: { color: 'bg-indigo-500', text: 'Visita Comercial', icon: Users },
-  EVENTO: { color: 'bg-sky-500', text: 'Evento Agenda', icon: CalendarIcon }, // New Type for generic calendar events
+  EVENTO: { color: 'bg-sky-500', text: 'Evento Agenda', icon: CalendarIcon },
   MODIFICACION: { color: 'bg-yellow-500', text: 'Modificación', icon: AlertTriangle },
   FIN_DE_SEMANA: { color: 'bg-blue-100/50 dark:bg-blue-900/30', text: 'Fin de Semana', icon: CalendarIcon },
 };
 
-const getEventColor = (type) => EVENT_TYPES[type]?.color || 'bg-gray-500';
-const getEventIcon = (type) => EVENT_TYPES[type]?.icon || Info;
+// Única fuente de verdad para tipos de ausencia (tabla ausencias_empleados.tipo).
+// "vacaciones" es el único tipo que antes se duplicaba con vacaciones_solicitudes.
+const AUSENCIA_TIPOS = {
+  vacaciones: { color: 'bg-green-500', label: 'Vacaciones', icon: Palmtree },
+  baja: { color: 'bg-red-400', label: 'Baja Médica', icon: HeartPulse },
+  sin_justificar: { color: 'bg-gray-500', label: 'Falta Injustificada', icon: FileWarning },
+  vacaciones_empresa: { color: 'bg-teal-500', label: 'Cierre Empresa', icon: Building2 },
+  permiso_admin: { color: 'bg-yellow-500', label: 'Permiso', icon: AlertTriangle },
+};
+
+const getAusenciaConfig = (tipo) => AUSENCIA_TIPOS[tipo] || { color: EVENT_TYPES.AUSENCIA.color, label: tipo || 'Ausencia', icon: EVENT_TYPES.AUSENCIA.icon };
+
+// Acepta el evento completo (no solo el string de tipo) para poder diferenciar
+// el color/label de una AUSENCIA según su subtipo (vacaciones, baja, etc.)
+const getEventColor = (event) => {
+  if (!event) return 'bg-gray-500';
+  if (event.type === 'AUSENCIA') return getAusenciaConfig(event.subtype).color;
+  return EVENT_TYPES[event.type]?.color || 'bg-gray-500';
+};
+
+const getEventIcon = (event) => {
+  if (!event) return Info;
+  if (event.type === 'AUSENCIA') return getAusenciaConfig(event.subtype).icon;
+  return EVENT_TYPES[event.type]?.icon || Info;
+};
+
+const getEventLabel = (event) => {
+  if (!event) return '';
+  if (event.type === 'AUSENCIA') return getAusenciaConfig(event.subtype).label;
+  return EVENT_TYPES[event.type]?.text || event.type;
+};
+
+// Leyenda: festivo + un item por cada tipo de ausencia + el resto de tipos de evento
+const LEGEND_ITEMS = [
+  { color: EVENT_TYPES.FESTIVO.color, text: EVENT_TYPES.FESTIVO.text },
+  ...Object.values(AUSENCIA_TIPOS).map(v => ({ color: v.color, text: v.label })),
+  { color: EVENT_TYPES.TAREA.color, text: EVENT_TYPES.TAREA.text },
+  { color: EVENT_TYPES.PARTE.color, text: EVENT_TYPES.PARTE.text },
+  { color: EVENT_TYPES.VISITA.color, text: EVENT_TYPES.VISITA.text },
+  { color: EVENT_TYPES.EVENTO.color, text: EVENT_TYPES.EVENTO.text },
+];
 
 // --- COMPONENT ---
 
-const MyCalendarView = ({ navigate }) => {
+const MyCalendarView = ({ navigate: navigateProp }) => {
   const { sessionRole, user, loadingAuth } = useAuth();
+  // Fallback: si el componente se renderiza desde una <Route> sin recibir el prop
+  // `navigate`, usamos el hook de react-router para que los clics naveguen igualmente.
+  const routerNavigate = useNavigate();
+  const navigate = navigateProp || routerNavigate;
+
   const [date, setDate] = useState(new Date()); 
   const [month, setMonth] = useState(new Date());
   const [events, setEvents] = useState([]);
@@ -117,44 +162,10 @@ const MyCalendarView = ({ navigate }) => {
         // We fetch broader data and filter it using JS utility to ensure 
         // consistent logic. Crucially, we now fetch `auth_user_id` to enforce Mikelo's privacy.
 
-        // 2. Vacaciones
-        // Fetch including employee auth_user_id for filtering
-        let vacQuery = supabase
-          .from('vacaciones_solicitudes')
-          .select('*, empleados:vacaciones_solicitudes_empleado_id_fkey(id, nombre, apellidos, rol, auth_user_id)')
-          .or(`fecha_inicio.gte.${start},fecha_fin.lte.${end}`);
-        
-        if (sessionRole.rol === 'tecnico') {
-           vacQuery = vacQuery.eq('empleado_id', sessionRole.id);
-        }
-
-        const { data: vacaciones } = await vacQuery;
-        
-        if (vacaciones) {
-          vacaciones.forEach(v => {
-            if (v.estado === 'rechazada') return; 
-            
-            let curr = parseISO(v.fecha_inicio);
-            const endV = parseISO(v.fecha_fin);
-            
-            while (curr <= endV) {
-              if (curr >= startOfMonth(month) && curr <= endOfMonth(month)) {
-                allEvents.push({
-                  id: v.id + '_' + curr.toISOString(),
-                  date: new Date(curr),
-                  type: 'VACACIONES',
-                  title: (v.empleados?.nombre || 'Empleado'),
-                  description: v.estado,
-                  details: v,
-                  owner: v.empleados // { id, rol, auth_user_id }
-                });
-              }
-              curr.setDate(curr.getDate() + 1);
-            }
-          });
-        }
-
-        // 3. Ausencias
+        // 2. Ausencias (fuente ÚNICA para vacaciones, bajas, faltas injustificadas, etc.)
+        // NOTA: antes también se consultaba `vacaciones_solicitudes` por separado, lo que
+        // duplicaba el evento de vacaciones (esa tabla ya genera automáticamente su fila
+        // espejo en ausencias_empleados al aprobarse). Se elimina esa consulta duplicada.
         let ausQuery = supabase
           .from('ausencias_empleados')
           .select('*, empleados:ausencias_empleados_empleado_id_fkey(id, nombre, apellidos, rol, auth_user_id)')
@@ -176,9 +187,11 @@ const MyCalendarView = ({ navigate }) => {
                   id: a.id + '_' + curr.toISOString(),
                   date: new Date(curr),
                   type: 'AUSENCIA',
+                  subtype: a.tipo, // 'vacaciones' | 'baja' | 'sin_justificar' | 'vacaciones_empresa' | 'permiso_admin'
                   title: (a.empleados?.nombre || 'Empleado'),
-                  description: a.tipo,
+                  description: getAusenciaConfig(a.tipo).label,
                   details: a,
+                  assignee: a.empleados?.nombre,
                   owner: a.empleados
                 });
               }
@@ -187,7 +200,7 @@ const MyCalendarView = ({ navigate }) => {
           });
         }
 
-        // 4. Tareas
+        // 3. Tareas
         let taskQuery = supabase
           .from('tareas')
           .select('*, empleados:empleado_asignado_id(id, nombre, apellidos, rol, auth_user_id), proyectos(nombre_proyecto)')
@@ -212,7 +225,7 @@ const MyCalendarView = ({ navigate }) => {
           })));
         }
 
-        // 5. Partes de Trabajo
+        // 4. Partes de Trabajo
         let partesQuery = supabase
           .from('partes')
           .select('*, tecnico:tecnico_asignado_id(id, nombre, apellidos, rol, auth_user_id)')
@@ -237,7 +250,7 @@ const MyCalendarView = ({ navigate }) => {
           })));
         }
 
-        // 6. Visitas de Leads
+        // 5. Visitas de Leads
         let leadsQuery = supabase
           .from('leads')
           .select('id, nombre_contacto, nombre_empresa, fecha_visita, direccion, empleado_asignado_id, empleados:empleado_asignado_id(id, nombre, apellidos, rol, auth_user_id)')
@@ -262,7 +275,7 @@ const MyCalendarView = ({ navigate }) => {
           })));
         }
 
-        // 7. Eventos de Agenda (Desde vista v_calendar_events_mis_visitas)
+        // 6. Eventos de Agenda (Desde vista v_calendar_events_mis_visitas)
         // Se cargan eventos generales/Google Calendar a través de la vista
         // en lugar de usar la tabla calendar_events directamente.
         const { data: agendaEvents } = await supabase
@@ -313,7 +326,7 @@ const MyCalendarView = ({ navigate }) => {
 
   const calendarModifiers = useMemo(() => ({
     holiday: (date) => events.some(e => isSameDay(e.date, date) && e.type === 'FESTIVO'),
-    hasEvent: (date) => events.some(e => isSameDay(e.date, date) && ['TAREA', 'PARTE', 'VACACIONES', 'AUSENCIA', 'VISITA', 'EVENTO'].includes(e.type)),
+    hasEvent: (date) => events.some(e => isSameDay(e.date, date) && ['TAREA', 'PARTE', 'AUSENCIA', 'VISITA', 'EVENTO'].includes(e.type)),
     weekend: (day) => day.getDay() === 0 || day.getDay() === 6,
   }), [events]);
 
@@ -328,7 +341,7 @@ const MyCalendarView = ({ navigate }) => {
           {dots.map((ev, i) => (
             <div 
               key={i} 
-              className={cn("w-1.5 h-1.5 rounded-full", getEventColor(ev.type))} 
+              className={cn("w-1.5 h-1.5 rounded-full", getEventColor(ev))} 
             />
           ))}
           {dayEvents.length > 4 && <span className="text-[8px] leading-none text-muted-foreground">+</span>}
@@ -412,7 +425,7 @@ const MyCalendarView = ({ navigate }) => {
                 </div>
               ) : (
                 selectedDayEvents.map((event, idx) => {
-                  const Icon = getEventIcon(event.type);
+                  const Icon = getEventIcon(event);
                   return (
                     <div 
                       key={idx} 
@@ -422,12 +435,12 @@ const MyCalendarView = ({ navigate }) => {
                         ['VISITA', 'PARTE', 'TAREA'].includes(event.type) && "cursor-pointer"
                       )}
                     >
-                      <div className={cn("mt-1 w-1.5 self-stretch rounded-full shrink-0", getEventColor(event.type))} />
+                      <div className={cn("mt-1 w-1.5 self-stretch rounded-full shrink-0", getEventColor(event))} />
                       
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <Badge variant="outline" className="text-[10px] h-5 px-1.5 bg-background">
-                            {event.type}
+                            {getEventLabel(event)}
                           </Badge>
                           <span className="text-xs text-muted-foreground ml-auto font-mono">
                             {format(event.date, 'HH:mm') !== '00:00' ? format(event.date, 'HH:mm') : 'Todo el día'}
@@ -484,10 +497,10 @@ const MyCalendarView = ({ navigate }) => {
         
         {/* Legend */}
         <div className="flex flex-wrap gap-2 text-xs">
-          {Object.entries(EVENT_TYPES).map(([key, config]) => (
-            <div key={key} className="flex items-center gap-1.5 bg-card border px-2 py-1 rounded-md">
-              <div className={cn("w-2.5 h-2.5 rounded-full", config.color)} />
-              <span>{config.text}</span>
+          {LEGEND_ITEMS.map((item, i) => (
+            <div key={i} className="flex items-center gap-1.5 bg-card border px-2 py-1 rounded-md">
+              <div className={cn("w-2.5 h-2.5 rounded-full", item.color)} />
+              <span>{item.text}</span>
             </div>
           ))}
         </div>

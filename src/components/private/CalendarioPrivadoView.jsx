@@ -26,6 +26,49 @@ import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { filterEventsByRole } from '@/utils/calendarPermissions';
 import { useNavigate } from 'react-router-dom';
 
+// Única fuente de verdad para tipos de ausencia (tabla ausencias_empleados.tipo).
+// Antes, "vacaciones" se duplicaba porque también se consultaba v_vacaciones_solicitudes
+// por separado (esa tabla ya genera automáticamente su fila espejo en ausencias_empleados
+// al aprobarse la solicitud). Se elimina esa consulta y se deja ausencias_empleados como
+// única fuente, diferenciando color/etiqueta por el campo `tipo`.
+const AUSENCIA_COLORS = {
+  vacaciones: 'bg-purple-400',
+  baja: 'bg-rose-500',
+  sin_justificar: 'bg-gray-400',
+  vacaciones_empresa: 'bg-teal-500',
+  permiso_admin: 'bg-yellow-500',
+};
+const AUSENCIA_LABELS = {
+  vacaciones: 'Vacaciones',
+  baja: 'Baja Médica',
+  sin_justificar: 'Falta Injustificada',
+  vacaciones_empresa: 'Cierre Empresa',
+  permiso_admin: 'Permiso',
+};
+const getAusenciaColor = (tipo) => AUSENCIA_COLORS[tipo] || 'bg-orange-400';
+const getAusenciaLabel = (tipo) => AUSENCIA_LABELS[tipo] || 'Ausencia';
+
+// Color de punto/franja para cualquier tipo de evento del calendario.
+const getDotColor = (ev) => {
+  if (ev.type === 'ausencia') return getAusenciaColor(ev.tipo);
+  switch (ev.type) {
+    case 'festivo': return 'bg-red-500';
+    case 'cierre': return 'bg-red-800';
+    case 'proyecto': return 'bg-slate-500';
+    case 'factura_emitida': return 'bg-green-600';
+    case 'gasto': return 'bg-red-400';
+    case 'visita_lead': return 'bg-indigo-500';
+    case 'visita_parte': return 'bg-cyan-500';
+    default: return 'bg-blue-400';
+  }
+};
+
+// Etiqueta legible mostrada en la tarjeta de evento del panel lateral.
+const getEventTypeLabel = (ev) => {
+  if (ev.type === 'ausencia') return getAusenciaLabel(ev.tipo);
+  return ev.type.replace('_', ' ').replace('visita_lead', 'Comercial').replace('visita_parte', 'Técnica');
+};
+
 const CalendarioPrivadoView = () => {
   const { user, sessionRole } = useAuth();
   const navigate = useNavigate();
@@ -102,9 +145,13 @@ const CalendarioPrivadoView = () => {
         };
 
         // --- 2. Standard HR Events ---
-        const { data: vacaciones } = await supabase.from('v_vacaciones_solicitudes').select('*') 
-          .or(`fecha_inicio.gte.${fetchRange.start},fecha_fin.lte.${fetchRange.end}`);
-        const { data: ausencias } = await supabase.from('ausencias_empleados').select('*')
+        // NOTA: antes también se consultaba v_vacaciones_solicitudes por separado, lo que
+        // duplicaba el evento de vacaciones (esa tabla ya genera automáticamente su fila
+        // espejo en ausencias_empleados al aprobarse). ausencias_empleados es ahora la
+        // única fuente para vacaciones, bajas, faltas injustificadas, cierres de empresa
+        // marcados como ausencia individual, y permisos.
+        const { data: ausencias } = await supabase.from('ausencias_empleados')
+          .select('*, empleado:empleados!ausencias_empleados_empleado_id_fkey(nombre, apellidos)')
           .or(`fecha_inicio.gte.${fetchRange.start},fecha_fin.lte.${fetchRange.end}`);
         const { data: festivos } = await supabase.from('calendario_festivos').select('*')
           .gte('fecha', fetchRange.start).lte('fecha', fetchRange.end);
@@ -130,9 +177,15 @@ const CalendarioPrivadoView = () => {
 
         // Merge Everything
         const merged = [
-          // HR Base
-          ...(vacaciones || []).map(i => ({ ...i, type: 'vacacion', date: i.fecha_inicio, dateEnd: i.fecha_fin, owner: enrichOwner(i) })),
-          ...(ausencias || []).map(i => ({ ...i, type: 'ausencia', date: i.fecha_inicio, dateEnd: i.fecha_fin, owner: enrichOwner(i) })),
+          // HR Base (fuente única: ausencias_empleados, con `tipo` incluyendo 'vacaciones')
+          ...(ausencias || []).map(i => ({
+            ...i,
+            type: 'ausencia',
+            date: i.fecha_inicio,
+            dateEnd: i.fecha_fin,
+            nombreEmpleado: i.empleado ? `${i.empleado.nombre || ''} ${i.empleado.apellidos || ''}`.trim() || 'Empleado' : 'Empleado',
+            owner: enrichOwner(i)
+          })),
           ...(festivos || []).map(i => ({ ...i, type: 'festivo', date: i.fecha, title: i.descripcion || 'Festivo', owner: null })),
           ...(cierres || []).map(i => ({ ...i, type: 'cierre', date: i.start_date, dateEnd: i.end_date, title: i.name || 'Cierre Empresa', owner: null })),
           ...(proyectos || []).map(i => ({ ...i, type: 'proyecto', date: i.fecha_inicio, dateEnd: i.fecha_fin_estimada || i.fecha_fin_real, owner: null })), 
@@ -220,19 +273,7 @@ const CalendarioPrivadoView = () => {
           {dailyEvents.slice(0, 5).map((ev, i) => (
             <div 
               key={i} 
-              className={cn(
-                "w-1.5 h-1.5 rounded-full",
-                ev.type === 'vacacion' ? "bg-purple-400" :
-                ev.type === 'ausencia' ? "bg-orange-400" :
-                ev.type === 'festivo' ? "bg-red-500" :
-                ev.type === 'cierre' ? "bg-red-800" :
-                ev.type === 'proyecto' ? "bg-slate-500" :
-                ev.type === 'factura_emitida' ? "bg-green-600" :
-                ev.type === 'gasto' ? "bg-red-400" :
-                ev.type === 'visita_lead' ? "bg-indigo-500" :
-                ev.type === 'visita_parte' ? "bg-cyan-500" :
-                "bg-blue-400" // Generico
-              )}
+              className={cn("w-1.5 h-1.5 rounded-full", getDotColor(ev))}
             />
           ))}
           {count > 5 && <span className="text-[6px] text-muted-foreground leading-none">+</span>}
@@ -244,11 +285,39 @@ const CalendarioPrivadoView = () => {
   const selectedDayEvents = useMemo(() => {
     const list = activeTab === "calendario" ? eventsHR : eventsFinance;
     const evs = getEventsForDay(selectedDate, list);
-    // Sort by time if available
-    return evs.sort((a,b) => {
-       if (a.date && b.date) return new Date(a.date) - new Date(b.date);
-       return 0;
+
+    if (activeTab !== "calendario") {
+      return evs.sort((a, b) => (a.date && b.date ? new Date(a.date) - new Date(b.date) : 0));
+    }
+
+    // Agrupar ausencias del mismo día en una sola tarjeta por tipo, listando a
+    // todos los empleados afectados (en vez de una tarjeta por empleado).
+    // "vacaciones" y "vacaciones_empresa" (cierre de empresa) se muestran juntas
+    // como un único grupo "Vacaciones", tal y como se ve para el resto de usuarios.
+    const ausenciaGroups = {};
+    const otherEvents = [];
+
+    evs.forEach(ev => {
+      if (ev.type === 'ausencia') {
+        const groupKey = (ev.tipo === 'vacaciones' || ev.tipo === 'vacaciones_empresa') ? 'vacaciones' : ev.tipo;
+        if (!ausenciaGroups[groupKey]) {
+          ausenciaGroups[groupKey] = {
+            id: `ausencia_group_${groupKey}`,
+            type: 'ausencia',
+            tipo: groupKey,
+            date: ev.date,
+            empleados: [],
+          };
+        }
+        ausenciaGroups[groupKey].empleados.push(ev.nombreEmpleado || 'Empleado');
+      } else {
+        otherEvents.push(ev);
+      }
     });
+
+    const combined = [...Object.values(ausenciaGroups), ...otherEvents];
+
+    return combined.sort((a, b) => (a.date && b.date ? new Date(a.date) - new Date(b.date) : 0));
   }, [selectedDate, activeTab, eventsHR, eventsFinance]);
 
   return (
@@ -344,28 +413,28 @@ const CalendarioPrivadoView = () => {
                   </div>
                 )}
 
-                {selectedDayEvents.map((ev, idx) => (
-                  <div key={idx} className="group relative overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm transition-all hover:shadow-md hover:border-primary/50">
-                    <div className={cn(
-                      "absolute left-0 top-0 bottom-0 w-1.5",
-                      ev.type === 'vacacion' ? "bg-purple-400" :
-                      ev.type === 'ausencia' ? "bg-orange-400" :
-                      ev.type === 'festivo' ? "bg-red-500" :
-                      ev.type === 'cierre' ? "bg-red-800" :
-                      ev.type === 'proyecto' ? "bg-slate-500" :
-                      ev.type === 'factura_emitida' ? "bg-green-600" :
-                      ev.type === 'gasto' ? "bg-red-400" :
-                      ev.type === 'visita_lead' ? "bg-indigo-500" :
-                      ev.type === 'visita_parte' ? "bg-cyan-500" :
-                      "bg-blue-400"
-                    )} />
+                {selectedDayEvents.map((ev, idx) => {
+                  // La tarjeta de visita de lead es clicable y lleva a la ficha del lead.
+                  const isLeadVisit = ev.type === 'visita_lead';
+                  return (
+                  <div
+                    key={idx}
+                    onClick={isLeadVisit ? () => navigate(`/crm/leads/${ev.id}`) : undefined}
+                    role={isLeadVisit ? 'button' : undefined}
+                    title={isLeadVisit ? 'Ver ficha del lead' : undefined}
+                    className={cn(
+                      "group relative overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm transition-all hover:shadow-md hover:border-primary/50",
+                      isLeadVisit && "cursor-pointer"
+                    )}
+                  >
+                    <div className={cn("absolute left-0 top-0 bottom-0 w-1.5", getDotColor(ev))} />
                     
                     <div className="p-3 pl-4">
                       <div className="flex justify-between items-start gap-2 mb-1">
                         <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground/80">
-                          {ev.type.replace('_', ' ').replace('visita_lead', 'Comercial').replace('visita_parte', 'Técnica')}
+                          {getEventTypeLabel(ev)}
                         </span>
-                        {ev.date && (
+                        {ev.type !== 'ausencia' && ev.date && (
                           <span className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded text-foreground/70">
                             {format(parseISO(ev.date), 'HH:mm')}
                           </span>
@@ -373,8 +442,11 @@ const CalendarioPrivadoView = () => {
                       </div>
                       
                       <h4 className="font-semibold text-sm leading-tight mb-1">
-                        {ev.title || ev.nombre_proyecto || 'Evento'}
+                        {ev.type === 'ausencia' ? ev.empleados.join(', ') : (ev.title || ev.nombre_proyecto || 'Evento')}
                       </h4>
+                      {ev.type === 'ausencia' && ev.empleados.length > 1 && (
+                        <p className="text-xs text-muted-foreground mb-1">{ev.empleados.length} empleados</p>
+                      )}
                       
                       {(ev.desc || ev.descripcion) && (
                         <p className="text-xs text-muted-foreground line-clamp-2 mb-2">
@@ -396,8 +468,9 @@ const CalendarioPrivadoView = () => {
                       
                       {ev.type === 'visita_lead' && (
                         <div className="mt-2 flex items-center gap-2 text-xs text-indigo-600 bg-indigo-50 p-1.5 rounded">
-                          <MapPin className="w-3 h-3" />
-                          <span className="truncate">{ev.desc || 'Sin dirección'}</span>
+                          <MapPin className="w-3 h-3 shrink-0" />
+                          <span className="truncate flex-1">{ev.desc || 'Sin dirección'}</span>
+                          <ArrowRight className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
                         </div>
                       )}
 
@@ -411,7 +484,8 @@ const CalendarioPrivadoView = () => {
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </CardContent>
             </ScrollArea>
           </Card>

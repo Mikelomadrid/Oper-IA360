@@ -26,16 +26,20 @@ import {
     Euro,
     Clock,
     Palmtree,
-    Gavel
+    Gavel,
+    WalletCards as IdCard,
+    FileText
 } from 'lucide-react';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import EmployeeHabilidadesTab from '@/components/EmployeeHabilidadesTab';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import FileManager from '@/components/FileManager';
+import EmployeeFolders from '@/components/EmployeeFolders';
 import EmployeeAnticiposTab from '@/components/EmployeeAnticiposTab';
 import EmployeeEmbargosTab from '@/components/EmployeeEmbargosTab';
 import EmployeeHistoryTab from '@/components/EmployeeHistoryTab';
+import FichaEmpleadoAusencias from '@/components/FichaEmpleadoAusencias';
 // Removed: EmployeeHorasExtrasTab
 import HorasExtras2View from '@/components/HorasExtras2View';
 import EmployeeToolAssignmentModal from '@/components/EmployeeToolAssignmentModal';
@@ -478,6 +482,7 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                     <TabsTrigger value="datos">Datos</TabsTrigger>
                                     <TabsTrigger value="herramientas">Herramientas</TabsTrigger>
                                     <TabsTrigger value="documentacion">Documentación</TabsTrigger>
+                                    <TabsTrigger value="documentos_v2">📁 Documentos NUEVO</TabsTrigger>
                                     <TabsTrigger value="historial">Ausencias</TabsTrigger>
                                     <TabsTrigger value="extras">Horas Extras</TabsTrigger>
                                     <TabsTrigger value="habilidades">Habilidades</TabsTrigger>
@@ -515,6 +520,31 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                                     <Building2 className="w-4 h-4 text-primary/70" />
                                                     <span className="text-xs text-muted-foreground w-16">Empresa:</span>
                                                     <a href={`tel:${employee.telefono_empresa}`} className="text-sm hover:underline font-medium text-foreground">{employee.telefono_empresa || '—'}</a>
+                                                </div>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <Label className="text-xs text-muted-foreground uppercase tracking-wider">Datos Personales</Label>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <IdCard className="w-4 h-4 text-primary/70" />
+                                                    <span className="text-xs text-muted-foreground w-16">Nombre:</span>
+                                                    <span className="text-sm font-medium text-foreground">{employee.nombre_completo || '—'}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <CreditCard className="w-4 h-4 text-primary/70" />
+                                                    <span className="text-xs text-muted-foreground w-16">DNI/NIE:</span>
+                                                    <span className="text-sm font-medium text-foreground">{employee.dni_nie || '—'}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <Calendar className="w-4 h-4 text-primary/70" />
+                                                    <span className="text-xs text-muted-foreground w-16">Nacimiento:</span>
+                                                    <span className="text-sm font-medium text-foreground">
+                                                        {employee.fecha_nacimiento ? new Date(employee.fecha_nacimiento).toLocaleDateString('es-ES') : '—'}
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <FileText className="w-4 h-4 text-primary/70" />
+                                                    <span className="text-xs text-muted-foreground w-16">Nº S.S.:</span>
+                                                    <span className="text-sm font-medium text-foreground">{employee.numero_seguridad_social || '—'}</span>
                                                 </div>
                                             </div>
                                             <div className="space-y-1">
@@ -604,6 +634,10 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                 <FileManager bucketName="empleados_docs" prefix={employee.id} canEdit={isAdminOrEncargado} />
                             </TabsContent>
 
+                            <TabsContent value="documentos_v2" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                <EmployeeFolders empleadoId={employee.id} />
+                            </TabsContent>
+
                             <TabsContent value="historial" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                 <Card className="mb-6 bg-blue-50/50 border-blue-100 dark:bg-blue-950/10 dark:border-blue-900 shadow-sm rounded-lg">
                                     <CardContent className="p-4 flex items-center justify-between">
@@ -623,7 +657,12 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                         </div>
                                     </CardContent>
                                 </Card>
-                                <EmployeeHistoryTab employeeId={employee.id} />
+                                <FichaEmpleadoAusencias
+                                    employeeId={employee.id}
+                                    empleadoNombre={employee.nombre}
+                                    onChange={fetchEmployeeData}
+                                    mostrarSaldo={false}
+                                />
                             </TabsContent>
 
                             <TabsContent value="extras" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-8">

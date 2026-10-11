@@ -13,10 +13,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Search, MoreHorizontal, Edit, Trash2, Loader2, X, ScanLine, UploadCloud, Sparkles, PlusCircle, User, MapPin, Phone, Mail } from 'lucide-react';
+import { Plus, Search, MoreHorizontal, Edit, Trash2, Loader2, X, ScanLine, UploadCloud, Sparkles, PlusCircle, User, MapPin, Phone, Mail, Eye } from 'lucide-react';
 import { format } from 'date-fns';
 import { useDropzone } from 'react-dropzone';
 import { ProviderSelect } from '@/components/ProviderSelect';
+import { useFacturaViewer } from '@/hooks/useFacturaViewer';
+import FacturaViewerModal from '@/components/FacturaViewerModal';
 
 const PAGO_STATUS_DB_VALUES = ['pendiente_pago', 'parcialmente_pagada', 'pagada', 'vencida'];
 const PAGO_STATUS_LABELS = {
@@ -435,6 +437,7 @@ const Gastos = ({ projectId, navigate }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const debouncedSearch = useDebounce(searchTerm, 300);
+    const { visorFactura, abrirFacturaEscaneada, cerrarVisor, paginaSiguiente, paginaAnterior, irAPagina } = useFacturaViewer();
 
     const canManageGastos = useMemo(() => ['admin', 'encargado'].includes(sessionRole?.rol), [sessionRole]);
 
@@ -451,9 +454,15 @@ const Gastos = ({ projectId, navigate }) => {
             .eq('proyecto_id', projectId)
             .single();
 
+        // Nota: se añade el embed de facturas_gastos (id, documento_principal_id, documentos_ids)
+        // dentro del mismo embed que ya existía para gasto_etiquetas_rel, para no duplicar el join.
+        // Se usa el hint !facturas_gastos_gasto_id_fkey porque gasto_etiquetas_rel.gasto_id tiene FKs
+        // tanto a gastos.id como a facturas_gastos.id, lo que crea un camino indirecto adicional entre
+        // 'gastos' y 'facturas_gastos' y PostgREST no puede elegir automáticamente cuál usar
+        // (error "more than one relationship was found for 'gastos' and 'facturas_gastos'").
         const selectString = search
-            ? 'id, proyecto_id, proveedor:proveedores!inner(id, nombre), numero_factura, numero_referencia, concepto, fecha_emision, estado_pago, monto_bruto, iva, total_con_iva, gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)), facturas_gastos!left(gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)))'
-            : 'id, proyecto_id, proveedor:proveedores(id, nombre), numero_factura, numero_referencia, concepto, fecha_emision, estado_pago, monto_bruto, iva, total_con_iva, gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)), facturas_gastos!left(gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)))';
+            ? 'id, proyecto_id, proveedor:proveedores!inner(id, nombre), numero_factura, numero_referencia, concepto, fecha_emision, estado_pago, monto_bruto, iva, total_con_iva, gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)), facturas_gastos!facturas_gastos_gasto_id_fkey(id, documento_principal_id, documentos_ids, gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)))'
+            : 'id, proyecto_id, proveedor:proveedores(id, nombre), numero_factura, numero_referencia, concepto, fecha_emision, estado_pago, monto_bruto, iva, total_con_iva, gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)), facturas_gastos!facturas_gastos_gasto_id_fkey(id, documento_principal_id, documentos_ids, gasto_etiquetas_rel(etiqueta:gasto_etiquetas(nombre, color)))';
 
         let gastosQuery = supabase
             .from('gastos')
@@ -483,12 +492,17 @@ const Gastos = ({ projectId, navigate }) => {
             const processedGastos = (gastosResult.data || []).map(g => {
                 const directLabels = g.gasto_etiquetas_rel?.map(rel => rel.etiqueta).filter(Boolean) || [];
                 let inheritedLabels = [];
+                // facturas_gastos puede venir como array u objeto según cómo infiera PostgREST la relación;
+                // se maneja de forma defensiva igual que ya se hacía para las etiquetas heredadas.
+                let facturaInfo = null;
                 if (Array.isArray(g.facturas_gastos)) {
                      inheritedLabels = g.facturas_gastos.flatMap(fg => 
                         fg.gasto_etiquetas_rel?.map(rel => rel.etiqueta).filter(Boolean) || []
                      );
+                     facturaInfo = g.facturas_gastos[0] || null;
                 } else if (g.facturas_gastos) {
                      inheritedLabels = g.facturas_gastos.gasto_etiquetas_rel?.map(rel => rel.etiqueta).filter(Boolean) || [];
+                     facturaInfo = g.facturas_gastos;
                 }
 
                 const allLabels = [...directLabels, ...inheritedLabels];
@@ -502,9 +516,15 @@ const Gastos = ({ projectId, navigate }) => {
                     }
                 });
 
+                const numDocumentosFactura = Array.isArray(facturaInfo?.documentos_ids) ? facturaInfo.documentos_ids.length : 0;
+
                 return {
                     ...g,
-                    etiquetas: uniqueLabels
+                    etiquetas: uniqueLabels,
+                    factura_gasto_id: facturaInfo?.id || null,
+                    documento_principal_id: facturaInfo?.documento_principal_id || null,
+                    num_documentos_factura: numDocumentosFactura,
+                    tiene_documento_factura: !!facturaInfo?.documento_principal_id,
                 };
             });
             setGastos(processedGastos);
@@ -654,33 +674,46 @@ const Gastos = ({ projectId, navigate }) => {
                                         <TableCell className="text-right font-semibold">{formatCurrency(g.total_con_iva)}</TableCell>
                                         {canManageGastos && (
                                             <TableCell className="text-right">
-                                                 <AlertDialog>
-                                                    <DropdownMenu>
-                                                        <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4"/></Button></DropdownMenuTrigger>
-                                                        <DropdownMenuContent>
-                                                            <DropdownMenuItem onClick={() => { setGastoToEdit(g); setOcrData(null); setIsModalOpen(true); }}>
-                                                                <Edit className="mr-2 h-4 w-4"/>Editar
-                                                            </DropdownMenuItem>
-                                                            <AlertDialogTrigger asChild>
-                                                              <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={(e) => e.preventDefault()}><Trash2 className="mr-2 h-4 w-4"/>Eliminar</DropdownMenuItem>
-                                                            </AlertDialogTrigger>
-                                                        </DropdownMenuContent>
-                                                    </DropdownMenu>
-                                                    <AlertDialogContent>
-                                                      <AlertDialogHeader><AlertDialogTitle>¿Confirmar eliminación?</AlertDialogTitle><AlertDialogDescription>Esta acción eliminará permanentemente la factura. Escribe ELIMINAR para confirmar.</AlertDialogDescription></AlertDialogHeader>
-                                                      <Input id="delete-confirm-input" placeholder="ELIMINAR" className="my-2" />
-                                                      <AlertDialogFooter>
-                                                        <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                                        <AlertDialogAction onClick={() => {
-                                                            if (document.getElementById('delete-confirm-input').value === 'ELIMINAR') {
-                                                                handleDeleteGasto(g.id);
-                                                            } else {
-                                                                toast({ title: 'Confirmación incorrecta', variant: 'destructive'});
-                                                            }
-                                                        }} className="bg-destructive hover:bg-destructive/90">Confirmar</AlertDialogAction>
-                                                      </AlertDialogFooter>
-                                                    </AlertDialogContent>
-                                                </AlertDialog>
+                                                <div className="flex items-center justify-end gap-1">
+                                                    {g.tiene_documento_factura && g.factura_gasto_id && (
+                                                        <button
+                                                            type="button"
+                                                            title={`Ver factura escaneada (${g.num_documentos_factura || 1})`}
+                                                            aria-label="Ver factura escaneada"
+                                                            onClick={() => abrirFacturaEscaneada(g.factura_gasto_id)}
+                                                            className="inline-flex items-center justify-center rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-blue-600 dark:hover:bg-slate-800"
+                                                        >
+                                                            <Eye className="h-4 w-4" />
+                                                        </button>
+                                                    )}
+                                                    <AlertDialog>
+                                                        <DropdownMenu>
+                                                            <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4"/></Button></DropdownMenuTrigger>
+                                                            <DropdownMenuContent>
+                                                                <DropdownMenuItem onClick={() => { setGastoToEdit(g); setOcrData(null); setIsModalOpen(true); }}>
+                                                                    <Edit className="mr-2 h-4 w-4"/>Editar
+                                                                </DropdownMenuItem>
+                                                                <AlertDialogTrigger asChild>
+                                                                  <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={(e) => e.preventDefault()}><Trash2 className="mr-2 h-4 w-4"/>Eliminar</DropdownMenuItem>
+                                                                </AlertDialogTrigger>
+                                                            </DropdownMenuContent>
+                                                        </DropdownMenu>
+                                                        <AlertDialogContent>
+                                                          <AlertDialogHeader><AlertDialogTitle>¿Confirmar eliminación?</AlertDialogTitle><AlertDialogDescription>Esta acción eliminará permanentemente la factura. Escribe ELIMINAR para confirmar.</AlertDialogDescription></AlertDialogHeader>
+                                                          <Input id="delete-confirm-input" placeholder="ELIMINAR" className="my-2" />
+                                                          <AlertDialogFooter>
+                                                            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                                            <AlertDialogAction onClick={() => {
+                                                                if (document.getElementById('delete-confirm-input').value === 'ELIMINAR') {
+                                                                    handleDeleteGasto(g.id);
+                                                                } else {
+                                                                    toast({ title: 'Confirmación incorrecta', variant: 'destructive'});
+                                                                }
+                                                            }} className="bg-destructive hover:bg-destructive/90">Confirmar</AlertDialogAction>
+                                                          </AlertDialogFooter>
+                                                        </AlertDialogContent>
+                                                    </AlertDialog>
+                                                </div>
                                             </TableCell>
                                         )}
                                     </TableRow>
@@ -714,6 +747,14 @@ const Gastos = ({ projectId, navigate }) => {
                 isOpen={isOcrModalOpen}
                 onOpenChange={setIsOcrModalOpen}
                 onOcrComplete={handleOcrComplete}
+            />
+
+            <FacturaViewerModal
+                visor={visorFactura}
+                onClose={cerrarVisor}
+                onPrev={paginaAnterior}
+                onNext={paginaSiguiente}
+                onSelect={irAPagina}
             />
         </div>
     );

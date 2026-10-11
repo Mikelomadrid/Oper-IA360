@@ -54,9 +54,8 @@ const Combobox = ({
                 <CommandItem
                   key={option.value}
                   value={option.label}
-                  onSelect={(currentValue) => {
-                    const selectedValue = options.find(opt => opt.label.toLowerCase() === currentValue.toLowerCase())?.value;
-                    onSelect(selectedValue === value ? "" : selectedValue);
+                  onSelect={() => {
+                    onSelect(option.value);
                     setOpen(false);
                   }}
                 >

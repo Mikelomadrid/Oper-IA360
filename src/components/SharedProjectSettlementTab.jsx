@@ -1,17 +1,35 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/customSupabaseClient';
+import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
-import { Loader2, Save, Share2, Calculator, TrendingUp, Users, Package, Euro, CheckCircle2, AlertTriangle } from 'lucide-react';
+import {
+  Loader2, Save, Share2, Calculator, TrendingUp, Users, Package, Euro,
+  CheckCircle2, AlertTriangle, Plus, Pencil, Trash2, Receipt
+} from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from '@/components/ui/dialog';
+import {
+  Table, TableHeader, TableRow, TableHead, TableBody, TableCell,
+} from '@/components/ui/table';
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(amount || 0);
+
+const formatDate = (value) => {
+  if (!value) return '-';
+  return new Date(value + 'T00:00:00').toLocaleDateString('es-ES');
+};
+
+const emptyGasto = { id: null, concepto: '', importe: '', fecha: new Date().toISOString().slice(0, 10), notas: '' };
+const emptyPersonal = { id: null, nombre_persona: '', fecha: new Date().toISOString().slice(0, 10), horas: '', importe: '', notas: '' };
 
 // ─── Sub-components ───
 
@@ -42,23 +60,70 @@ const ResultRow = ({ label, value, bold, highlight, className = '' }) => (
   </div>
 );
 
+// Lista compacta de líneas (gastos o personal) con alta/edición/borrado.
+// Vive dentro de la tarjeta "Empresa Colaboradora", debajo de los totales AUTO.
+const SocioLineItemsSection = ({ title, icon: Icon, items, total, onAdd, onEdit, onDelete, renderRow, color = 'orange' }) => (
+  <div className="space-y-2">
+    <div className="flex items-center justify-between">
+      <span className={`text-xs uppercase tracking-wider font-semibold text-${color}-700 dark:text-${color}-400 flex items-center gap-1.5`}>
+        <Icon className="w-3.5 h-3.5" /> {title}
+      </span>
+      <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onAdd}>
+        <Plus className="w-3.5 h-3.5 mr-1" /> Añadir
+      </Button>
+    </div>
+    {items.length === 0 ? (
+      <p className="text-xs text-muted-foreground italic px-1 py-2">Sin líneas registradas.</p>
+    ) : (
+      <div className="rounded-lg border overflow-hidden">
+        <Table>
+          <TableBody>
+            {items.map((item) => (
+              <TableRow key={item.id} className="text-sm">
+                {renderRow(item)}
+                <TableCell className="w-16 py-1.5">
+                  <div className="flex gap-0.5 justify-end">
+                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => onEdit(item)}>
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => onDelete(item.id)}>
+                      <Trash2 className="h-3 w-3 text-red-500" />
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    )}
+    <div className="flex justify-between items-center px-1 pt-1">
+      <span className="text-xs text-muted-foreground">Total líneas</span>
+      <span className="text-sm font-semibold font-mono">{formatCurrency(total)}</span>
+    </div>
+  </div>
+);
+
 // ─── Main Component ───
 
 const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { sessionRole } = useAuth();
+  const empleadoId = sessionRole?.empleado_id || sessionRole?.id || null;
 
-  // ... (rest of the component remains similar until Calculations) ...
-  // Ensure the prop is used in the Calculations block (already done in previous step)
-  // Now updating the UI details below...
-
-
-  // Form state for partner data
+  // Form state for partner identity (nombre / notas) — los costes ya NO se editan a mano
   const [nombreSocio, setNombreSocio] = useState('');
-  const [costePersonalSocio, setCostePersonalSocio] = useState('');
-  const [costeMaterialesSocio, setCosteMaterialesSocio] = useState('');
   const [notas, setNotas] = useState('');
   const [isDirty, setIsDirty] = useState(false);
+
+  const [gastoDialogOpen, setGastoDialogOpen] = useState(false);
+  const [gastoDraft, setGastoDraft] = useState(emptyGasto);
+  const [savingGasto, setSavingGasto] = useState(false);
+
+  const [personalDialogOpen, setPersonalDialogOpen] = useState(false);
+  const [personalDraft, setPersonalDraft] = useState(emptyPersonal);
+  const [savingPersonal, setSavingPersonal] = useState(false);
 
   // 1. Fetch own KPIs (labor and net materials)
   const { data: costs, isLoading: loadingCosts } = useQuery({
@@ -95,11 +160,12 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
     enabled: !!projectId
   });
 
-  // 2. Fetch existing partner data
+  // 2. Fetch existing partner data (nombre, notas, y coste_personal/coste_materiales
+  //    que ahora se recalculan solos en Supabase a partir de las líneas de detalle)
   const { data: socioData, isLoading: loadingSocio } = useQuery({
     queryKey: ['settlement_socio', projectId],
     queryFn: async () => {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('obras_compartidas_socios')
         .select('*')
         .eq('proyecto_id', projectId)
@@ -108,22 +174,67 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
         console.warn('[Settlement] Error fetching socio:', error.message);
         return null;
       }
+      if (!data) {
+        const { data: created, error: createError } = await supabase
+          .from('obras_compartidas_socios')
+          .insert({ proyecto_id: projectId })
+          .select('*')
+          .single();
+        if (createError) {
+          console.warn('[Settlement] Error creating socio:', createError.message);
+          return null;
+        }
+        data = created;
+      }
       return data;
     },
     enabled: !!projectId
   });
 
-  // Populate form when socio data loads
+  // 3. Fetch partner's detail lines
+  const { data: gastosSocio = [], isLoading: loadingGastos } = useQuery({
+    queryKey: ['settlement_socio_gastos', projectId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('obras_compartidas_gastos')
+        .select('*')
+        .eq('proyecto_id', projectId)
+        .order('fecha', { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!projectId
+  });
+
+  const { data: personalSocio = [], isLoading: loadingPersonal } = useQuery({
+    queryKey: ['settlement_socio_personal', projectId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('obras_compartidas_personal')
+        .select('*')
+        .eq('proyecto_id', projectId)
+        .order('fecha', { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!projectId
+  });
+
+  // Populate identity form when socio data loads
   React.useEffect(() => {
     if (socioData && !isDirty) {
       setNombreSocio(socioData.nombre_socio || '');
-      setCostePersonalSocio(String(socioData.coste_personal || ''));
-      setCosteMaterialesSocio(String(socioData.coste_materiales || ''));
       setNotas(socioData.notas || '');
     }
   }, [socioData]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 3. Save / Upsert mutation
+  const refreshSocio = () => {
+    queryClient.invalidateQueries({ queryKey: ['settlement_socio', projectId] });
+    queryClient.invalidateQueries({ queryKey: ['settlement_socio_gastos', projectId] });
+    queryClient.invalidateQueries({ queryKey: ['settlement_socio_personal', projectId] });
+  };
+
+  // 4. Save identity (nombre / notas)
   const saveMutation = useMutation({
     mutationFn: async (payload) => {
       const { data, error } = await supabase
@@ -137,7 +248,7 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
     onSuccess: () => {
       toast({ title: '✅ Datos del socio guardados', description: 'La liquidación se ha actualizado correctamente.' });
       setIsDirty(false);
-      queryClient.invalidateQueries({ queryKey: ['settlement_socio', projectId] });
+      refreshSocio();
     },
     onError: (error) => {
       toast({ variant: 'destructive', title: 'Error al guardar', description: error.message });
@@ -153,11 +264,107 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
       ...(socioData?.id ? { id: socioData.id } : {}),
       proyecto_id: projectId,
       nombre_socio: nombreSocio.trim(),
-      coste_personal: Number(costePersonalSocio) || 0,
-      coste_materiales: Number(costeMaterialesSocio) || 0,
       notas: notas.trim() || null,
       updated_at: new Date().toISOString()
     });
+  };
+
+  // ─── Gastos CRUD ───
+  const openNewGasto = () => { setGastoDraft(emptyGasto); setGastoDialogOpen(true); };
+  const openEditGasto = (g) => { setGastoDraft({ id: g.id, concepto: g.concepto, importe: g.importe, fecha: g.fecha, notas: g.notas || '' }); setGastoDialogOpen(true); };
+
+  const handleSaveGasto = async () => {
+    if (!gastoDraft.concepto || !gastoDraft.importe) {
+      toast({ variant: 'destructive', title: 'Faltan datos', description: 'Concepto e importe son obligatorios' });
+      return;
+    }
+    setSavingGasto(true);
+    try {
+      const payload = {
+        proyecto_id: projectId,
+        concepto: gastoDraft.concepto,
+        importe: Number(gastoDraft.importe),
+        fecha: gastoDraft.fecha,
+        notas: gastoDraft.notas || null,
+      };
+      if (gastoDraft.id) {
+        const { error } = await supabase.from('obras_compartidas_gastos').update(payload).eq('id', gastoDraft.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('obras_compartidas_gastos').insert({ ...payload, created_by: empleadoId });
+        if (error) throw error;
+      }
+      setGastoDialogOpen(false);
+      refreshSocio();
+      toast({ title: gastoDraft.id ? 'Gasto actualizado' : 'Gasto añadido' });
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'No se pudo guardar el gasto', description: err.message });
+    } finally {
+      setSavingGasto(false);
+    }
+  };
+
+  const handleDeleteGasto = async (id) => {
+    if (!window.confirm('¿Eliminar este gasto?')) return;
+    try {
+      const { error } = await supabase.from('obras_compartidas_gastos').delete().eq('id', id);
+      if (error) throw error;
+      refreshSocio();
+      toast({ title: 'Gasto eliminado' });
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'No se pudo eliminar', description: err.message });
+    }
+  };
+
+  // ─── Personal CRUD ───
+  const openNewPersonal = () => { setPersonalDraft(emptyPersonal); setPersonalDialogOpen(true); };
+  const openEditPersonal = (p) => {
+    setPersonalDraft({ id: p.id, nombre_persona: p.nombre_persona, fecha: p.fecha, horas: p.horas ?? '', importe: p.importe, notas: p.notas || '' });
+    setPersonalDialogOpen(true);
+  };
+
+  const handleSavePersonal = async () => {
+    if (!personalDraft.nombre_persona || !personalDraft.importe) {
+      toast({ variant: 'destructive', title: 'Faltan datos', description: 'Nombre e importe son obligatorios' });
+      return;
+    }
+    setSavingPersonal(true);
+    try {
+      const payload = {
+        proyecto_id: projectId,
+        nombre_persona: personalDraft.nombre_persona,
+        fecha: personalDraft.fecha,
+        horas: personalDraft.horas === '' ? null : Number(personalDraft.horas),
+        importe: Number(personalDraft.importe),
+        notas: personalDraft.notas || null,
+      };
+      if (personalDraft.id) {
+        const { error } = await supabase.from('obras_compartidas_personal').update(payload).eq('id', personalDraft.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('obras_compartidas_personal').insert({ ...payload, created_by: empleadoId });
+        if (error) throw error;
+      }
+      setPersonalDialogOpen(false);
+      refreshSocio();
+      toast({ title: personalDraft.id ? 'Registro actualizado' : 'Personal añadido' });
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'No se pudo guardar', description: err.message });
+    } finally {
+      setSavingPersonal(false);
+    }
+  };
+
+  const handleDeletePersonal = async (id) => {
+    if (!window.confirm('¿Eliminar este registro?')) return;
+    try {
+      const { error } = await supabase.from('obras_compartidas_personal').delete().eq('id', id);
+      if (error) throw error;
+      refreshSocio();
+      toast({ title: 'Registro eliminado' });
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'No se pudo eliminar', description: err.message });
+    }
   };
 
   // ─── Calculations ───
@@ -167,8 +374,10 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
   const miCosteMateriales = costs?.materiales || 0;
   const miCostoTotal = miCostePersonal + miCosteMateriales;
 
-  const socioCostePersonal = Number(costePersonalSocio) || 0;
-  const socioCosteMateriales = Number(costeMaterialesSocio) || 0;
+  // Los costes del socio ya no son estado local: vienen de la fila que el trigger
+  // de Supabase mantiene al día a partir de obras_compartidas_gastos/_personal.
+  const socioCostePersonal = Number(socioData?.coste_personal) || 0;
+  const socioCosteMateriales = Number(socioData?.coste_materiales) || 0;
   const socioCostoTotal = socioCostePersonal + socioCosteMateriales;
 
   const costesGlobales = miCostoTotal + socioCostoTotal;
@@ -206,7 +415,7 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
   const socioCobro = socioCostoTotal + socioMargen;
   const verificacion = miCobro + socioCobro;
 
-  const isLoading = loadingCosts || loadingSocio;
+  const isLoading = loadingCosts || loadingSocio || loadingGastos || loadingPersonal;
 
   if (isLoading) {
     return (
@@ -253,16 +462,16 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
           </CardContent>
         </Card>
 
-        {/* ── Column 2: Costes del Socio (Manual) ── */}
+        {/* ── Column 2: Costes del Socio (líneas de detalle) ── */}
         <Card className="shadow-lg border-border/50 overflow-hidden">
           <CardHeader className="bg-gradient-to-r from-orange-500 to-red-500 text-white pb-4">
             <div className="flex items-center gap-2">
               <Share2 className="w-5 h-5" />
               <CardTitle className="text-lg">Empresa Colaboradora</CardTitle>
             </div>
-            <CardDescription className="text-orange-100/80 text-xs">Introduce los datos manualmente</CardDescription>
+            <CardDescription className="text-orange-100/80 text-xs">Nombre + líneas de gastos y personal que ellos han pagado</CardDescription>
           </CardHeader>
-          <CardContent className="p-5 space-y-4">
+          <CardContent className="p-5 space-y-5">
             <div className="space-y-2">
               <Label htmlFor="nombre_socio" className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">
                 Nombre de la Empresa
@@ -275,42 +484,50 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
                 className="h-11 font-medium"
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="coste_personal_socio" className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">
-                Coste Personal (€)
-              </Label>
-              <div className="relative">
-                <Users className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input
-                  id="coste_personal_socio"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={costePersonalSocio}
-                  onChange={(e) => { setCostePersonalSocio(e.target.value); setIsDirty(true); }}
-                  placeholder="0.00"
-                  className="pl-10 h-11 font-mono"
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="coste_materiales_socio" className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">
-                Coste Materiales (Sin IVA) (€)
-              </Label>
-              <div className="relative">
-                <Package className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input
-                  id="coste_materiales_socio"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={costeMaterialesSocio}
-                  onChange={(e) => { setCosteMaterialesSocio(e.target.value); setIsDirty(true); }}
-                  placeholder="0.00"
-                  className="pl-10 h-11 font-mono"
-                />
-              </div>
-            </div>
+
+            <CostCard icon={Users} label="Coste Personal" value={socioCostePersonal} color="orange" sublabel="Suma de las líneas de personal" auto />
+            <CostCard icon={Package} label="Coste Materiales" value={socioCosteMateriales} color="red" sublabel="Suma de las líneas de gastos" auto />
+
+            <SocioLineItemsSection
+              title="Gastos"
+              icon={Receipt}
+              items={gastosSocio}
+              total={gastosSocio.reduce((s, g) => s + Number(g.importe || 0), 0)}
+              onAdd={openNewGasto}
+              onEdit={openEditGasto}
+              onDelete={handleDeleteGasto}
+              color="red"
+              renderRow={(g) => (
+                <>
+                  <TableCell className="py-1.5">
+                    <div className="text-xs font-medium">{g.concepto}</div>
+                    <div className="text-[10px] text-muted-foreground">{formatDate(g.fecha)}</div>
+                  </TableCell>
+                  <TableCell className="text-right py-1.5 text-xs font-mono font-semibold">{formatCurrency(g.importe)}</TableCell>
+                </>
+              )}
+            />
+
+            <SocioLineItemsSection
+              title="Personal"
+              icon={Users}
+              items={personalSocio}
+              total={personalSocio.reduce((s, p) => s + Number(p.importe || 0), 0)}
+              onAdd={openNewPersonal}
+              onEdit={openEditPersonal}
+              onDelete={handleDeletePersonal}
+              color="orange"
+              renderRow={(p) => (
+                <>
+                  <TableCell className="py-1.5">
+                    <div className="text-xs font-medium">{p.nombre_persona}</div>
+                    <div className="text-[10px] text-muted-foreground">{formatDate(p.fecha)}{p.horas ? ` · ${p.horas}h` : ''}</div>
+                  </TableCell>
+                  <TableCell className="text-right py-1.5 text-xs font-mono font-semibold">{formatCurrency(p.importe)}</TableCell>
+                </>
+              )}
+            />
+
             <div className="space-y-2">
               <Label htmlFor="notas_socio" className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">
                 Notas (opcional)
@@ -324,6 +541,7 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
                 className="resize-none"
               />
             </div>
+
             <div className="border-t pt-4 mt-4">
               <div className="flex justify-between items-center">
                 <span className="font-bold text-foreground">Total Gastos</span>
@@ -334,7 +552,7 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
         </Card>
       </div>
 
-      {/* ── Save Button ── */}
+      {/* ── Save Button (solo nombre + notas; los costes se guardan solos) ── */}
       <div className="flex justify-end">
         <Button
           onClick={handleSave}
@@ -346,7 +564,7 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
           ) : (
             <Save className="w-5 h-5 mr-2" />
           )}
-          Guardar Datos del Socio
+          Guardar Nombre / Notas del Socio
         </Button>
       </div>
 
@@ -452,6 +670,119 @@ const SharedProjectSettlementTab = ({ projectId, budget, sharingModel }) => {
           </div>
         </CardContent>
       </Card>
+
+      {/* Dialog: gasto del socio */}
+      <Dialog open={gastoDialogOpen} onOpenChange={setGastoDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{gastoDraft.id ? 'Editar gasto' : 'Nuevo gasto'}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Concepto</Label>
+              <Input
+                value={gastoDraft.concepto}
+                onChange={(e) => setGastoDraft({ ...gastoDraft, concepto: e.target.value })}
+                placeholder="Ej: Material eléctrico, alquiler andamio..."
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Importe (€)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={gastoDraft.importe}
+                  onChange={(e) => setGastoDraft({ ...gastoDraft, importe: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label>Fecha</Label>
+                <Input
+                  type="date"
+                  value={gastoDraft.fecha}
+                  onChange={(e) => setGastoDraft({ ...gastoDraft, fecha: e.target.value })}
+                />
+              </div>
+            </div>
+            <div>
+              <Label>Notas (opcional)</Label>
+              <Textarea
+                value={gastoDraft.notas}
+                onChange={(e) => setGastoDraft({ ...gastoDraft, notas: e.target.value })}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setGastoDialogOpen(false)}>Cancelar</Button>
+            <Button onClick={handleSaveGasto} disabled={savingGasto}>
+              {savingGasto && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Guardar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: personal del socio */}
+      <Dialog open={personalDialogOpen} onOpenChange={setPersonalDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{personalDraft.id ? 'Editar registro' : 'Nuevo personal'}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Nombre</Label>
+              <Input
+                value={personalDraft.nombre_persona}
+                onChange={(e) => setPersonalDraft({ ...personalDraft, nombre_persona: e.target.value })}
+                placeholder="Nombre de la persona"
+              />
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <Label>Fecha</Label>
+                <Input
+                  type="date"
+                  value={personalDraft.fecha}
+                  onChange={(e) => setPersonalDraft({ ...personalDraft, fecha: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label>Horas (opcional)</Label>
+                <Input
+                  type="number"
+                  step="0.5"
+                  value={personalDraft.horas}
+                  onChange={(e) => setPersonalDraft({ ...personalDraft, horas: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label>Importe (€)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={personalDraft.importe}
+                  onChange={(e) => setPersonalDraft({ ...personalDraft, importe: e.target.value })}
+                />
+              </div>
+            </div>
+            <div>
+              <Label>Notas (opcional)</Label>
+              <Textarea
+                value={personalDraft.notas}
+                onChange={(e) => setPersonalDraft({ ...personalDraft, notas: e.target.value })}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPersonalDialogOpen(false)}>Cancelar</Button>
+            <Button onClick={handleSavePersonal} disabled={savingPersonal}>
+              {savingPersonal && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Guardar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

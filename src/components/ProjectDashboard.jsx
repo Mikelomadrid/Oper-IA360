@@ -4,14 +4,16 @@ import { supabase } from '@/lib/customSupabaseClient';
 import { toast } from '@/components/ui/use-toast';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Euro, Users, BarChart3, Clock, AlertTriangle, CheckCircle2, TrendingUp, TrendingDown, Minus, Loader2, Phone, MapPin, Building, User, Calendar, CalendarClock, MessageSquare, FileDown, UploadCloud, FileText, X } from 'lucide-react';
+import { Label } from '@/components/ui/label';
+import { Euro, Users, BarChart3, Clock, AlertTriangle, CheckCircle2, TrendingUp, TrendingDown, Minus, Loader2, Phone, MapPin, Building, User, Calendar, CalendarClock, FileDown, UploadCloud, FileText, X, Mail } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import ReactECharts from 'echarts-for-react';
 import { useTheme } from '@/contexts/ThemeContext';
 import ChartPlaceholder from '@/components/ChartPlaceholder';
 import { formatDate } from '@/lib/utils';
-import CommentsSection from '@/components/CommentsSection';
 import { useInformeObraPDF } from '@/components/useInformeObraPDF';
+import LeadInheritedInfo from '@/components/LeadInheritedInfo';
+import { fetchProjectMaterialBaseTotal } from '@/lib/projectMaterialCosts';
 
 const StatCard = ({ title, value, icon, description, trend, trendValue, colorClass }) => {
     const TrendIcon = trend === 'up' ? TrendingUp : trend === 'down' ? TrendingDown : Minus;
@@ -58,7 +60,7 @@ const ProjectDashboard = ({ projectId, project }) => {
             setLoading(true);
             try {
                 const kpiPromise = supabase
-                    .from('v_proyecto_kpis')
+                    .from('v_proyecto_kpis_con_estado')
                     .select('*')
                     .eq('proyecto_id', projectId)
                     .single();
@@ -68,6 +70,8 @@ const ProjectDashboard = ({ projectId, project }) => {
                     .select('coste_total_mano_obra')
                     .eq('proyecto_id', projectId)
                     .maybeSingle();
+
+                const materialBasePromise = fetchProjectMaterialBaseTotal(projectId);
 
                 let currentClientId = project?.cliente_id;
                 let currentStartDate = project?.fecha_inicio;
@@ -96,7 +100,12 @@ const ProjectDashboard = ({ projectId, project }) => {
                         .maybeSingle();
                 }
 
-                const [kpiRes, laborRes, clientRes] = await Promise.all([kpiPromise, laborPromise, clientPromise]);
+                const [kpiRes, laborRes, clientRes, materialBase] = await Promise.all([
+                    kpiPromise,
+                    laborPromise,
+                    clientPromise,
+                    materialBasePromise,
+                ]);
 
                 if (kpiRes.error) {
                     console.error("Error fetching project KPIs:", kpiRes.error);
@@ -109,7 +118,8 @@ const ProjectDashboard = ({ projectId, project }) => {
                 } else if (kpiRes.data) {
                     const baseData = kpiRes.data;
                     const laborCost = laborRes.data?.coste_total_mano_obra || 0;
-                    const materialCost = baseData.coste_total_materiales || 0;
+                    // Presupuesto y margen trabajan sin IVA: materiales = base imponible.
+                    const materialCost = Number(materialBase || 0);
                     const totalCost = materialCost + laborCost;
                     const margin = (baseData.presupuesto_aceptado || 0) - totalCost;
                     const profitability = (baseData.presupuesto_aceptado || 0) > 0
@@ -118,6 +128,7 @@ const ProjectDashboard = ({ projectId, project }) => {
 
                     const combinedData = {
                         ...baseData,
+                        coste_total_materiales: materialCost,
                         coste_total_mano_obra: laborCost,
                         costo_total: totalCost,
                         margen: margin,
@@ -518,108 +529,90 @@ Responde SOLO con este JSON sin texto adicional ni markdown:
                 </DialogContent>
             </Dialog>
 
-            {/* Stat Cards Grid */}
-            <div className="grid gap-2 grid-cols-2 md:gap-4 md:grid-cols-2 lg:grid-cols-4">
-                {cards.map((card, i) => (
-                    <motion.div key={card.title} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }}>
-                        <StatCard {...card} />
-                    </motion.div>
-                ))}
-            </div>
+            {/* ===================== LAYOUT PRINCIPAL ===================== */}
+            {/* Izquierda: Distribución (arriba) + Información del Cliente (abajo) */}
+            {/* Derecha: KPIs 2×2 */}
+            {/* En móvil: KPIs primero, luego Distribución y Cliente */}
+            <div className="grid gap-3 md:gap-4 lg:grid-cols-2 items-start">
 
-            {/* Charts & Summary Grid */}
-            <div className="grid gap-2 mt-4 grid-cols-2 md:gap-4 md:mt-6 md:grid-cols-5">
+                {/* KPIs 2×2 — móvil: primero / desktop: derecha */}
+                <div className="grid grid-cols-2 gap-2 md:gap-4 content-start lg:order-2">
+                    {cards.map((card, i) => (
+                        <motion.div key={card.title} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }}>
+                            <StatCard {...card} />
+                        </motion.div>
+                    ))}
+                </div>
 
-                <Card className="col-span-1 md:col-span-3 shadow-sm overflow-hidden">
-                    <CardHeader className="p-2 md:p-6 pb-0 md:pb-2">
-                        <CardTitle className="text-xs md:text-lg font-medium md:font-semibold truncate">Distribución</CardTitle>
-                        <CardDescription className="text-[10px] md:text-sm hidden md:block">Margen vs Costes</CardDescription>
-                    </CardHeader>
-                    <CardContent className="h-[180px] md:h-[300px] p-0 md:p-0">
-                        {chartOptions ? (
-                            <ReactECharts option={chartOptions} style={{ height: '100%', width: '100%' }} notMerge={true} lazyUpdate={true} />
-                        ) : (
-                            <ChartPlaceholder message="No data" className="text-xs" />
-                        )}
-                    </CardContent>
-                </Card>
+                {/* Columna izquierda: Distribución + Información del Cliente */}
+                <div className="space-y-3 md:space-y-4 lg:order-1">
 
-                <Card className="col-span-1 md:col-span-2 shadow-sm overflow-hidden">
-                    <CardHeader className="p-2 md:p-6 pb-2 md:pb-2">
-                        <CardTitle className="text-xs md:text-lg font-medium md:font-semibold truncate">Información del Cliente</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3 p-2 md:space-y-4 md:p-6 text-[10px] md:text-sm">
-                        <div className="flex flex-col gap-0.5">
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                                <Building className="w-3 h-3 md:w-4 md:h-4" />
-                                <span>Cliente</span>
-                            </div>
-                            <span className="font-semibold truncate pl-5 md:pl-6">{displayClienteName}</span>
-                        </div>
-
-                        <div className="flex flex-col gap-0.5">
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                                <User className="w-3 h-3 md:w-4 md:h-4" />
-                                <span>Contacto</span>
-                            </div>
-                            <span className="font-semibold truncate pl-5 md:pl-6">{displayContactoName}</span>
-                        </div>
-
-                        <div className="flex flex-col gap-0.5">
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                                <Phone className="w-3 h-3 md:w-4 md:h-4" />
-                                <span>Teléfono</span>
-                            </div>
-                            {displayPhone && displayPhone !== '-' ? (
-                                <a href={`tel:${displayPhone}`} className="font-semibold truncate pl-5 md:pl-6 hover:underline hover:text-blue-500 transition-colors">
-                                    {displayPhone}
-                                </a>
+                    {/* Distribución */}
+                    <Card className="shadow-sm overflow-hidden">
+                        <CardHeader className="p-2 md:p-6 pb-0 md:pb-2">
+                            <CardTitle className="text-xs md:text-lg font-medium md:font-semibold truncate">Distribución</CardTitle>
+                            <CardDescription className="text-[10px] md:text-sm hidden md:block">Margen vs Costes</CardDescription>
+                        </CardHeader>
+                        <CardContent className="h-[180px] md:h-[300px] p-0 md:p-0">
+                            {chartOptions ? (
+                                <ReactECharts option={chartOptions} style={{ height: '100%', width: '100%' }} notMerge={true} lazyUpdate={true} />
                             ) : (
-                                <span className="font-semibold truncate pl-5 md:pl-6">-</span>
+                                <ChartPlaceholder message="No data" className="text-xs" />
                             )}
-                        </div>
-
-                        <div className="flex flex-col gap-0.5">
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                                <MapPin className="w-3 h-3 md:w-4 md:h-4" />
-                                <span>Dirección</span>
-                            </div>
-                            <span className="font-semibold truncate pl-5 md:pl-6 max-w-full" title={displayAddress}>{displayAddress}</span>
-                        </div>
-
-                        <div className="flex flex-col gap-0.5">
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                                <Calendar className="w-3 h-3 md:w-4 md:h-4" />
-                                <span>Fecha Inicio de Obra</span>
-                            </div>
-                            <span className="font-semibold truncate pl-5 md:pl-6">{formattedStartDate}</span>
-                        </div>
-
-                        <div className="flex flex-col gap-0.5">
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                                <CalendarClock className="w-3 h-3 md:w-4 md:h-4" />
-                                <span>Fin Estimado</span>
-                            </div>
-                            <span className="font-semibold truncate pl-5 md:pl-6">{formattedEndDate}</span>
-                        </div>
-
-                        <div className="pt-2 flex justify-end">
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setShowClientComments(!showClientComments)}
-                                className="w-full sm:w-auto text-xs h-8 border-primary/20 text-primary hover:text-primary hover:bg-primary/5"
-                            >
-                                <MessageSquare className="w-3 h-3 mr-2" />
-                                {showClientComments ? 'Ocultar Notas' : '📝 Notas del Cliente'}
-                            </Button>
-                        </div>
-
-                        <CommentsSection obraId={projectId} isVisible={showClientComments} />
-
-                    </CardContent>
-                </Card>
+                        </CardContent>
+                    </Card>
+                </div>
             </div>
+
+            {/* ===================== INFO CLIENTE (OBRA SIN LEAD) ===================== */}
+            {/* Mismo diseño que la tarjeta del lead: grid compacto de 2-3 columnas.   */}
+            {/* Solo se muestra cuando la obra NO proviene de un lead.                   */}
+            {!project?.lead_id && (
+                <div className="mt-4 md:mt-6 space-y-4 md:space-y-6">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="text-lg flex items-center gap-2">
+                                <Building className="w-5 h-5" /> Información del Cliente
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent className="grid grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3">
+                            <div><Label className="text-xs text-muted-foreground">Cliente</Label><p className="font-medium">{displayClienteName}</p></div>
+                            <div><Label className="text-xs text-muted-foreground">Contacto</Label><p className="font-medium">{displayContactoName}</p></div>
+                            <div>
+                                <Label className="text-xs text-muted-foreground">Teléfono</Label>
+                                {displayPhone && displayPhone !== '-' ? (
+                                    <a href={`tel:${displayPhone}`} className="flex items-center gap-2 text-primary hover:underline"><Phone className="w-4 h-4" /> {displayPhone}</a>
+                                ) : (
+                                    <p className="flex items-center gap-2"><Phone className="w-4 h-4 text-primary shrink-0" /> N/A</p>
+                                )}
+                            </div>
+                            {clientData?.email && (
+                                <div><Label className="text-xs text-muted-foreground">Email</Label><a href={`mailto:${clientData.email}`} className="flex items-center gap-2 text-primary hover:underline"><Mail className="w-4 h-4" /> {clientData.email}</a></div>
+                            )}
+                            {clientData?.cif && (
+                                <div><Label className="text-xs text-muted-foreground">CIF</Label><p>{clientData.cif}</p></div>
+                            )}
+                            <div><Label className="text-xs text-muted-foreground">Dirección</Label><p className="flex items-center gap-2"><MapPin className="w-4 h-4 text-primary shrink-0" /> {displayAddress}</p></div>
+                            {clientData?.codigo_postal && (
+                                <div><Label className="text-xs text-muted-foreground">Código Postal</Label><p>{clientData.codigo_postal}</p></div>
+                            )}
+                            {clientData?.municipio && (
+                                <div><Label className="text-xs text-muted-foreground">Municipio</Label><p>{clientData.municipio}</p></div>
+                            )}
+                            <div><Label className="text-xs text-muted-foreground">Fecha Inicio de Obra</Label><p className="flex items-center gap-2"><Calendar className="w-4 h-4 text-primary shrink-0" /> {formattedStartDate}</p></div>
+                            <div><Label className="text-xs text-muted-foreground">Fin Estimado</Label><p className="flex items-center gap-2"><CalendarClock className="w-4 h-4 text-primary shrink-0" /> {formattedEndDate}</p></div>
+                        </CardContent>
+                    </Card>
+
+                </div>
+            )}
+
+            {/* ===================== INFO HEREDADA DEL LEAD ===================== */}
+            {/* Si la obra nació de un lead, se muestran debajo las mismas tarjetas */}
+            {/* del lead: Información General y Ubicación + Historial de Comentarios */}
+            {project?.lead_id && (
+                <LeadInheritedInfo leadId={project.lead_id} />
+            )}
         </motion.div>
     );
 };

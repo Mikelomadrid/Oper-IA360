@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from '@/components/ui/badge';
-import { Loader2, Plus, Search, RefreshCw, Pencil, Trash2, Building2, Receipt, Banknote, Filter, X, Calendar as CalendarIcon, Scan } from 'lucide-react';
+import { Loader2, Plus, Search, RefreshCw, Pencil, Trash2, Building2, Receipt, Banknote, Filter, X, Calendar as CalendarIcon, Scan, Eye } from 'lucide-react';
 import { format } from 'date-fns';
 import { ProviderSelect } from '@/components/ProviderSelect';
 import { AsyncSearchableSelector } from '@/components/AsyncSearchableSelector';
@@ -29,6 +29,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { useFacturaViewer } from '@/hooks/useFacturaViewer';
+import FacturaViewerModal from '@/components/FacturaViewerModal';
 
 /**
  * GastosGenerales Component
@@ -41,6 +43,7 @@ import { cn } from "@/lib/utils";
 const GastosGenerales = ({ navigate }) => {
   const { sessionRole, user } = useAuth();
   const isAdmin = sessionRole?.rol === 'admin';
+  const { visorFactura, abrirFacturaEscaneada, cerrarVisor, paginaSiguiente, paginaAnterior, irAPagina } = useFacturaViewer();
 
   const [gastos, setGastos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -97,12 +100,19 @@ const GastosGenerales = ({ navigate }) => {
 
       // 1. Fetch Facturas (from 'gastos' table)
       if (filterType === 'all' || filterType === 'factura') {
+        // Se añade el embed de facturas_gastos (id, documento_principal_id, documentos_ids)
+        // para poder mostrar el ojo de "ver factura escaneada" sin tocar el resto de columnas.
+        // Se usa el hint !facturas_gastos_gasto_id_fkey porque gasto_etiquetas_rel.gasto_id tiene FKs
+        // tanto a gastos.id como a facturas_gastos.id, lo que crea un camino indirecto adicional entre
+        // 'gastos' y 'facturas_gastos' y PostgREST no puede elegir automáticamente cuál usar
+        // (error "more than one relationship was found for 'gastos' and 'facturas_gastos'").
         let queryRaw = supabase
           .from('gastos')
           .select(`
                 *,
                 proveedor:proveedores(nombre),
-                proyecto:proyectos(nombre_proyecto)
+                proyecto:proyectos(nombre_proyecto),
+                facturas_gastos!facturas_gastos_gasto_id_fkey(id, documento_principal_id, documentos_ids)
             `)
           .order('fecha_emision', { ascending: false });
 
@@ -150,18 +160,30 @@ const GastosGenerales = ({ navigate }) => {
       }
 
       // Normalize Facturas
-      const facturas = facturasData.map(f => ({
-        ...f,
-        _type: 'factura',
-        display_date: f.fecha_emision,
-        display_provider: f.proveedor?.nombre || 'Proveedor Desconocido',
-        proveedor_nombre: f.proveedor?.nombre,
-        display_ref: f.numero_factura,
-        display_concept: f.concepto,
-        display_amount: f.total_con_iva,
-        display_status: f.estado_pago,
-        project_name: f.proyecto?.nombre_proyecto
-      }));
+      const facturas = facturasData.map(f => {
+        // facturas_gastos puede venir como array u objeto según cómo infiera PostgREST la relación
+        // (no hay constraint UNIQUE en gasto_id, así que por defecto es array; se maneja de forma defensiva).
+        const fgRaw = f.facturas_gastos;
+        const facturaInfo = Array.isArray(fgRaw) ? (fgRaw[0] || null) : (fgRaw || null);
+        const numDocumentosFactura = Array.isArray(facturaInfo?.documentos_ids) ? facturaInfo.documentos_ids.length : 0;
+
+        return {
+          ...f,
+          _type: 'factura',
+          display_date: f.fecha_emision,
+          display_provider: f.proveedor?.nombre || 'Proveedor Desconocido',
+          proveedor_nombre: f.proveedor?.nombre,
+          display_ref: f.numero_factura,
+          display_concept: f.concepto,
+          display_amount: f.total_con_iva,
+          display_status: f.estado_pago,
+          project_name: f.proyecto?.nombre_proyecto,
+          factura_gasto_id: facturaInfo?.id || null,
+          documento_principal_id: facturaInfo?.documento_principal_id || null,
+          num_documentos_factura: numDocumentosFactura,
+          tiene_documento_factura: !!facturaInfo?.documento_principal_id,
+        };
+      });
 
       // Normalize Gastos
       const gastosSimples = gastosData.map(g => ({
@@ -762,6 +784,18 @@ const GastosGenerales = ({ navigate }) => {
                       {isAdmin && (
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
+                            {g._type === 'factura' && g.tiene_documento_factura && g.factura_gasto_id && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title={`Ver factura escaneada (${g.num_documentos_factura || 1})`}
+                                aria-label="Ver factura escaneada"
+                                onClick={() => abrirFacturaEscaneada(g.factura_gasto_id)}
+                                className="h-8 w-8 hover:bg-slate-100 hover:text-blue-600 dark:hover:bg-slate-800"
+                              >
+                                <Eye className="h-4 w-4" />
+                              </Button>
+                            )}
                             <Button
                               variant="ghost"
                               size="icon"
@@ -999,6 +1033,14 @@ const GastosGenerales = ({ navigate }) => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <FacturaViewerModal
+        visor={visorFactura}
+        onClose={cerrarVisor}
+        onPrev={paginaAnterior}
+        onNext={paginaSiguiente}
+        onSelect={irAPagina}
+      />
     </div>
   );
 };

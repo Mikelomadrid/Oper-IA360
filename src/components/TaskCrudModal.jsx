@@ -9,7 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
-import { Loader2, Plus, X, CalendarPlus as CalendarIcon } from 'lucide-react';
+import { AlertTriangle, Loader2, Plus, X, CalendarPlus as CalendarIcon } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
@@ -23,13 +23,27 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
     const [isFetchingDetails, setIsFetchingDetails] = useState(false);
     const [projects, setProjects] = useState([]);
     const [employees, setEmployees] = useState([]);
+    const [teamEmployeeIds, setTeamEmployeeIds] = useState(null);
     const [initialEmployeeIds, setInitialEmployeeIds] = useState([]);
 
     const fetchDropdownData = useCallback(async () => {
         const { data: projectsData } = await supabase.from('proyectos').select('id, nombre_proyecto').eq('estado', 'activo');
         setProjects(projectsData || []);
-        const { data: employeesData } = await supabase.from('v_empleados_selector').select('*').in('rol', ['tecnico', 'encargado']);
-        setEmployees(employeesData || []);
+        const { data: employeesData, error: employeesError } = await supabase
+            .from('empleados')
+            .select('id, nombre, apellidos, rol, activo')
+            .in('rol', ['tecnico', 'encargado'])
+            .eq('activo', true)
+            .order('nombre');
+        if (employeesError) {
+            console.error('No se pudo cargar el selector de empleados', employeesError);
+            setEmployees([]);
+            return;
+        }
+        setEmployees((employeesData || []).map((employee) => ({
+            ...employee,
+            display_name: `${employee.nombre || ''} ${employee.apellidos || ''}`.trim(),
+        })));
     }, []);
 
     useEffect(() => {
@@ -71,6 +85,28 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
             fetchTaskDetails();
         }
     }, [task, isOpen, defaultProjectId, fetchDropdownData]);
+
+    useEffect(() => {
+        const fetchProjectTeam = async () => {
+            if (!isOpen || !projectId) {
+                setTeamEmployeeIds(null);
+                return;
+            }
+            const { data, error } = await supabase
+                .from('obra_equipo')
+                .select('empleado_id')
+                .eq('proyecto_id', projectId)
+                .eq('activo', true);
+
+            if (error) {
+                console.error('No se pudo cargar el equipo de obra', error);
+                setTeamEmployeeIds(null);
+                return;
+            }
+            setTeamEmployeeIds(new Set((data || []).map((item) => item.empleado_id)));
+        };
+        fetchProjectTeam();
+    }, [isOpen, projectId]);
 
     // Re-fetch all assignees if editing existing task
     useEffect(() => {
@@ -115,6 +151,14 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
         }
         if (employeeIds.length === 0) {
             toast({ variant: 'destructive', title: 'Técnico requerido', description: 'Debes asignar la tarea a al menos un técnico.' });
+            return;
+        }
+        if (teamEmployeeIds && employeeIds.some((employeeId) => !teamEmployeeIds.has(employeeId))) {
+            toast({
+                variant: 'destructive',
+                title: 'Técnico fuera del equipo de obra',
+                description: 'El encargado debe incluir primero a esa persona en el equipo de la obra.',
+            });
             return;
         }
 
@@ -296,6 +340,11 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
     };
 
 
+    const selectableEmployees = teamEmployeeIds
+        ? employees.filter((employee) => teamEmployeeIds.has(employee.id) || employeeIds.includes(employee.id))
+        : employees;
+    const teamIsEmpty = teamEmployeeIds && teamEmployeeIds.size === 0;
+
     return (
         <Dialog open={isOpen} onOpenChange={onClose}>
             <DialogContent className="sm:max-w-[600px]">
@@ -321,9 +370,15 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
                                 </div>
                                 <div className="grid gap-2">
                                     <Label>Técnicos Asignados</Label>
+                                    {teamIsEmpty && (
+                                        <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-2.5 text-xs leading-5 text-amber-800">
+                                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                                            El encargado debe formar primero el equipo de esta obra desde Dashboard → Equipo de obra.
+                                        </div>
+                                    )}
                                     <div className="flex flex-wrap gap-2 mb-2">
                                         {employeeIds.map(eid => {
-                                            const emp = employees.find(e => e.id === eid);
+                                            const emp = selectableEmployees.find(e => e.id === eid);
                                             return emp ? (
                                                 <div key={eid} className="flex items-center gap-1 bg-slate-100 border border-slate-200 text-slate-700 text-xs px-2 py-1 rounded-full">
                                                     <span>{emp.display_name}</span>
@@ -336,6 +391,7 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
                                     </div>
                                     <Select
                                         value=""
+                                        disabled={teamIsEmpty}
                                         onValueChange={(val) => {
                                             if (val && !employeeIds.includes(val)) {
                                                 setEmployeeIds(prev => [...prev, val]);
@@ -344,7 +400,7 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
                                     >
                                         <SelectTrigger><SelectValue placeholder="Añadir técnico..." /></SelectTrigger>
                                         <SelectContent>
-                                            {employees.filter(e => !employeeIds.includes(e.id)).map(e => (
+                                            {selectableEmployees.filter(e => !employeeIds.includes(e.id)).map(e => (
                                                 <SelectItem key={e.id} value={e.id}>{e.display_name}</SelectItem>
                                             ))}
                                         </SelectContent>

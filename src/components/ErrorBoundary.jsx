@@ -31,6 +31,35 @@ class ErrorBoundary extends React.Component {
     window.location.reload();
   };
 
+  handleHardRefresh = async () => {
+    try {
+      if ('caches' in window) {
+        const names = await caches.keys();
+        await Promise.all(names.map((name) => caches.delete(name)));
+      }
+      sessionStorage.setItem('orkaled_force_refresh', String(Date.now()));
+    } catch (e) {
+      console.error("Failed to clear browser cache", e);
+    }
+    window.location.href = `/?v=${Date.now()}`;
+  };
+
+  copyDetails = async () => {
+    const details = [
+      this.state.error?.toString(),
+      this.state.errorInfo?.componentStack,
+      `URL: ${window.location.href}`,
+      `User agent: ${navigator.userAgent}`,
+    ].filter(Boolean).join('\n\n');
+
+    try {
+      await navigator.clipboard.writeText(details);
+      alert('Detalles copiados. Puedes pegarlos y enviarlos por WhatsApp.');
+    } catch (e) {
+      alert(details);
+    }
+  };
+
   render() {
     if (this.state.hasError) {
       return (
@@ -46,6 +75,10 @@ class ErrorBoundary extends React.Component {
                     <RefreshCw className="w-4 h-4" />
                     Recargar Página
                 </Button>
+                <Button onClick={this.handleHardRefresh} variant="outline" className="gap-2">
+                    <RefreshCw className="w-4 h-4" />
+                    Actualizar Aplicación
+                </Button>
                 <Button onClick={this.handleReset} className="bg-red-600 hover:bg-red-700 gap-2">
                     <Home className="w-4 h-4" />
                     Volver al Inicio
@@ -53,6 +86,9 @@ class ErrorBoundary extends React.Component {
                 <Button onClick={() => { localStorage.clear(); window.location.href = '/login'; }} variant="ghost" className="text-red-600 hover:text-red-700 hover:bg-red-50 gap-2">
                     <LogOut className="w-4 h-4" />
                     Cerrar Sesión (Forzar)
+                </Button>
+                <Button onClick={this.copyDetails} variant="outline" className="gap-2">
+                    Copiar detalles técnicos
                 </Button>
             </div>
             

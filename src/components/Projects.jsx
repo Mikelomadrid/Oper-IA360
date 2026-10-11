@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/customSupabaseClient';
 import { toast } from '@/components/ui/use-toast';
@@ -7,7 +7,8 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import {
     Plus, Search, Loader2, Archive, ChevronsUpDown, Calendar, Construction,
-    MoreVertical, Edit, Trash2, LayoutGrid, List as ListIcon
+    MoreVertical, Edit, Trash2, LayoutGrid, List as ListIcon, Columns, GripVertical,
+    CheckCircle2, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import ProjectForm from '@/components/ProjectForm';
@@ -16,6 +17,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
+import { fetchProjectMaterialBaseTotals } from '@/lib/projectMaterialCosts';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -55,6 +57,23 @@ const formatDate = dateString => {
     } catch (e) {
         return '-';
     }
+};
+
+// ============================================================
+// Configuración del tablero Kanban de obras
+// Las obras COBRADAS no aparecen como tarjetas sueltas en el tablero:
+// la columna COBRADO muestra el Historial de Cobradas agrupado por mes.
+// Marcar una obra como cobrada se hace desde el menú ⋮ de su tarjeta.
+// ============================================================
+const KANBAN_COLUMNS = ['en_espera', 'activo', 'terminado', 'facturado', 'cobrado'];
+const KANBAN_DROP_COLUMNS = KANBAN_COLUMNS.filter(c => c !== 'cobrado');
+
+const KANBAN_STYLES = {
+    activo:     { label: 'ACTIVO',       bg: '#dcfce7', text: '#15803d', br: '#86efac' },
+    en_espera:  { label: 'EN ESPERA',    bg: '#fef3c7', text: '#b45309', br: '#fcd34d' },
+    terminado:  { label: 'TERMINADO',    bg: '#dbeafe', text: '#1d4ed8', br: '#93c5fd' },
+    facturado:  { label: 'FACTURADO',    bg: '#ede9fe', text: '#6d28d9', br: '#c4b5fd' },
+    cobrado:    { label: 'HISTORIAL',    bg: '#d1fae5', text: '#047857', br: '#6ee7b7' },
 };
 
 const ProjectCard = ({ project, onClick, onEdit, onDelete, canManage }) => {
@@ -236,11 +255,29 @@ const Projects = ({ navigate }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [editingProject, setEditingProject] = useState(null);
-    const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'list'
 
-    // Recordar qué mes del historial estaba abierto al volver
+    // ACTUALIZADO: 'grid' | 'list' | 'kanban' (persistido). Por defecto: kanban.
+    const [viewMode, setViewMode] = useState(() => {
+        try { return localStorage.getItem('projects_view_mode') || 'kanban'; } catch { return 'kanban'; }
+    });
+
+    useEffect(() => {
+        try { localStorage.setItem('projects_view_mode', viewMode); } catch {}
+    }, [viewMode]);
+
+    // NUEVO: Estados para drag & drop del Kanban
+    const [draggedProjectId, setDraggedProjectId] = useState(null);
+    const [dragOverColumn, setDragOverColumn] = useState(null);
+    const justDraggedRef = useRef(false);
+
+    // Recordar qué mes del historial estaba abierto al volver (vistas grid/list)
     const [openMonth, setOpenMonth] = useState(() => {
         try { return localStorage.getItem('historial_mes_abierto') || null; } catch { return null; }
+    });
+
+    // NUEVO: Qué mes está abierto dentro de la columna COBRADO del Kanban
+    const [kanbanHistorialMonth, setKanbanHistorialMonth] = useState(() => {
+        try { return localStorage.getItem('kanban_historial_mes_abierto') || null; } catch { return null; }
     });
 
     // Delete confirmation state
@@ -249,11 +286,15 @@ const Projects = ({ navigate }) => {
     const [isDeleting, setIsDeleting] = useState(false);
 
     const debouncedSearchTerm = useDebounce(searchTerm, 350);
+    // Buscando activamente: se usa para auto-expandir TODOS los meses del
+    // Historial de Cobradas (antes había que abrir mes a mes a ciegas).
+    const isSearching = debouncedSearchTerm.trim().length > 0;
 
     const groupFacturadoProjects = (projects) => {
         return projects.reduce((acc, project) => {
-            // Usar fecha real de finalización, luego estimada, luego creación como fallback
-            const dateStr = project.fecha_fin_real || project.fecha_finalizacion_estimada || project.fecha_creacion;
+            // Prioridad: fecha_cobrado (cuando pasó a COBRADO) > fecha_fin_real >
+            // fecha_finalizacion_estimada > fecha_creacion como último fallback.
+            const dateStr = project.fecha_cobrado || project.fecha_fin_real || project.fecha_finalizacion_estimada || project.fecha_creacion;
             const date = parseISO(dateStr);
             const key = format(date, 'MMMM yyyy', { locale: es });
             const capitalizedKey = key.charAt(0).toUpperCase() + key.slice(1);
@@ -274,7 +315,12 @@ const Projects = ({ navigate }) => {
                 .select('*');
 
             if (debouncedSearchTerm) {
-                query = query.ilike('nombre_proyecto', `%${debouncedSearchTerm}%`);
+                // Búsqueda ampliada: nombre de obra, cliente/contacto, dirección y teléfono
+                // (antes solo buscaba por nombre_proyecto).
+                const term = debouncedSearchTerm.replace(/[%,]/g, '');
+                query = query.or(
+                    `nombre_proyecto.ilike.%${term}%,contacto_nombre.ilike.%${term}%,direccion_obra.ilike.%${term}%,contacto_telefono.ilike.%${term}%`
+                );
             }
 
             const { data: projectsData, error: projectsError } = await query;
@@ -285,10 +331,15 @@ const Projects = ({ navigate }) => {
                 // 1.5 Targeted fetch for labor to avoid RLS/limits issues
                 const projectIds = projectsData.map(p => p.proyecto_id).filter(Boolean);
 
-                const { data: laborData, error: laborError } = await supabase
-                    .from('ui_v_proyecto_mano_obra_totales_v2')
-                    .select('proyecto_id, coste_total_mano_obra')
-                    .in('proyecto_id', projectIds);
+                const [laborResult, materialBaseTotals] = await Promise.all([
+                    supabase
+                        .from('ui_v_proyecto_mano_obra_totales_v2')
+                        .select('proyecto_id, coste_total_mano_obra')
+                        .in('proyecto_id', projectIds),
+                    fetchProjectMaterialBaseTotals(projectIds),
+                ]);
+
+                const { data: laborData, error: laborError } = laborResult;
 
                 if (laborError) {
                     console.error("[Projects] Labor fetch error:", laborError);
@@ -299,7 +350,8 @@ const Projects = ({ navigate }) => {
                     const laborEntry = laborData?.find(l => String(l.proyecto_id) === String(project.proyecto_id));
                     const laborCost = laborEntry ? parseFloat(laborEntry.coste_total_mano_obra || 0) : 0;
 
-                    const materialCost = project.costo_total || 0;
+                    // El presupuesto está sin IVA, por lo que el material debe usar base imponible.
+                    const materialCost = materialBaseTotals[String(project.proyecto_id)] || 0;
                     const totalCostUpdated = materialCost + laborCost;
                     const margenUpdated = (project.presupuesto_aceptado || 0) - totalCostUpdated;
 
@@ -307,13 +359,21 @@ const Projects = ({ navigate }) => {
                         ...project,
                         costo_total: totalCostUpdated,
                         margen: margenUpdated,
-                        coste_mano_obra: laborCost
+                        coste_mano_obra: laborCost,
+                        coste_total_materiales: materialCost,
+                        coste_materiales: materialCost
                     };
                 });
 
+                // ============================================================
+                // Las FACTURADAS permanecen en el tablero/listado activo.
+                // Solo COBRADAS y CERRADAS pasan al historial mensual.
+                // ============================================================
+                const HISTORIAL_STATES = ['cobrado', 'cerrado'];
+
                 // 4. Fetch fechas min/max del cronograma por proyecto
                 const activeIds = processedData
-                    .filter(p => p.estado !== 'facturado' && p.estado !== 'cerrado' && p.estado !== 'cobrado')
+                    .filter(p => !HISTORIAL_STATES.includes(p.estado))
                     .map(p => p.proyecto_id).filter(Boolean);
 
                 let cronogramaMap = {};
@@ -338,7 +398,7 @@ const Projects = ({ navigate }) => {
                 }
 
                 const active = processedData
-                    .filter(p => p.estado !== 'facturado' && p.estado !== 'cerrado' && p.estado !== 'cobrado')
+                    .filter(p => !HISTORIAL_STATES.includes(p.estado))
                     .map(p => ({
                         ...p,
                         cronograma_inicio: cronogramaMap[p.proyecto_id]?.min || null,
@@ -365,23 +425,24 @@ const Projects = ({ navigate }) => {
                         return 0;
                     });
 
-                const facturado = processedData.filter(p => p.estado === 'facturado' || p.estado === 'cerrado' || p.estado === 'cobrado');
+                const facturado = processedData.filter(p => HISTORIAL_STATES.includes(p.estado));
 
-                // Asegurar que tenemos fecha_fin_real para el historial
+                // Asegurar que tenemos fecha_fin_real y fecha_cobrado para el historial
                 const facturadoIds = facturado.map(p => p.proyecto_id).filter(Boolean);
-                let fechasFinReal = {};
+                let fechasExtra = {};
                 if (facturadoIds.length > 0) {
                     const { data: fechasData } = await supabase
                         .from('proyectos')
-                        .select('id, fecha_fin_real')
+                        .select('id, fecha_fin_real, fecha_cobrado')
                         .in('id', facturadoIds);
                     if (fechasData) {
-                        fechasData.forEach(p => { fechasFinReal[p.id] = p.fecha_fin_real; });
+                        fechasData.forEach(p => { fechasExtra[p.id] = p; });
                     }
                 }
                 const facturadoConFecha = facturado.map(p => ({
                     ...p,
-                    fecha_fin_real: fechasFinReal[p.proyecto_id] || p.fecha_fin_real || null
+                    fecha_fin_real: fechasExtra[p.proyecto_id]?.fecha_fin_real || p.fecha_fin_real || null,
+                    fecha_cobrado: fechasExtra[p.proyecto_id]?.fecha_cobrado || null,
                 }));
 
                 setProjects(active);
@@ -465,6 +526,356 @@ const Projects = ({ navigate }) => {
 
     const canManage = useMemo(() => sessionRole?.rol === 'admin' || sessionRole?.rol === 'encargado', [sessionRole]);
 
+    // ============================================================
+    // LÓGICA DRAG & DROP DEL KANBAN DE OBRAS
+    // (COBRADO ya no es una columna de destino: se marca desde el
+    // menú ⋮ de la tarjeta con handleMarkAsCobrado)
+    // ============================================================
+
+    const kanbanGroups = useMemo(() => {
+        const groups = {};
+        KANBAN_COLUMNS.forEach(col => { groups[col] = []; });
+        projects.forEach(p => {
+            if (groups[p.estado]) groups[p.estado].push(p);
+        });
+        return groups;
+    }, [projects]);
+
+    const handleDragStart = (e, projectId) => {
+        setDraggedProjectId(projectId);
+        e.dataTransfer.setData('text/plain', projectId);
+        e.dataTransfer.effectAllowed = 'move';
+    };
+
+    const handleDragEnd = () => {
+        setDraggedProjectId(null);
+        setDragOverColumn(null);
+        justDraggedRef.current = true;
+        setTimeout(() => { justDraggedRef.current = false; }, 150);
+    };
+
+    const handleColumnDragOver = (e, columnStatus) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (dragOverColumn !== columnStatus) {
+            setDragOverColumn(columnStatus);
+        }
+    };
+
+    const handleColumnDragLeave = (e, columnStatus) => {
+        if (e.currentTarget.contains(e.relatedTarget)) return;
+        if (dragOverColumn === columnStatus) {
+            setDragOverColumn(null);
+        }
+    };
+
+    const handleColumnDrop = async (e, newStatus) => {
+        e.preventDefault();
+        const projectId = e.dataTransfer.getData('text/plain') || draggedProjectId;
+        setDragOverColumn(null);
+        setDraggedProjectId(null);
+
+        if (!projectId) return;
+
+        const project = projects.find(p => String(p.proyecto_id) === String(projectId));
+        if (!project || project.estado === newStatus) return;
+
+        // Actualización optimista local
+        setProjects(prev => prev.map(p =>
+            String(p.proyecto_id) === String(projectId) ? { ...p, estado: newStatus } : p
+        ));
+
+        try {
+            const { error } = await supabase
+                .from('proyectos')
+                .update({ estado: newStatus })
+                .eq('id', projectId);
+
+            if (error) throw error;
+
+            toast({
+                title: 'Estado actualizado',
+                description: `"${project.nombre_proyecto}" movida a ${KANBAN_STYLES[newStatus]?.label || newStatus}.`,
+                duration: 2500,
+            });
+        } catch (error) {
+            console.error('Error updating project status:', error);
+            toast({
+                variant: 'destructive',
+                title: 'Error',
+                description: 'No se pudo actualizar el estado de la obra.',
+            });
+            // Revertir recargando datos reales
+            fetchProjects();
+        }
+    };
+
+    // NUEVO: marcar como cobrada desde el menú ⋮ de la tarjeta.
+    // fecha_cobrado se rellena sola en BD (trigger trg_set_fecha_cobrado).
+    const handleMarkAsCobrado = async (project) => {
+        setProjects(prev => prev.filter(p => String(p.proyecto_id) !== String(project.proyecto_id)));
+
+        try {
+            const { error } = await supabase
+                .from('proyectos')
+                .update({ estado: 'cobrado' })
+                .eq('id', project.proyecto_id);
+
+            if (error) throw error;
+
+            toast({
+                title: 'Obra cobrada',
+                description: `"${project.nombre_proyecto}" ha pasado al historial de cobradas.`,
+                duration: 2500,
+            });
+
+            // Refrescar para regenerar el historial mensual correctamente
+            fetchProjects();
+        } catch (error) {
+            console.error('Error marcando como cobrada:', error);
+            toast({
+                variant: 'destructive',
+                title: 'Error',
+                description: 'No se pudo marcar la obra como cobrada.',
+            });
+            fetchProjects();
+        }
+    };
+
+    const handleKanbanCardClick = (projectId) => {
+        if (justDraggedRef.current) return;
+        navigate(`/gestion/obras/${projectId}`);
+    };
+
+    const renderKanbanCard = (project) => {
+        const isDragging = String(draggedProjectId) === String(project.proyecto_id);
+        const margin = project.margen || 0;
+        const marginColor = margin >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500 dark:text-red-400';
+
+        return (
+            <div
+                key={project.proyecto_id}
+                draggable
+                onDragStart={(e) => handleDragStart(e, project.proyecto_id)}
+                onDragEnd={handleDragEnd}
+                onClick={() => handleKanbanCardClick(project.proyecto_id)}
+                className={`group bg-card rounded-lg border border-border/60 shadow-sm p-3 cursor-grab active:cursor-grabbing
+                    hover:shadow-md hover:border-primary/30 transition-all select-none
+                    ${isDragging ? 'opacity-40 ring-2 ring-primary/40' : ''}`}
+            >
+                <div className="flex items-start justify-between gap-2">
+                    <h3 className="text-sm font-bold text-foreground leading-tight line-clamp-2 min-w-0 flex-1 group-hover:text-primary transition-colors">
+                        {project.nombre_proyecto}
+                    </h3>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                        {canManage && (
+                            <div onClick={(e) => e.stopPropagation()}>
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                        <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground/50 hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <MoreVertical className="h-3.5 w-3.5" />
+                                        </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                        <DropdownMenuItem onClick={() => handleMarkAsCobrado(project)}>
+                                            <CheckCircle2 className="mr-2 h-4 w-4" /> Marcar como cobrado
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => handleEditProject(project.proyecto_id)}>
+                                            <Edit className="mr-2 h-4 w-4" /> Editar
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => handleDeleteClick(project.proyecto_id)} className="text-destructive focus:text-destructive">
+                                            <Trash2 className="mr-2 h-4 w-4" /> Eliminar
+                                        </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+                            </div>
+                        )}
+                        <GripVertical className="w-4 h-4 text-muted-foreground/30 group-hover:text-muted-foreground/60 shrink-0" />
+                    </div>
+                </div>
+
+                <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Calendar className="w-3 h-3 shrink-0" />
+                    <span>{formatDate(project.fecha_creacion)}</span>
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-dashed border-border/60 grid grid-cols-3 gap-1">
+                    <div className="flex flex-col min-w-0">
+                        <span className="text-[9px] text-muted-foreground uppercase tracking-wide">Presup.</span>
+                        <span className="text-[11px] font-medium text-foreground truncate">{formatCurrency(project.presupuesto_aceptado || 0)}</span>
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                        <span className="text-[9px] text-muted-foreground uppercase tracking-wide">Gastos</span>
+                        <span className="text-[11px] font-medium text-red-500/90 truncate">{formatCurrency(project.costo_total || 0)}</span>
+                    </div>
+                    <div className="flex flex-col items-end min-w-0">
+                        <span className="text-[9px] text-muted-foreground uppercase tracking-wide">Margen</span>
+                        <span className={`text-[11px] font-bold ${marginColor} truncate`}>{formatCurrency(margin)}</span>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    // NUEVO: tarjeta de obra dentro del Historial de Cobradas (columna COBRADO
+    // del Kanban). Mismo formato visual que renderKanbanCard, pero sin drag.
+    const renderHistorialCard = (project) => {
+        const margin = project.margen || 0;
+        const marginColor = margin >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500 dark:text-red-400';
+        const fecha = project.fecha_cobrado || project.fecha_fin_real || project.fecha_creacion;
+
+        return (
+            <div
+                key={project.proyecto_id}
+                onClick={() => {
+                    try { localStorage.setItem('kanban_historial_mes_abierto', kanbanHistorialMonth || ''); } catch {}
+                    navigate(`/gestion/obras/${project.proyecto_id}`);
+                }}
+                className="group bg-card rounded-lg border border-border/60 shadow-sm p-3 cursor-pointer hover:shadow-md hover:border-primary/30 transition-all select-none"
+            >
+                <h3 className="text-sm font-bold text-foreground leading-tight line-clamp-2 group-hover:text-primary transition-colors">
+                    {project.nombre_proyecto}
+                </h3>
+                <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Calendar className="w-3 h-3 shrink-0" />
+                    <span>{formatDate(fecha)}</span>
+                </div>
+                <div className="mt-3 pt-2 border-t border-dashed border-border/60 grid grid-cols-3 gap-1">
+                    <div className="flex flex-col min-w-0">
+                        <span className="text-[9px] text-muted-foreground uppercase tracking-wide">Presup.</span>
+                        <span className="text-[11px] font-medium text-foreground truncate">{formatCurrency(project.presupuesto_aceptado || 0)}</span>
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                        <span className="text-[9px] text-muted-foreground uppercase tracking-wide">Gastos</span>
+                        <span className="text-[11px] font-medium text-red-500/90 truncate">{formatCurrency(project.costo_total || 0)}</span>
+                    </div>
+                    <div className="flex flex-col items-end min-w-0">
+                        <span className="text-[9px] text-muted-foreground uppercase tracking-wide">Margen</span>
+                        <span className={`text-[11px] font-bold ${marginColor} truncate`}>{formatCurrency(margin)}</span>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    // NUEVO: contenido de la columna COBRADO — o bien la lista de meses,
+    // o bien (si hay un mes seleccionado) las tarjetas de ese mes.
+    const renderCobradoColumnContent = () => {
+        const monthEntries = Object.entries(facturadoProjects).sort((a, b) => {
+            try { return parseISO(a[1][0]?.fecha_cobrado || a[1][0]?.fecha_fin_real || a[1][0]?.fecha_creacion) < parseISO(b[1][0]?.fecha_cobrado || b[1][0]?.fecha_fin_real || b[1][0]?.fecha_creacion) ? 1 : -1; }
+            catch { return 0; }
+        });
+
+        if (kanbanHistorialMonth && facturadoProjects[kanbanHistorialMonth]) {
+            const monthProjects = facturadoProjects[kanbanHistorialMonth];
+            return (
+                <div className="space-y-2">
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 -ml-1 text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => {
+                            setKanbanHistorialMonth(null);
+                            try { localStorage.removeItem('kanban_historial_mes_abierto'); } catch {}
+                        }}
+                    >
+                        <ChevronLeft className="h-3.5 w-3.5 mr-1" /> Volver al historial
+                    </Button>
+                    <div className="text-xs font-semibold capitalize text-muted-foreground px-0.5">
+                        {kanbanHistorialMonth} · {monthProjects.length}
+                    </div>
+                    {monthProjects.map(p => renderHistorialCard(p))}
+                </div>
+            );
+        }
+
+        if (monthEntries.length === 0) {
+            return (
+                <div className="h-32 flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-border text-xs text-center px-3 text-muted-foreground">
+                    <Archive className="w-5 h-5 opacity-60" />
+                    Aún no hay obras cobradas
+                </div>
+            );
+        }
+
+        return (
+            <div className="space-y-1.5">
+                {monthEntries.map(([month, monthProjects]) => (
+                    <button
+                        key={month}
+                        onClick={() => {
+                            setKanbanHistorialMonth(month);
+                            try { localStorage.setItem('kanban_historial_mes_abierto', month); } catch {}
+                        }}
+                        className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-card border border-border/60 hover:border-primary/40 hover:bg-primary/5 transition-colors text-left"
+                    >
+                        <span className="text-sm font-medium capitalize truncate">{month}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                            <Badge variant="secondary" className="text-[10px] h-5 px-1.5">{monthProjects.length}</Badge>
+                            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                        </div>
+                    </button>
+                ))}
+            </div>
+        );
+    };
+
+    const renderKanbanColumn = (status) => {
+        const columnProjects = kanbanGroups[status] || [];
+        const style = KANBAN_STYLES[status];
+        const isOver = dragOverColumn === status;
+        const isCobradoColumn = status === 'cobrado';
+        const totalHistorial = Object.values(facturadoProjects).reduce((sum, arr) => sum + arr.length, 0);
+
+        return (
+            <div
+                key={status}
+                onDragOver={isCobradoColumn ? undefined : (e) => handleColumnDragOver(e, status)}
+                onDragLeave={isCobradoColumn ? undefined : (e) => handleColumnDragLeave(e, status)}
+                onDrop={isCobradoColumn ? undefined : (e) => handleColumnDrop(e, status)}
+                className={`flex flex-col rounded-xl border transition-colors min-w-[260px] w-[260px] md:min-w-0 md:w-auto md:flex-1
+                    ${isOver ? 'border-primary bg-primary/5 ring-2 ring-primary/30' : 'border-border/60 bg-muted/40'}`}
+            >
+                {/* Cabecera de columna */}
+                <div
+                    className="px-3 py-2.5 rounded-t-xl border-b flex items-center justify-between gap-2"
+                    style={{ backgroundColor: style.bg, borderColor: style.br }}
+                >
+                    <span className="uppercase text-xs font-bold tracking-wide flex items-center gap-1.5" style={{ color: style.text }}>
+                        {isCobradoColumn && <Archive className="w-3.5 h-3.5" />}
+                        {style.label}
+                    </span>
+                    <span
+                        className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/70"
+                        style={{ color: style.text }}
+                    >
+                        {isCobradoColumn ? totalHistorial : columnProjects.length}
+                    </span>
+                </div>
+
+                {/* Contenido */}
+                <div className="flex-1 p-2 space-y-2 overflow-y-auto max-h-[calc(100vh-320px)] min-h-[140px]">
+                    {isCobradoColumn ? (
+                        renderCobradoColumnContent()
+                    ) : columnProjects.length === 0 ? (
+                        <div className={`h-24 flex items-center justify-center rounded-lg border-2 border-dashed text-xs
+                            ${isOver ? 'border-primary/40 text-primary' : 'border-border text-muted-foreground'}`}>
+                            {isOver ? 'Suelta aquí' : 'Sin obras'}
+                        </div>
+                    ) : (
+                        columnProjects.map(p => renderKanbanCard(p))
+                    )}
+                </div>
+            </div>
+        );
+    };
+
+    const renderKanbanBoard = () => (
+        <div className="flex gap-3 overflow-x-auto pb-4 items-stretch md:overflow-x-visible">
+            {KANBAN_COLUMNS.map(status => renderKanbanColumn(status))}
+        </div>
+    );
+
     if (loadingAuth) {
         return (
             <div className="flex justify-center items-center h-full">
@@ -511,7 +922,7 @@ const Projects = ({ navigate }) => {
                 <div className="relative w-full md:w-auto md:flex-1 md:max-w-md">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
-                        placeholder="Buscar proyecto..."
+                        placeholder="Buscar por obra, cliente, dirección o teléfono..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="pl-9 h-10 text-sm bg-card"
@@ -524,6 +935,9 @@ const Projects = ({ navigate }) => {
                         </ToggleGroupItem>
                         <ToggleGroupItem value="list" aria-label="Vista de lista">
                             <ListIcon className="h-4 w-4" />
+                        </ToggleGroupItem>
+                        <ToggleGroupItem value="kanban" aria-label="Vista Kanban">
+                            <Columns className="h-4 w-4" />
                         </ToggleGroupItem>
                     </ToggleGroup>
                 </div>
@@ -544,7 +958,9 @@ const Projects = ({ navigate }) => {
                                 exit={{ opacity: 0, y: -5 }}
                                 transition={{ duration: 0.2 }}
                             >
-                                {viewMode === 'grid' ? (
+                                {viewMode === 'kanban' ? (
+                                    renderKanbanBoard()
+                                ) : viewMode === 'grid' ? (
                                     <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-6">
                                         {projects.map((project) => (
                                             <ProjectCard
@@ -571,25 +987,36 @@ const Projects = ({ navigate }) => {
                             !loading && Object.keys(facturadoProjects).length === 0 && (
                                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-12 bg-card/50 rounded-xl border border-dashed">
                                     <Archive className="w-12 h-12 mx-auto text-muted-foreground/50 mb-3" />
-                                    <h3 className="text-lg font-medium text-foreground">Sin proyectos activos</h3>
-                                    <p className="text-sm text-muted-foreground mt-1">No hay obras activas en este momento.</p>
+                                    <h3 className="text-lg font-medium text-foreground">
+                                        {isSearching ? 'Sin resultados para tu búsqueda' : 'Sin proyectos activos'}
+                                    </h3>
+                                    <p className="text-sm text-muted-foreground mt-1">
+                                        {isSearching ? 'Prueba con otro nombre, cliente, dirección o teléfono.' : 'No hay obras activas en este momento.'}
+                                    </p>
                                 </motion.div>
                             )
                         )}
                     </AnimatePresence>
 
-                    {Object.keys(facturadoProjects).length > 0 && (
+                    {/* El Historial de Cobradas en vista Kanban vive DENTRO de la columna
+                        COBRADO (renderCobradoColumnContent). En grid/list se muestra aquí
+                        debajo, como antes, para no perder esa vista agrupada por mes. */}
+                    {viewMode !== 'kanban' && Object.keys(facturadoProjects).length > 0 && (
                         <div className="mt-8 md:mt-12">
                             <h2 className="text-lg md:text-xl font-bold text-foreground mb-4 flex items-center gap-2 opacity-80">
                                 <Archive className="w-5 h-5" />
-                                Historial de Facturados
+                                Historial de Cobradas
                             </h2>
                             <div className="space-y-2 md:space-y-4">
                                 {Object.entries(facturadoProjects).sort((a, b) => new Date(b[0]) - new Date(a[0])).map(([month, monthProjects]) => (
                                     <Collapsible
                                         key={month}
-                                        defaultOpen={openMonth === month}
+                                        // Al buscar, se fuerzan TODOS los meses abiertos (controlado) para no
+                                        // tener que adivinar en qué mes está el resultado. Sin búsqueda activa,
+                                        // se respeta el comportamiento manual de siempre (recordando el último abierto).
+                                        open={isSearching ? true : openMonth === month}
                                         onOpenChange={(isOpen) => {
+                                            if (isSearching) return;
                                             if (isOpen) {
                                                 setOpenMonth(month);
                                                 try { localStorage.setItem('historial_mes_abierto', month); } catch {}
@@ -611,7 +1038,18 @@ const Projects = ({ navigate }) => {
                                         </CollapsibleTrigger>
                                         <CollapsibleContent className="border-t border-border/50">
                                             <div className="p-2 md:p-4 bg-muted/10">
-                                                {viewMode === 'grid' ? (
+                                                {viewMode === 'list' ? (
+                                                    <ProjectList
+                                                        projects={monthProjects}
+                                                        onClick={(project) => {
+                                                            try { localStorage.setItem('historial_mes_abierto', month); } catch {}
+                                                            navigate(`/gestion/obras/${project.proyecto_id}`);
+                                                        }}
+                                                        onEdit={handleEditProject}
+                                                        onDelete={handleDeleteClick}
+                                                        canManage={canManage}
+                                                    />
+                                                ) : (
                                                     <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-6">
                                                         {monthProjects.map(project => (
                                                             <ProjectCard
@@ -627,17 +1065,6 @@ const Projects = ({ navigate }) => {
                                                             />
                                                         ))}
                                                     </div>
-                                                ) : (
-                                                    <ProjectList
-                                                        projects={monthProjects}
-                                                        onClick={(project) => {
-                                                            try { localStorage.setItem('historial_mes_abierto', month); } catch {}
-                                                            navigate(`/gestion/obras/${project.proyecto_id}`);
-                                                        }}
-                                                        onEdit={handleEditProject}
-                                                        onDelete={handleDeleteClick}
-                                                        canManage={canManage}
-                                                    />
                                                 )}
                                             </div>
                                         </CollapsibleContent>

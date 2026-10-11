@@ -3,14 +3,12 @@ import { supabase } from '@/lib/customSupabaseClient';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 import { Loader2, RefreshCw, PlusCircle, Search } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Helmet } from 'react-helmet';
-import { useAuth } from '@/contexts/SupabaseAuthContext'; 
+import { useAuth } from '@/contexts/SupabaseAuthContext';
 import ObrasProcesosList from '@/components/ObrasProcesosList';
+import ProjectForm from '@/components/ProjectForm';
 
 const useDebounce = (value, delay) => {
     const [debouncedValue, setDebouncedValue] = useState(value);
@@ -32,7 +30,6 @@ const ObrasSafe = () => {
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [isCreateModalOpen, setCreateModalOpen] = useState(false);
-    const [newObra, setNewObra] = useState({ nombre: '', descripcion: '', presupuesto: '', estado: 'activo' });
 
     const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
@@ -46,8 +43,8 @@ const ObrasSafe = () => {
         let query = supabase
             .from('v_obras_procesos_tablero_v2')
             .select('*')
-            .order('fecha_inicio', { ascending: false, nulls: 'last' }); // Assuming fecha_inicio is a good sort
-        
+            .order('fecha_inicio', { ascending: false, nulls: 'last' });
+
         if (debouncedSearchTerm) {
             query = query.ilike('nombre', `%${debouncedSearchTerm}%`);
         }
@@ -65,34 +62,12 @@ const ObrasSafe = () => {
     useEffect(() => {
         fetchObras();
     }, [fetchObras]);
-    
-    const createMutation = async (newObra) => {
-        const { error } = await supabase.rpc('proyecto_create_v1', {
-            p_nombre: newObra.nombre,
-            p_descripcion: newObra.descripcion || null,
-            p_presupuesto: Number(newObra.presupuesto) || 0,
-            p_estado: newObra.estado || 'activo',
-        });
-        if (error) throw error;
-    };
 
-    const handleCreateSubmit = async () => {
-        if (!newObra.nombre.trim()) {
-            toast({ variant: 'destructive', title: 'El nombre es requerido' });
-            return;
-        }
-        try {
-            await createMutation(newObra);
-            toast({ title: '¡Obra creada!', description: 'La nueva obra ha sido registrada.' });
-            setCreateModalOpen(false);
-            setNewObra({ nombre: '', descripcion: '', presupuesto: '', estado: 'activo' });
-            fetchObras();
-        } catch(err) {
-            toast({ variant: 'destructive', title: 'Error creando la obra', description: err.message });
-        }
+    // Al guardar desde ProjectForm: cerrar modal y refrescar la lista.
+    const handleCreated = () => {
+        setCreateModalOpen(false);
+        fetchObras();
     };
-
-    const estadoOptions = ['activo', 'pendiente', 'en curso', 'facturado', 'completada'];
 
     return (
         <>
@@ -133,43 +108,20 @@ const ObrasSafe = () => {
                 {/* New Card List Component */}
                 <ObrasProcesosList obras={obras} loading={loading} />
 
-                {/* Create Modal */}
+                {/* Create Modal -> usa el formulario completo (con cliente obligatorio) */}
                 <Dialog open={isCreateModalOpen} onOpenChange={setCreateModalOpen}>
-                    <DialogContent className="sm:max-w-[500px]">
-                        <DialogHeader>
+                    <DialogContent className="sm:max-w-[725px] p-0 overflow-hidden rounded-xl">
+                        <DialogHeader className="px-6 pt-6 pb-2">
                             <DialogTitle>Crear Nueva Obra</DialogTitle>
-                            <DialogDescription>Rellena los datos para registrar un nuevo proyecto.</DialogDescription>
+                            <DialogDescription>Registra una nueva obra en el sistema.</DialogDescription>
                         </DialogHeader>
-                        <div className="grid gap-4 py-4">
-                             <div className="grid gap-2">
-                                <Label htmlFor="nombre">Nombre*</Label>
-                                <Input id="nombre" value={newObra.nombre} onChange={(e) => setNewObra({ ...newObra, nombre: e.target.value })} placeholder="Ej: Reforma Baño Principal" />
-                            </div>
-                             <div className="grid gap-2">
-                                <Label htmlFor="descripcion">Descripción</Label>
-                                <Textarea id="descripcion" value={newObra.descripcion} onChange={(e) => setNewObra({ ...newObra, descripcion: e.target.value })} placeholder="Detalles de la obra..." rows={3} />
-                            </div>
-                            <div className="grid gap-2">
-                                <Label htmlFor="presupuesto">Presupuesto (€)</Label>
-                                <Input id="presupuesto" type="number" value={newObra.presupuesto} onChange={(e) => setNewObra({ ...newObra, presupuesto: e.target.value })} placeholder="0.00" />
-                            </div>
-                            <div className="grid gap-2">
-                                <Label htmlFor="estado">Estado</Label>
-                                <Select value={newObra.estado} onValueChange={(value) => setNewObra({ ...newObra, estado: value })}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        {estadoOptions.map(opt => <SelectItem key={opt} value={opt} className="capitalize">{opt}</SelectItem>)}
-                                    </SelectContent>
-                                </Select>
-                            </div>
+                        <div className="px-6 pb-6 max-h-[80vh] overflow-y-auto">
+                            <ProjectForm
+                                project={null}
+                                onSave={handleCreated}
+                                onCancel={() => setCreateModalOpen(false)}
+                            />
                         </div>
-                        <DialogFooter>
-                            <Button variant="outline" onClick={() => setCreateModalOpen(false)}>Cancelar</Button>
-                            <Button onClick={handleCreateSubmit} disabled={loading}>
-                                {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                Crear Obra
-                            </Button>
-                        </DialogFooter>
                     </DialogContent>
                 </Dialog>
             </div>

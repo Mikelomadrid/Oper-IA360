@@ -6,53 +6,110 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Save, Loader2, Share2, Calculator } from 'lucide-react';
+import { Save, Loader2, Share2, Calculator, Tag } from 'lucide-react';
 import { ClientSelector } from '@/components/ClientSelector';
+import {
+    TIPOS_PRINCIPALES_TRABAJO,
+    OFICIOS_DOMINANTES,
+    OFICIOS_SECUNDARIOS,
+    TAMANOS_OPERATIVOS,
+    ESTADOS_VALIDEZ_ANALISIS,
+    ETIQUETAS_RENTABILIDAD,
+    defaultEstadoValidezAnalisis,
+} from '@/lib/obraClasificacion';
 
 const projectStatusEnum = ['activo', 'en_espera', 'terminado', 'facturado', 'cobrado', 'garantia', 'cerrado'];
+
+// Selector múltiple sencillo basado en "chips" toggle. Sin librerías externas,
+// pensado para listas cortas (oficios_secundarios, etiquetas_rentabilidad).
+const MultiSelectToggle = ({ options, value = [], onChange }) => {
+    const toggle = (val) => {
+        if (value.includes(val)) {
+            onChange(value.filter((v) => v !== val));
+        } else {
+            onChange([...value, val]);
+        }
+    };
+    return (
+        <div className="flex flex-wrap gap-2">
+            {options.map((opt) => {
+                const active = value.includes(opt.value);
+                return (
+                    <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => toggle(opt.value)}
+                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${active
+                            ? 'bg-primary text-primary-foreground border-primary'
+                            : 'bg-muted/30 text-muted-foreground border-border hover:border-primary/50'
+                            }`}
+                    >
+                        {opt.label}
+                    </button>
+                );
+            })}
+        </div>
+    );
+};
+
+const buildFormState = (project) => {
+    if (project) {
+        return {
+            nombre_proyecto: project.nombre_proyecto || '',
+            cliente_id: project.cliente_id || '',
+            contacto_nombre: project.contacto_nombre || '',
+            contacto_telefono: project.contacto_telefono || '',
+            direccion_obra: project.direccion_obra || '',
+            descripcion: project.descripcion || '',
+            estado: project.estado || 'activo',
+            fecha_inicio: project.fecha_inicio ? (typeof project.fecha_inicio === 'string' ? project.fecha_inicio.split('T')[0] : project.fecha_inicio) : '',
+            fecha_fin_estimada: project.fecha_fin_estimada ? (typeof project.fecha_fin_estimada === 'string' ? project.fecha_fin_estimada.split('T')[0] : project.fecha_fin_estimada) : '',
+            fecha_cierre_real: project.fecha_cierre_real ? (typeof project.fecha_cierre_real === 'string' ? project.fecha_cierre_real.split('T')[0] : project.fecha_cierre_real) : '',
+            presupuesto_aceptado: project.presupuesto_aceptado || 0,
+            objetivo_margen_pct: project.objetivo_margen_pct || 15,
+            gastos_generales_estimados: project.gastos_generales_estimados || 0,
+            es_compartida: project.es_compartida || false,
+            tipo_reparto: project.tipo_reparto || 'fijo',
+            // Clasificación de rentabilidad
+            tipo_principal_trabajo: project.tipo_principal_trabajo || '',
+            oficio_dominante: project.oficio_dominante || '',
+            oficios_secundarios: project.oficios_secundarios || [],
+            tamano_operativo: project.tamano_operativo || '',
+            estado_validez_analisis: project.estado_validez_analisis || defaultEstadoValidezAnalisis(project.estado || 'activo'),
+            etiquetas_rentabilidad: project.etiquetas_rentabilidad || [],
+        };
+    }
+    return {
+        nombre_proyecto: '',
+        cliente_id: '',
+        contacto_nombre: '',
+        contacto_telefono: '',
+        direccion_obra: '',
+        descripcion: '',
+        estado: 'activo',
+        fecha_inicio: '',
+        fecha_fin_estimada: '',
+        fecha_cierre_real: '',
+        presupuesto_aceptado: 0,
+        objetivo_margen_pct: 15,
+        gastos_generales_estimados: 0,
+        es_compartida: false,
+        tipo_reparto: 'fijo',
+        // Clasificación de rentabilidad
+        tipo_principal_trabajo: '',
+        oficio_dominante: '',
+        oficios_secundarios: [],
+        tamano_operativo: '',
+        estado_validez_analisis: defaultEstadoValidezAnalisis('activo'),
+        etiquetas_rentabilidad: [],
+    };
+};
 
 const ProjectForm = ({ project, onSave, onCancel }) => {
     // Use useRef to track the current project ID being edited to prevent overwriting form state on parent re-renders
     const currentProjectIdRef = useRef(project ? project.id : 'new');
 
-    const [formData, setFormData] = useState(() => {
-        if (project) {
-            return {
-                nombre_proyecto: project.nombre_proyecto || '',
-                cliente_id: project.cliente_id || '',
-                contacto_nombre: project.contacto_nombre || '',
-                contacto_telefono: project.contacto_telefono || '',
-                direccion_obra: project.direccion_obra || '',
-                descripcion: project.descripcion || '',
-                estado: project.estado || 'activo',
-                fecha_inicio: project.fecha_inicio ? (typeof project.fecha_inicio === 'string' ? project.fecha_inicio.split('T')[0] : project.fecha_inicio) : '',
-                fecha_fin_estimada: project.fecha_fin_estimada ? (typeof project.fecha_fin_estimada === 'string' ? project.fecha_fin_estimada.split('T')[0] : project.fecha_fin_estimada) : '',
-                fecha_cierre_real: project.fecha_cierre_real ? (typeof project.fecha_cierre_real === 'string' ? project.fecha_cierre_real.split('T')[0] : project.fecha_cierre_real) : '',
-                presupuesto_aceptado: project.presupuesto_aceptado || 0,
-                objetivo_margen_pct: project.objetivo_margen_pct || 15,
-                gastos_generales_estimados: project.gastos_generales_estimados || 0,
-                es_compartida: project.es_compartida || false,
-                tipo_reparto: project.tipo_reparto || 'fijo',
-            };
-        }
-        return {
-            nombre_proyecto: '',
-            cliente_id: '',
-            contacto_nombre: '',
-            contacto_telefono: '',
-            direccion_obra: '',
-            descripcion: '',
-            estado: 'activo',
-            fecha_inicio: '',
-            fecha_fin_estimada: '',
-            fecha_cierre_real: '',
-            presupuesto_aceptado: 0,
-            objetivo_margen_pct: 15,
-            gastos_generales_estimados: 0,
-            es_compartida: false,
-            tipo_reparto: 'fijo',
-        };
-    });
+    const [formData, setFormData] = useState(() => buildFormState(project));
 
     // Initialize label from prop if available
     const [initialClientLabel, setInitialClientLabel] = useState(() => {
@@ -73,23 +130,7 @@ const ProjectForm = ({ project, onSave, onCancel }) => {
 
             if (project) {
                 setIsEditing(true);
-                setFormData({
-                    nombre_proyecto: project.nombre_proyecto || '',
-                    cliente_id: project.cliente_id || '',
-                    contacto_nombre: project.contacto_nombre || '',
-                    contacto_telefono: project.contacto_telefono || '',
-                    direccion_obra: project.direccion_obra || '',
-                    descripcion: project.descripcion || '',
-                    estado: project.estado || 'activo',
-                    fecha_inicio: project.fecha_inicio ? (typeof project.fecha_inicio === 'string' ? project.fecha_inicio.split('T')[0] : project.fecha_inicio) : '',
-                    fecha_fin_estimada: project.fecha_fin_estimada ? (typeof project.fecha_fin_estimada === 'string' ? project.fecha_fin_estimada.split('T')[0] : project.fecha_fin_estimada) : '',
-                    fecha_cierre_real: project.fecha_cierre_real ? (typeof project.fecha_cierre_real === 'string' ? project.fecha_cierre_real.split('T')[0] : project.fecha_cierre_real) : '',
-                    presupuesto_aceptado: project.presupuesto_aceptado || 0,
-                    objetivo_margen_pct: project.objetivo_margen_pct || 15,
-                    gastos_generales_estimados: project.gastos_generales_estimados || 0,
-                    es_compartida: project.es_compartida || false,
-                    tipo_reparto: project.tipo_reparto || 'fijo',
-                });
+                setFormData(buildFormState(project));
 
                 if (project.cliente && project.cliente.nombre) {
                     setInitialClientLabel(project.cliente.nombre);
@@ -104,23 +145,7 @@ const ProjectForm = ({ project, onSave, onCancel }) => {
                 }
             } else {
                 setIsEditing(false);
-                setFormData({
-                    nombre_proyecto: '',
-                    cliente_id: '',
-                    contacto_nombre: '',
-                    contacto_telefono: '',
-                    direccion_obra: '',
-                    descripcion: '',
-                    estado: 'activo',
-                    fecha_inicio: '',
-                    fecha_fin_estimada: '',
-                    fecha_cierre_real: '',
-                    presupuesto_aceptado: 0,
-                    objetivo_margen_pct: 15,
-                    gastos_generales_estimados: 0,
-                    es_compartida: false,
-                    tipo_reparto: 'fijo',
-                });
+                setFormData(buildFormState(null));
                 setInitialClientLabel('');
             }
         }
@@ -142,11 +167,34 @@ const ProjectForm = ({ project, onSave, onCancel }) => {
         }
     };
 
+    // NUEVO: al elegir/crear un cliente, autocompletar los datos de la obra desde su ficha.
+    // Quedan EDITABLES: el contacto y la dirección de la OBRA pueden diferir de los del cliente
+    // (la obra puede estar en otra dirección distinta a la fiscal del cliente).
+    const handleClienteChange = (value, label, cliente) => {
+        setFormData(prev => {
+            const next = { ...prev, cliente_id: value || '' };
+            if (cliente) {
+                next.contacto_nombre = cliente.contacto || cliente.nombre || prev.contacto_nombre;
+                next.contacto_telefono = cliente.telefono || prev.contacto_telefono;
+                const dir = cliente.direccion || cliente.calle_numero;
+                if (dir) next.direccion_obra = dir;
+            }
+            return next;
+        });
+        setInitialClientLabel(label || '');
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
 
         if (!formData.nombre_proyecto) {
             toast({ variant: 'destructive', title: 'Error de validación', description: 'Nombre del proyecto es obligatorio.' });
+            return;
+        }
+        // NUEVO: el cliente es obligatorio en la obra (regla de unificación).
+        // Si el cliente no existe todavía, créalo desde el propio selector ("Crear cliente nuevo").
+        if (!formData.cliente_id) {
+            toast({ variant: 'destructive', title: 'Falta el cliente', description: 'Toda obra debe tener un cliente asignado. Búscalo o créalo en el selector de Cliente.' });
             return;
         }
         if (!formData.contacto_nombre) {
@@ -180,6 +228,23 @@ const ProjectForm = ({ project, onSave, onCancel }) => {
             return;
         }
 
+        // Clasificación mínima obligatoria SOLO al crear una obra nueva.
+        // Las obras antiguas pueden quedarse sin clasificar hasta que se revisen.
+        if (!isEditing) {
+            if (!formData.tipo_principal_trabajo) {
+                toast({ variant: 'destructive', title: 'Falta clasificar la obra', description: 'Selecciona el Tipo Principal de Trabajo.' });
+                return;
+            }
+            if (!formData.oficio_dominante) {
+                toast({ variant: 'destructive', title: 'Falta clasificar la obra', description: 'Selecciona el Oficio Dominante.' });
+                return;
+            }
+            if (!formData.tamano_operativo) {
+                toast({ variant: 'destructive', title: 'Falta clasificar la obra', description: 'Selecciona el Tamaño Operativo.' });
+                return;
+            }
+        }
+
         setLoading(true);
 
         const submissionData = {
@@ -198,6 +263,13 @@ const ProjectForm = ({ project, onSave, onCancel }) => {
             fecha_cierre_real: formData.fecha_cierre_real || null,
             es_compartida: formData.es_compartida || false,
             tipo_reparto: formData.tipo_reparto || 'fijo',
+            // Clasificación de rentabilidad
+            tipo_principal_trabajo: formData.tipo_principal_trabajo || null,
+            oficio_dominante: formData.oficio_dominante || null,
+            oficios_secundarios: formData.oficios_secundarios || [],
+            tamano_operativo: formData.tamano_operativo || null,
+            estado_validez_analisis: formData.estado_validez_analisis || 'revisar',
+            etiquetas_rentabilidad: formData.etiquetas_rentabilidad || [],
         };
 
         let error;
@@ -215,6 +287,8 @@ const ProjectForm = ({ project, onSave, onCancel }) => {
             let description = error.message;
             if (error.code === '22P02') {
                 description = 'Estado no válido. Selecciona un estado permitido.';
+            } else if (error.code === '23514') {
+                description = 'Uno de los valores de clasificación no es válido.';
             } else if (error.code === '42501') {
                 description = 'No tienes permisos para realizar esta acción.';
             }
@@ -233,10 +307,10 @@ const ProjectForm = ({ project, onSave, onCancel }) => {
                     <Input id="nombre_proyecto" name="nombre_proyecto" value={formData.nombre_proyecto} onChange={handleChange} required />
                 </div>
                 <div>
-                    <Label htmlFor="cliente_id">Cliente</Label>
+                    <Label htmlFor="cliente_id">Cliente *</Label>
                     <ClientSelector
                         value={formData.cliente_id}
-                        onChange={(value, label) => handleSelectChange('cliente_id', value, label)}
+                        onChange={(value, label, cliente) => handleClienteChange(value, label, cliente)}
                         initialLabel={initialClientLabel}
                     />
                 </div>
@@ -317,6 +391,102 @@ const ProjectForm = ({ project, onSave, onCancel }) => {
                 <div>
                     <Label htmlFor="gastos_generales_estimados">Gastos Generales Estimados (€)</Label>
                     <Input id="gastos_generales_estimados" name="gastos_generales_estimados" type="number" step="0.01" value={formData.gastos_generales_estimados} onChange={handleChange} />
+                </div>
+            </div>
+
+            {/* ─── Clasificación de rentabilidad ─────────────────────────────── */}
+            <div className="p-4 rounded-xl border bg-muted/10 space-y-4">
+                <div className="flex items-center gap-2 text-foreground">
+                    <Tag className="w-4 h-4" />
+                    <Label className="font-bold">Clasificación de la obra</Label>
+                    {!isEditing && <span className="text-xs text-muted-foreground">(obligatoria para obras nuevas)</span>}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <Label htmlFor="tipo_principal_trabajo">Tipo Principal de Trabajo {!isEditing && '*'}</Label>
+                        <Select
+                            value={formData.tipo_principal_trabajo}
+                            onValueChange={(value) => setFormData(prev => ({ ...prev, tipo_principal_trabajo: value }))}
+                        >
+                            <SelectTrigger id="tipo_principal_trabajo">
+                                <SelectValue placeholder="Selecciona..." />
+                            </SelectTrigger>
+                            <SelectContent className="z-[9999]">
+                                {TIPOS_PRINCIPALES_TRABAJO.map(opt => (
+                                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div>
+                        <Label htmlFor="oficio_dominante">Oficio Dominante {!isEditing && '*'}</Label>
+                        <Select
+                            value={formData.oficio_dominante}
+                            onValueChange={(value) => setFormData(prev => ({ ...prev, oficio_dominante: value }))}
+                        >
+                            <SelectTrigger id="oficio_dominante">
+                                <SelectValue placeholder="Selecciona..." />
+                            </SelectTrigger>
+                            <SelectContent className="z-[9999]">
+                                {OFICIOS_DOMINANTES.map(opt => (
+                                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div>
+                        <Label htmlFor="tamano_operativo">Tamaño Operativo {!isEditing && '*'}</Label>
+                        <Select
+                            value={formData.tamano_operativo}
+                            onValueChange={(value) => setFormData(prev => ({ ...prev, tamano_operativo: value }))}
+                        >
+                            <SelectTrigger id="tamano_operativo">
+                                <SelectValue placeholder="Selecciona..." />
+                            </SelectTrigger>
+                            <SelectContent className="z-[9999]">
+                                {TAMANOS_OPERATIVOS.map(opt => (
+                                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                </div>
+
+                <div>
+                    <Label htmlFor="estado_validez_analisis">Estado de Validez para Análisis</Label>
+                    <Select
+                        value={formData.estado_validez_analisis}
+                        onValueChange={(value) => setFormData(prev => ({ ...prev, estado_validez_analisis: value }))}
+                    >
+                        <SelectTrigger id="estado_validez_analisis" className="md:w-1/3">
+                            <SelectValue placeholder="Selecciona..." />
+                        </SelectTrigger>
+                        <SelectContent className="z-[9999]">
+                            {ESTADOS_VALIDEZ_ANALISIS.map(opt => (
+                                <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+
+                <div>
+                    <Label className="mb-2 block">Oficios Secundarios</Label>
+                    <MultiSelectToggle
+                        options={OFICIOS_SECUNDARIOS}
+                        value={formData.oficios_secundarios}
+                        onChange={(vals) => setFormData(prev => ({ ...prev, oficios_secundarios: vals }))}
+                    />
+                </div>
+
+                <div>
+                    <Label className="mb-2 block">Etiquetas de Rentabilidad</Label>
+                    <MultiSelectToggle
+                        options={ETIQUETAS_RENTABILIDAD}
+                        value={formData.etiquetas_rentabilidad}
+                        onChange={(vals) => setFormData(prev => ({ ...prev, etiquetas_rentabilidad: vals }))}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">Puede dejarse vacío y completarse al cerrar o analizar la obra.</p>
                 </div>
             </div>
 

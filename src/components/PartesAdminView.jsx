@@ -51,12 +51,20 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from '@/components/ui/use-toast';
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
 import PartesStatistics from '@/components/PartesStatistics';
+import PartesKanban from '@/components/PartesKanban';
 import { getStatusColor, getStatusTextColor, getStatusLabel } from '@/utils/statusColors';
 import { mapInternalToUI } from '@/utils/parteEstadoUIMap';
 import { useSearchParams } from 'react-router-dom';
+import { useAvisosMikelo } from '@/hooks/useAvisosMikelo';
+import AvisoBolita, { AVISO_ROW_CLASS } from '@/components/AvisoBolita';
+
+// Estados terminales que van al Archivo Histórico (usado tanto por el toggle de
+// página completa "Archivo Histórico" como por la columna HISTORIAL del Kanban).
+const ARCHIVE_STATES = ['aceptado', 'rechazado', 'cerrado', 'cancelado', 'cobrado'];
 
 const PartesAdminView = ({ navigate }) => {
   const { user, sessionRole } = useAuth();
@@ -66,9 +74,13 @@ const PartesAdminView = ({ navigate }) => {
   const [creators, setCreators] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Avisos pendientes para Mikelo (admin): bolita verde + fila sombreada
+  // hasta que se abra el parte con la actualización.
+  const { pendingPartes } = useAvisosMikelo();
+
   // --- STATE WITH PERSISTENCE ---
   const DEFAULT_FILTERS = {
-    status: 'all',
+    status: [], // array de estados seleccionados; [] = todos
     technician: 'all',
     creator: 'all',
     origin: 'all',
@@ -80,7 +92,13 @@ const PartesAdminView = ({ navigate }) => {
   const [filters, setFilters] = useState(() => {
     try {
       const saved = sessionStorage.getItem('partes_filters_state');
-      return saved ? { ...DEFAULT_FILTERS, ...JSON.parse(saved) } : DEFAULT_FILTERS;
+      const parsed = saved ? JSON.parse(saved) : {};
+      const merged = { ...DEFAULT_FILTERS, ...parsed };
+      // Migración de sesiones antiguas donde status era un string único ('all' o un estado)
+      if (!Array.isArray(merged.status)) {
+        merged.status = (merged.status && merged.status !== 'all') ? [merged.status] : [];
+      }
+      return merged;
     } catch (e) {
       return DEFAULT_FILTERS;
     }
@@ -123,8 +141,9 @@ const PartesAdminView = ({ navigate }) => {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [assignLoading, setAssignLoading] = useState(false);
 
+  // ACTUALIZADO: vista por defecto = kanban
   const [viewMode, setViewMode] = useState(() => {
-    return localStorage.getItem('partesViewMode') || 'list';
+    return localStorage.getItem('partesViewMode') || 'kanban';
   });
 
   const [selectedPartes, setSelectedPartes] = useState(new Set());
@@ -132,6 +151,15 @@ const PartesAdminView = ({ navigate }) => {
   const [transitionType, setTransitionType] = useState(null);
   const [transitionNote, setTransitionNote] = useState('');
   const [processingTransition, setProcessingTransition] = useState(false);
+
+  // Grupos (meses) abiertos en el Accordion del Archivo Histórico. Controlado a mano
+  // para poder auto-expandir los meses que tengan resultados al buscar.
+  const [openArchiveGroups, setOpenArchiveGroups] = useState([]);
+
+  // NUEVO: partes archivados para la columna HISTORIAL del Kanban. Se cargan
+  // siempre (independiente del toggle "Archivo Histórico" de página completa),
+  // para que el Kanban tenga el historial disponible sin tener que cambiar de vista.
+  const [historialPartes, setHistorialPartes] = useState([]);
 
   // Role Checks
   const userRole = sessionRole?.rol;
@@ -151,7 +179,7 @@ const PartesAdminView = ({ navigate }) => {
   const canTransition = isAdmin || isEncargado;
 
   const hasActiveFilters = useMemo(() => {
-    return statusFilter !== 'all' ||
+    return statusFilter.length > 0 ||
       technicianFilter !== 'all' ||
       creatorFilter !== 'all' ||
       originFilter !== 'all' ||
@@ -173,7 +201,7 @@ const PartesAdminView = ({ navigate }) => {
 
   useEffect(() => {
     if (showArchive) {
-      if (statusFilter !== 'all') setStatusFilter('all');
+      if (statusFilter.length > 0) setStatusFilter([]);
       if (originFilter !== 'all') setOriginFilter('all');
     }
     setSelectedPartes(new Set());
@@ -191,6 +219,14 @@ const PartesAdminView = ({ navigate }) => {
     sessionRole,
     user
   ]);
+
+  // NUEVO: carga del historial para la columna del Kanban, independiente del
+  // toggle showArchive. Mismos permisos por rol que el Archivo Histórico normal.
+  useEffect(() => {
+    if (sessionRole?.loaded) {
+      fetchHistorialPartes();
+    }
+  }, [sessionRole, user]);
 
   // Load all employees for mapping and assignment
   useEffect(() => {
@@ -264,10 +300,9 @@ const PartesAdminView = ({ navigate }) => {
         .from('v_partes_estado_ui')
         .select('*');
 
-      // ARCHIVE logic (ACEPTADO, RECHAZADO, CANCELADO)
+      // Estados terminales que van al Archivo Histórico.
       if (showArchive) {
-        const archiveStates = ['aceptado', 'finalizado', 'facturado', 'completado', 'garantia', 'rechazado', 'cancelado', 'anulado', 'archivado'];
-        query = query.in('estado', archiveStates);
+        query = query.in('estado', ARCHIVE_STATES);
 
         if (!isAdmin) {
           if (isEncargado) {
@@ -284,9 +319,9 @@ const PartesAdminView = ({ navigate }) => {
         query = query.order('fecha_actualizacion', { ascending: false });
 
       } else {
-        // ACTIVE states: Not archive states.
-        const archiveStates = ['aceptado', 'finalizado', 'facturado', 'completado', 'garantia', 'rechazado', 'cancelado', 'anulado', 'archivado'];
-        query = query.not('estado', 'in', `(${archiveStates.join(',')})`)
+        // Estados ACTIVOS: todo lo que no sea terminal (realizado y facturado se
+        // mantienen en activos hasta que se acepten/rechacen/cierren/cancelen/cobren).
+        query = query.not('estado', 'in', `(${ARCHIVE_STATES.join(',')})`)
           .order('created_at', { ascending: false });
 
         if (technicianFilter !== 'all') {
@@ -339,9 +374,78 @@ const PartesAdminView = ({ navigate }) => {
     }
   };
 
+  // NUEVO: fetch independiente del historial (partes en estados terminales) para
+  // alimentar la columna HISTORIAL del Kanban, sin depender del toggle showArchive.
+  const fetchHistorialPartes = async () => {
+    const currentEmployeeId = sessionRole?.empleadoId;
+    try {
+      let query = supabase
+        .from('v_partes_estado_ui')
+        .select('*')
+        .in('estado', ARCHIVE_STATES)
+        .order('fecha_actualizacion', { ascending: false });
+
+      if (!isAdmin) {
+        if (isEncargado) {
+          if (currentEmployeeId) query = query.eq('created_by', currentEmployeeId);
+          else query = query.eq('id', '00000000-0000-0000-0000-000000000000');
+        } else if (isFincaAdminUser) {
+          if (currentEmployeeId) query = query.or(`administrador_finca_id.eq.${currentEmployeeId},created_by.eq.${currentEmployeeId}`);
+          else query = query.eq('id', '00000000-0000-0000-0000-000000000000');
+        } else {
+          query = query.eq('id', '00000000-0000-0000-0000-000000000000');
+        }
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const processed = (data || []).map(p => ({
+        ...p,
+        estado_ui: mapInternalToUI(p.estado),
+      }));
+      setHistorialPartes(processed);
+    } catch (error) {
+      console.error('Error fetching historial partes:', error);
+    }
+  };
+
+  // NUEVO: mismo agrupado por mes que ya usa el Archivo Histórico de página completa,
+  // pero sobre historialPartes (siempre cargado) para la columna del Kanban.
+  const historialGroups = useMemo(() => {
+    const groups = {};
+    historialPartes.forEach(p => {
+      let date = p.archive_date || p.finalized_at || p.archived_at || p.fecha_cierre || p.fecha_actualizacion || p.created_at;
+      date = new Date(date);
+
+      const key = format(date, 'yyyy-MM');
+      const label = format(date, 'MMMM yyyy', { locale: es });
+
+      if (!groups[key]) {
+        groups[key] = {
+          label: label.charAt(0).toUpperCase() + label.slice(1),
+          items: []
+        };
+      }
+      groups[key].items.push(p);
+    });
+
+    const sortedGroups = Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+
+    sortedGroups.forEach(([_, group]) => {
+      group.items.sort((a, b) => {
+        const da = a.archive_date || a.finalized_at || a.archived_at || a.created_at;
+        const db = b.archive_date || b.finalized_at || b.archived_at || b.created_at;
+        return new Date(db) - new Date(da);
+      });
+    });
+
+    return sortedGroups;
+  }, [historialPartes]);
+
   const statusOrder = [
     'NUEVO', 'CONTACTADO', 'VISITA AGENDADA', 'VISITADO',
-    'PRESUPUESTADO', 'ACEPTADO', 'RECHAZADO', 'CANCELADO'
+    'PRESUPUESTADO', 'REALIZADO', 'ACEPTADO', 'RECHAZADO', 'CANCELADO', 'FACTURADO', 'COBRADO', 'CERRADO'
   ];
 
   const filteredPartes = useMemo(() => {
@@ -354,14 +458,15 @@ const PartesAdminView = ({ navigate }) => {
       const matchesSearch = (
         (parte.cliente_nombre && parte.cliente_nombre.toLowerCase().includes(search)) ||
         (parte.direccion_servicio && parte.direccion_servicio.toLowerCase().includes(search)) ||
+        (parte.telefono_contacto && parte.telefono_contacto.replace(/\s/g, '').includes(search.replace(/\s/g, ''))) ||
         String(parteIdDisplay).toLowerCase().includes(search) ||
         parteIdClean.includes(searchClean)
       );
 
       if (!matchesSearch) return false;
 
-      if (statusFilter !== 'all') {
-        if (parte.estado_ui !== statusFilter) {
+      if (statusFilter.length > 0 && viewMode !== 'kanban') {
+        if (!statusFilter.includes(parte.estado_ui)) {
           return false;
         }
       }
@@ -383,7 +488,7 @@ const PartesAdminView = ({ navigate }) => {
 
       return true;
     });
-  }, [partes, searchTerm, statusFilter, originFilter, creatorFilter, searchParams, sessionRole]);
+  }, [partes, searchTerm, statusFilter, originFilter, creatorFilter, searchParams, sessionRole, viewMode]);
 
   const archivedGroups = useMemo(() => {
     if (!showArchive) return [];
@@ -418,12 +523,18 @@ const PartesAdminView = ({ navigate }) => {
     return sortedGroups;
   }, [filteredPartes, showArchive]);
 
-  const handleChartStatusClick = (statusName) => {
-    if (statusFilter === statusName) {
-      setStatusFilter('all');
-    } else {
-      setStatusFilter(statusName);
+  // Al buscar dentro del Archivo Histórico, auto-expandir todos los meses que
+  // contienen resultados, para no obligar a abrir carpeta por carpeta a ciegas.
+  useEffect(() => {
+    if (showArchive && searchTerm.trim()) {
+      setOpenArchiveGroups(archivedGroups.map(([key]) => key));
     }
+  }, [searchTerm, showArchive, archivedGroups]);
+
+  const handleChartStatusClick = (statusName) => {
+    setStatusFilter(prev =>
+      prev.includes(statusName) ? prev.filter(s => s !== statusName) : [...prev, statusName]
+    );
   };
 
   const handleChartOriginClick = (originName) => {
@@ -517,11 +628,41 @@ const PartesAdminView = ({ navigate }) => {
       setSelectedPartes(new Set());
       setTransitionDialogOpen(false);
       fetchPartes();
+      fetchHistorialPartes(); // NUEVO: refrescar la columna Historial del Kanban
     } catch (e) {
       console.error(e);
       toast({ variant: 'destructive', title: 'Error', description: 'No se pudieron actualizar los partes.' });
     } finally {
       setProcessingTransition(false);
+    }
+  };
+
+  // Cambio de estado desde el tablero Kanban (arrastre entre columnas activas, o
+  // botón "→ Mover a siguiente fase" de la tarjeta). Optimista con reversión.
+  const handleKanbanStatusChange = async (parteId, internalStatus) => {
+    const prevPartes = partes;
+    setPartes(prev => prev.map(p =>
+      p.id === parteId
+        ? { ...p, estado: internalStatus, estado_ui: mapInternalToUI(internalStatus) }
+        : p
+    ));
+    try {
+      const { error } = await supabase.rpc('api_parte_cambiar_estado', {
+        p_parte_id: parteId,
+        p_nuevo_estado: internalStatus,
+        p_nota: null
+      });
+      if (error) throw error;
+      toast({ title: 'Estado actualizado', description: `Parte movido a ${mapInternalToUI(internalStatus)}.` });
+
+      // NUEVO: si el nuevo estado es terminal, refrescar la columna Historial del Kanban
+      if (ARCHIVE_STATES.includes(internalStatus)) {
+        fetchHistorialPartes();
+      }
+    } catch (e) {
+      console.error('Error cambiando estado (kanban):', e);
+      setPartes(prevPartes); // revertir
+      toast({ variant: 'destructive', title: 'Error', description: 'No se pudo cambiar el estado del parte.' });
     }
   };
 
@@ -646,14 +787,14 @@ const PartesAdminView = ({ navigate }) => {
         </div>
       )}
 
-      {/* --- FILTERS & TOOLBAR --- */}
+      {/* --- FILTERS & TOOLBAR (vista de activos: buscador + filtros completos) --- */}
       {!showArchive && (
         <div className="flex flex-col md:flex-row gap-4 bg-card p-4 rounded-xl border shadow-sm items-center">
 
           <div className="flex-1 relative w-full">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Buscar por cliente, dirección o ID..."
+              placeholder="Buscar por cliente, dirección, teléfono o ID..."
               className="pl-9 h-10 bg-background"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -668,7 +809,38 @@ const PartesAdminView = ({ navigate }) => {
               <Button variant={viewMode === 'list' ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8 rounded-md" onClick={() => setViewMode('list')} title="Lista">
                 <ListIcon className="h-4 w-4" />
               </Button>
+              <Button variant={viewMode === 'kanban' ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8 rounded-md" onClick={() => { setSelectedPartes(new Set()); setViewMode('kanban'); }} title="Kanban">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                  <rect x="3" y="4" width="5" height="16" rx="1" />
+                  <rect x="10" y="4" width="5" height="11" rx="1" />
+                  <rect x="17" y="4" width="4" height="14" rx="1" />
+                </svg>
+              </Button>
             </div>
+
+            {employees.length > 0 && (
+              <div className="w-[180px]">
+                <Select value={technicianFilter} onValueChange={setTechnicianFilter}>
+                  <SelectTrigger className="h-10">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <User className="w-4 h-4" />
+                      <span className="text-foreground truncate">
+                        {technicianFilter === 'all' ? 'Empleado asignado' :
+                          (employees.find(e => e.id === technicianFilter)?.fullName || 'Empleado')}
+                      </span>
+                    </div>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos los empleados</SelectItem>
+                    {[...employees]
+                      .sort((a, b) => a.fullName.localeCompare(b.fullName))
+                      .map(e => (
+                        <SelectItem key={e.id} value={e.id}>{e.fullName}</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {creators.length > 0 && (
               <div className="w-[180px]">
@@ -692,26 +864,73 @@ const PartesAdminView = ({ navigate }) => {
               </div>
             )}
 
-            <div className="w-[180px]">
-              <Select value={statusFilter} onValueChange={(val) => setStatusFilter(val)}>
-                <SelectTrigger className="h-10">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Filter className="w-4 h-4" />
-                    <span className="text-foreground truncate">
-                      {statusFilter === 'all' ? 'Estado' : getStatusLabel(statusFilter)}
-                    </span>
+            {viewMode !== 'kanban' && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className="h-10 w-[180px] justify-start font-normal">
+                    <div className="flex items-center gap-2 text-muted-foreground overflow-hidden">
+                      <Filter className="w-4 h-4 shrink-0" />
+                      <span className="text-foreground truncate">
+                        {statusFilter.length === 0
+                          ? 'Estado'
+                          : statusFilter.length === 1
+                            ? getStatusLabel(statusFilter[0])
+                            : `${statusFilter.length} estados`}
+                      </span>
+                    </div>
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-60 p-2" align="start">
+                  <div className="flex items-center justify-between px-1 pb-2 mb-1 border-b">
+                    <span className="text-xs font-semibold text-muted-foreground">Filtrar por estado</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="text-xs text-primary hover:underline"
+                        onClick={() => setStatusFilter(
+                          statusFilter.length === statusOrder.length ? [] : [...statusOrder]
+                        )}
+                      >
+                        {statusFilter.length === statusOrder.length ? 'Desmarcar todos' : 'Marcar todos'}
+                      </button>
+                      {statusFilter.length > 0 && (
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground hover:underline"
+                          onClick={() => setStatusFilter([])}
+                        >
+                          Limpiar
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todos los estados</SelectItem>
-                  {statusOrder.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {getStatusLabel(s)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+                  <div className="space-y-0.5 max-h-72 overflow-y-auto">
+                    {statusOrder.map((s) => {
+                      const checked = statusFilter.includes(s);
+                      return (
+                        <label
+                          key={s}
+                          className="flex items-center gap-2 px-1.5 py-1.5 rounded hover:bg-muted cursor-pointer text-sm"
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(isChecked) => {
+                              setStatusFilter(isChecked
+                                ? [...statusFilter, s]
+                                : statusFilter.filter(x => x !== s));
+                            }}
+                          />
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: getStatusColor(s) }} />
+                            {getStatusLabel(s)}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
 
             {hasActiveFilters && (
               <Button
@@ -724,6 +943,30 @@ const PartesAdminView = ({ navigate }) => {
                 <X className="w-4 h-4" />
                 <span className="hidden xl:inline">Limpiar</span>
               </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* --- BUSCADOR DEL ARCHIVO HISTÓRICO (simplificado: solo búsqueda) --- */}
+      {showArchive && (
+        <div className="bg-card p-4 rounded-xl border shadow-sm">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar en el archivo por cliente, dirección, teléfono o ID..."
+              className="pl-9 pr-9 h-10 bg-background"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                title="Limpiar búsqueda"
+              >
+                <X className="h-4 w-4" />
+              </button>
             )}
           </div>
         </div>
@@ -755,10 +998,17 @@ const PartesAdminView = ({ navigate }) => {
           {archivedGroups.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center border-2 border-dashed rounded-xl bg-muted/5 mx-1">
               <div className="bg-muted p-4 rounded-full mb-3"><Archive className="h-8 w-8 text-muted-foreground/50" /></div>
-              <h3 className="text-lg font-medium">El archivo está vacío</h3>
+              <h3 className="text-lg font-medium">
+                {searchTerm ? 'Sin resultados para tu búsqueda' : 'El archivo está vacío'}
+              </h3>
             </div>
           ) : (
-            <Accordion type="multiple" className="w-full space-y-3">
+            <Accordion
+              type="multiple"
+              className="w-full space-y-3"
+              value={openArchiveGroups}
+              onValueChange={setOpenArchiveGroups}
+            >
               {archivedGroups.map(([key, { label, items }]) => (
                 <AccordionItem value={key} key={key} className="border rounded-lg bg-card shadow-sm overflow-hidden">
                   <AccordionTrigger className="hover:no-underline py-3 px-4 bg-muted/20 hover:bg-muted/40 transition-colors">
@@ -801,6 +1051,21 @@ const PartesAdminView = ({ navigate }) => {
             </Accordion>
           )}
         </div>
+      ) : viewMode === 'kanban' ? (
+        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <PartesKanban
+            partes={filteredPartes}
+            canDrag={canTransition}
+            onStatusChange={handleKanbanStatusChange}
+            onCardClick={(id) => navigate(`/gestion/partes/detail/${id}`)}
+            getTechnicianName={(parte) => {
+              const tech = getTechnicianInfo(parte);
+              return tech ? tech.fullName : null;
+            }}
+            pendingIds={pendingPartes}
+            historialGroups={historialGroups}
+          />
+        </div>
       ) : filteredPartes.length === 0 ? (
         <div className="text-center p-12 border-2 border-dashed rounded-lg bg-muted/10">
           <Search className="mx-auto h-12 w-12 text-muted-foreground/50" />
@@ -825,10 +1090,16 @@ const PartesAdminView = ({ navigate }) => {
             <TableBody>
               {filteredPartes.map((parte) => {
                 const tech = getTechnicianInfo(parte);
+                const hasAviso = pendingPartes.has(parte.id);
                 return (
                   <TableRow
                     key={parte.id}
-                    className={`hover:bg-muted/50 cursor-pointer ${parte.deleted_at ? 'opacity-60 bg-red-50/30' : ''} ${selectedPartes.has(parte.id) ? 'bg-blue-50/50' : ''}`}
+                    className={cn(
+                      'hover:bg-muted/50 cursor-pointer',
+                      parte.deleted_at && 'opacity-60 bg-red-50/30',
+                      selectedPartes.has(parte.id) && 'bg-blue-50/50',
+                      hasAviso && AVISO_ROW_CLASS
+                    )}
                     onClick={() => navigate(`/gestion/partes/detail/${parte.id}`)}
                   >
                     {canTransition && (
@@ -840,7 +1111,10 @@ const PartesAdminView = ({ navigate }) => {
                     )}
                     <TableCell className="font-medium pl-4 py-3 align-middle">
                       <div className="flex flex-col gap-1">
-                        <span className="font-bold text-sm text-foreground line-clamp-1">{parte.cliente_nombre}</span>
+                        <span className="font-bold text-sm text-foreground line-clamp-1 flex items-center gap-2">
+                          <AvisoBolita show={hasAviso} />
+                          {parte.cliente_nombre}
+                        </span>
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge variant="secondary" className="font-mono text-[10px] h-5 px-1.5 shadow-none bg-muted border border-border text-muted-foreground">
                             {parte.custom_id || `#${parte.id.slice(0, 8)}`}
@@ -896,12 +1170,16 @@ const PartesAdminView = ({ navigate }) => {
           {filteredPartes.map((parte) => {
             const tech = getTechnicianInfo(parte);
             const isClosed = parte.estado_ui === 'ACEPTADO';
+            const hasAviso = pendingPartes.has(parte.id);
 
             return (
               <Card
                 key={parte.id}
-                className={`hover:shadow-md transition-all cursor-pointer border-l-4 group relative rounded-xl ${parte.deleted_at ? 'border-l-red-400 bg-red-50/30 opacity-75' : isClosed ? 'border-l-teal-500' : 'border-l-primary'
-                  }`}
+                className={cn(
+                  'hover:shadow-md transition-all cursor-pointer border-l-4 group relative rounded-xl',
+                  parte.deleted_at ? 'border-l-red-400 bg-red-50/30 opacity-75' : isClosed ? 'border-l-teal-500' : 'border-l-primary',
+                  hasAviso && !parte.deleted_at && AVISO_ROW_CLASS
+                )}
                 onClick={() => navigate(`/gestion/partes/detail/${parte.id}`)}
               >
                 {canTransition && !parte.deleted_at && (
@@ -928,7 +1206,10 @@ const PartesAdminView = ({ navigate }) => {
                     {getStatusBadge(parte)}
                   </div>
                   <div>
-                    <CardTitle className="text-lg leading-tight truncate group-hover:text-primary transition-colors" title={parte.cliente_nombre}>{parte.cliente_nombre}</CardTitle>
+                    <CardTitle className="text-lg leading-tight truncate group-hover:text-primary transition-colors flex items-center gap-2" title={parte.cliente_nombre}>
+                      <AvisoBolita show={hasAviso} />
+                      {parte.cliente_nombre}
+                    </CardTitle>
                     <CardDescription className="flex items-center gap-1 mt-1 truncate"><MapPin className="w-3 h-3 shrink-0" /> <span className="truncate">{parte.direccion_servicio}</span></CardDescription>
                   </div>
                 </CardHeader>

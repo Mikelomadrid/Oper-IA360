@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -100,43 +99,46 @@ export const ClientForm = ({ client, onSave, onCancel }) => {
         }
     };
 
+    // Opciones del toggle de tipo de cliente.
+    const TIPOS_CLIENTE = [
+        { val: 'particular', label: 'Particular', Icon: User },
+        { val: 'empresa', label: 'Empresa', Icon: Building2 },
+    ];
+
     return (
         <form onSubmit={handleSubmit} className="space-y-6">
             {/* Tipo de Cliente Selector */}
             <div className="space-y-3">
                 <Label className="text-base font-medium">Tipo de Cliente</Label>
-                <RadioGroup 
-                    value={clientType} 
-                    onValueChange={setClientType} 
-                    className="flex gap-4"
-                >
-                    <div 
-                        onClick={() => setClientType('particular')}
-                        className={`flex items-center space-x-2 border p-4 rounded-lg flex-1 cursor-pointer transition-all ${
-                            clientType === 'particular' 
-                            ? 'border-primary bg-primary/5 ring-1 ring-primary/20' 
-                            : 'hover:bg-muted/50 border-input'
-                        }`}
-                    >
-                        <RadioGroupItem value="particular" id="r-particular" />
-                        <Label htmlFor="r-particular" className="flex items-center gap-2 cursor-pointer w-full font-semibold">
-                            <User className="w-4 h-4" /> Particular
-                        </Label>
-                    </div>
-                    <div 
-                        onClick={() => setClientType('empresa')}
-                        className={`flex items-center space-x-2 border p-4 rounded-lg flex-1 cursor-pointer transition-all ${
-                            clientType === 'empresa' 
-                            ? 'border-primary bg-primary/5 ring-1 ring-primary/20' 
-                            : 'hover:bg-muted/50 border-input'
-                        }`}
-                    >
-                        <RadioGroupItem value="empresa" id="r-empresa" />
-                        <Label htmlFor="r-empresa" className="flex items-center gap-2 cursor-pointer w-full font-semibold">
-                            <Building2 className="w-4 h-4" /> Empresa
-                        </Label>
-                    </div>
-                </RadioGroup>
+                <div className="flex gap-4">
+                    {TIPOS_CLIENTE.map(({ val, label, Icon }) => {
+                        const selected = clientType === val;
+                        return (
+                            <button
+                                key={val}
+                                type="button"
+                                onClick={() => setClientType(val)}
+                                aria-pressed={selected}
+                                className={`flex items-center gap-3 border p-4 rounded-lg flex-1 text-left transition-all ${
+                                    selected
+                                        ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
+                                        : 'hover:bg-muted/50 border-input'
+                                }`}
+                            >
+                                <span
+                                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+                                        selected ? 'border-primary' : 'border-muted-foreground/40'
+                                    }`}
+                                >
+                                    {selected && <span className="h-2 w-2 rounded-full bg-primary" />}
+                                </span>
+                                <span className="flex items-center gap-2 font-semibold">
+                                    <Icon className="w-4 h-4" /> {label}
+                                </span>
+                            </button>
+                        );
+                    })}
+                </div>
             </div>
 
             <div className="grid md:grid-cols-2 gap-6">
