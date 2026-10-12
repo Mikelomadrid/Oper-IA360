@@ -24,8 +24,14 @@ export async function analyzeInvoice(file) {
 
     if (error) {
       console.error('Supabase Function Error:', error);
-      // Provide a user-friendly error message if possible
-      throw new Error(error.message || 'Error de conexión con el servicio de análisis.');
+      let message = error.message || 'Error de conexión con el servicio de análisis.';
+      try {
+        const payload = error.context instanceof Response ? await error.context.json() : null;
+        message = payload?.error || payload?.message || message;
+      } catch {
+        // La respuesta puede no ser JSON cuando el navegador bloquea la conexión.
+      }
+      throw new Error(message);
     }
 
     return data;

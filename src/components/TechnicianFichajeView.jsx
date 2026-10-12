@@ -105,6 +105,7 @@ const TechnicianFichajeView = ({ navigate }) => {
   const [evidenceCapture, setEvidenceCapture] = useState({ open: false, mode: null, order: null });
   const [exitEvidenceFiles, setExitEvidenceFiles] = useState({});
   const [evidenceUploading, setEvidenceUploading] = useState(false);
+  const [assignmentWait, setAssignmentWait] = useState(null);
 
   // Detectar si el usuario actual es Fran
   const esFran = user?.email?.toLowerCase() === FRAN_EMAIL;
@@ -215,6 +216,35 @@ const TechnicianFichajeView = ({ navigate }) => {
     }
     setOrdersLoading(true);
     try {
+      // La planificación de obra vive en tarea_empleados. Al fichar, materializamos
+      // esas asignaciones en la cola operativa del técnico para que no sea necesario
+      // que el encargado vuelva a asignar manualmente cada tarea ya planificada.
+      // Durante el despliegue toleramos que la RPC aún no exista para no ocultar las
+      // órdenes que ya estuvieran creadas.
+      const syncResult = await supabase.rpc('asegurar_tarea_activa_fichaje');
+      if (syncResult.error
+        && !['42883', 'PGRST202'].includes(syncResult.error.code)
+        && !syncResult.error.message?.includes('asegurar_tarea_activa_fichaje')) {
+        console.warn('No se pudo asegurar la tarea activa:', syncResult.error);
+      }
+      if (syncResult.data?.codigo === 'ESPERANDO_ASIGNACION') {
+        setAssignmentWait({
+          projectId,
+          message: syncResult.data.mensaje || 'El encargado debe asignarte una tarea antes de fichar.',
+        });
+        setCurrentStatus({
+          fichajeId: null,
+          proyectoId: null,
+          enPausa: false,
+          nombreUbicacion: null,
+          pauseStartTime: null,
+          loading: false,
+        });
+        setWorkOrders([]);
+        setPendingTransfer(null);
+        return;
+      }
+
       const [ordersResult, transferResult] = await Promise.all([
         supabase
           .from('ordenes_trabajo_diarias')
@@ -297,26 +327,6 @@ const TechnicianFichajeView = ({ navigate }) => {
     return uploadedPaths;
   };
 
-  const startWorkOrder = async (order) => {
-    setActionLoading(true);
-    try {
-      const { error } = await supabase.rpc('iniciar_orden_trabajo', {
-        p_orden_id: order.id,
-      });
-      if (error) throw error;
-      toast({
-        title: order.estado === 'pendiente_continuar' ? 'Trabajo reanudado' : 'Trabajo iniciado',
-        description: 'La tarea ya está en curso.',
-        className: 'bg-green-600 text-white',
-      });
-      await fetchWorkOrders(order.proyecto_id);
-    } catch (err) {
-      toast({ variant: 'destructive', title: 'No se pudo iniciar la tarea', description: err.message });
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
   const completeWorkOrderAndContinue = async (order, files) => {
     if (!files?.length) {
       toast({
@@ -338,30 +348,31 @@ const TechnicianFichajeView = ({ navigate }) => {
       });
       if (closeError) throw closeError;
 
-      const nextOrder = workOrders
-        .filter((candidate) => candidate.id !== order.id && ['asignada', 'pendiente_continuar'].includes(candidate.estado))
-        .sort((a, b) => Number(a.orden || 0) - Number(b.orden || 0)
-          || new Date(a.asignada_at || 0) - new Date(b.asignada_at || 0))[0];
-
-      let nextOrderStarted = false;
-      if (nextOrder) {
-        const { error: startError } = await supabase.rpc('iniciar_orden_trabajo', {
-          p_orden_id: nextOrder.id,
-        });
-        if (!startError) nextOrderStarted = true;
-      }
+      const { data: advanceResult, error: advanceError } = await supabase.rpc('asegurar_tarea_activa_fichaje');
+      if (advanceError) throw advanceError;
+      const nextOrderStarted = ['ACTIVA', 'INICIADA'].includes(advanceResult?.codigo);
+      const waitingForAssignment = advanceResult?.codigo === 'ESPERANDO_ASIGNACION';
 
       setEvidenceCapture({ open: false, mode: null, order: null });
       toast({
-        title: nextOrderStarted ? 'Tarea terminada. Siguiente tarea iniciada' : 'Tarea terminada',
+        title: nextOrderStarted
+          ? 'Tarea terminada. Siguiente tarea iniciada'
+          : waitingForAssignment
+            ? 'Tarea terminada. Esperando asignación'
+            : 'Tarea terminada',
         description: nextOrderStarted
-          ? `Ahora continúa con: ${nextOrder.tarea?.titulo || 'la siguiente tarea asignada'}.`
-          : nextOrder
-            ? 'La siguiente tarea está disponible en la bandeja para iniciarla.'
+          ? `Ahora continúa con: ${advanceResult?.tarea_titulo || 'la siguiente tarea asignada'}.`
+          : waitingForAssignment
+            ? 'Se ha detenido el fichaje. El encargado debe asignarte el siguiente trabajo antes de volver a entrar.'
             : 'No quedan más tareas pendientes en esta obra.',
         className: 'bg-green-600 text-white',
       });
-      await fetchWorkOrders(order.proyecto_id);
+      if (waitingForAssignment) {
+        setAssignmentWait({ projectId: order.proyecto_id, message: advanceResult?.mensaje });
+        await fetchCurrentStatus();
+      } else {
+        await fetchWorkOrders(order.proyecto_id);
+      }
     } catch (err) {
       toast({
         variant: 'destructive',
@@ -422,9 +433,8 @@ const TechnicianFichajeView = ({ navigate }) => {
              throw new Error("Selecciona una obra o destino.");
         }
         
-        rpcName = 'fichar_entrada'; 
-        
         if (selectedProject === 'nave') {
+             rpcName = 'fichar_entrada';
              params = {
                 ...params,
                 p_proyecto_id: null,
@@ -434,11 +444,12 @@ const TechnicianFichajeView = ({ navigate }) => {
                 p_tipo: 'nave_taller'
              };
         } else {
+             rpcName = 'fichar_entrada_obra_con_tarea';
              params = {
-                ...params,
                 p_proyecto_id: selectedProject,
-                p_centro_coste_interno_id: null, 
-                p_tipo: 'entrada_obra'
+                p_latitud: lat,
+                p_longitud: lng,
+                p_custom_time: null,
              };
         }
       } else if (actionType === 'salida') {
@@ -457,9 +468,29 @@ const TechnicianFichajeView = ({ navigate }) => {
         throw new Error(data.replace('ERROR: ', ''));
       }
 
+      if (actionType === 'entrada' && selectedProject !== 'nave' && data?.ok === false) {
+        setAssignmentWait({
+          projectId: selectedProject,
+          message: data.mensaje || 'El encargado debe asignarte una tarea antes de fichar.',
+        });
+        toast({
+          variant: 'warning',
+          title: 'Esperando asignación del encargado',
+          description: data.mensaje || 'No se ha iniciado el fichaje ni el cómputo de horas.',
+        });
+        await fetchCurrentStatus();
+        return;
+      }
+
+      if (actionType === 'entrada') setAssignmentWait(null);
+
       toast({
         title: "Acción registrada",
-        description: typeof data === 'string' ? data : "Registro guardado correctamente.",
+        description: typeof data === 'string'
+          ? data
+          : data?.tarea_titulo
+            ? `Trabajo iniciado: ${data.tarea_titulo}`
+            : "Registro guardado correctamente.",
         className: "bg-green-600 text-white"
       });
 
@@ -745,7 +776,10 @@ const TechnicianFichajeView = ({ navigate }) => {
               {!currentStatus.fichajeId && (
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Ubicación / Obra</label>
-                  <Select value={selectedProject} onValueChange={setSelectedProject}>
+                  <Select value={selectedProject} onValueChange={(value) => {
+                    setSelectedProject(value);
+                    setAssignmentWait(null);
+                  }}>
                     <SelectTrigger className="h-12 text-base">
                       <SelectValue placeholder="Selecciona dónde vas a trabajar..." />
                     </SelectTrigger>
@@ -764,6 +798,15 @@ const TechnicianFichajeView = ({ navigate }) => {
                       ))}
                     </SelectContent>
                   </Select>
+                  {assignmentWait?.projectId === selectedProject && (
+                    <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-4">
+                      <CircleDashed className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+                      <div>
+                        <p className="font-semibold text-amber-950">Esperando asignación del encargado</p>
+                        <p className="mt-1 text-sm text-amber-800">{assignmentWait.message || 'No se ha iniciado el fichaje ni el cómputo de horas.'}</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -877,18 +920,6 @@ const TechnicianFichajeView = ({ navigate }) => {
                                     </div>
                                     {order.notas_encargado && <p className="mt-1 text-xs text-muted-foreground">{order.notas_encargado}</p>}
                                     {order.horas_previstas != null && <p className="mt-2 font-mono text-xs font-semibold tabular-nums text-violet-700">{Number(order.horas_previstas).toLocaleString('es-ES', { maximumFractionDigits: 2 })} h previstas</p>}
-                                    {index === 0 && activeWorkOrders.length === 0 && (
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        className="mt-3 h-10 w-full justify-center bg-violet-600 hover:bg-violet-700 sm:w-auto"
-                                        onClick={() => startWorkOrder(order)}
-                                        disabled={evidenceUploading || actionLoading}
-                                      >
-                                        {actionLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlayCircle className="mr-2 h-4 w-4" />}
-                                        {order.estado === 'pendiente_continuar' ? 'Continuar tarea' : 'Empezar tarea'}
-                                      </Button>
-                                    )}
                                   </div>
                                 </div>
                               ))}

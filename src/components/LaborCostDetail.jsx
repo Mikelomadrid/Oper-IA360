@@ -60,9 +60,9 @@ const LaborCostDetail = ({ projectId }) => {
                     // Fallback Defaults (Precomputed/Hardcoded as requested)
                     const defaults = {
                         tecnico: { normal: 27, extra: 35, festivo: 45 },
-                        encargado: { normal: 32, extra: 40, festivo: 50 },
-                        admin: { normal: 35, extra: 45, festivo: 55 },
-                        default: { normal: 25, extra: 30, festivo: 40 }
+                        encargado: { normal: 27, extra: 40, festivo: 50 },
+                        admin: { normal: 27, extra: 45, festivo: 55 },
+                        default: { normal: 27, extra: 30, festivo: 40 }
                     };
                     
                     const roleRates = defaults[r] || defaults['default'];

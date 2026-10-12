@@ -23,17 +23,15 @@ const formatDate = (dateString) => {
 };
 
 const ProjectLaborView = ({ projectId }) => {
-    // Fetch data from 'ui_v_proyecto_mano_obra_detalle_v2'
-    // This view is highly detailed and fits the requirement perfectly.
+    // La RPC protege los costes horarios y solo permite el acceso a
+    // administracion/encargados. No se consulta la vista sensible directamente.
     const { data: laborDetails, isLoading, error } = useQuery({
         queryKey: ['project_labor_grouped', projectId],
         queryFn: async () => {
             if (!projectId) return [];
             
             const { data, error } = await supabase
-                .from('ui_v_proyecto_mano_obra_detalle_v2')
-                .select('*')
-                .eq('proyecto_id', projectId)
+                .rpc('api_proyecto_mano_obra_detalle', { p_proyecto_id: projectId })
                 .order('empleado', { ascending: true }) // First group by employee name
                 .order('dia', { ascending: false });    // Then sort by date
             

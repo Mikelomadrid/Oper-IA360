@@ -92,3 +92,6 @@ Nunca utilizar la eliminación como única forma de resolver una decisión. Most
 
 - Reutiliza el mismo listado compacto y el mismo orden visual que la bandeja del técnico: realizadas, en curso y pendientes.
 - Añade el nombre del empleado asignado y conserva el acceso a edición; la cuadrícula de tarjetas queda como vista alternativa, no como vista inicial.
+- Las tareas pendientes de validación aparecen en un bloque ámbar separado, antes del listado operativo, para que no se confundan con trabajos ya aprobados.
+- La revisión sigue un orden fijo: evidencia fotográfica, responsable y horas previstas/reales, descripción del trabajo y decisión final.
+- Aprobar utiliza verde y exige al menos una fotografía. Devolver para corregir utiliza ámbar, exige un comentario y reabre la tarea para el equipo.

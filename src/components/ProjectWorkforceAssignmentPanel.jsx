@@ -75,9 +75,17 @@ export default function ProjectWorkforceAssignmentPanel({ projectId }) {
   const workforceQuery = useQuery({
     queryKey: ['project-present-workforce', projectId],
     queryFn: async () => {
-      const { data: attendance, error: attendanceError } = await supabase
-        .rpc('listar_personal_presente_obra', { p_proyecto_id: projectId });
+      const [{ data: attendance, error: attendanceError }, { data: requests, error: requestsError }] = await Promise.all([
+        supabase.rpc('listar_personal_presente_obra', { p_proyecto_id: projectId }),
+        supabase
+          .from('solicitudes_asignacion_trabajo')
+          .select('id,empleado_id,proyecto_id,solicitada_at,estado')
+          .eq('proyecto_id', projectId)
+          .eq('estado', 'pendiente')
+          .order('solicitada_at', { ascending: true }),
+      ]);
       if (attendanceError) throw attendanceError;
+      if (requestsError && !['42P01', 'PGRST205'].includes(requestsError.code)) throw requestsError;
 
       const attendanceRows = (attendance || []).map((row) => ({
         id: row.fichaje_id,
@@ -85,7 +93,20 @@ export default function ProjectWorkforceAssignmentPanel({ projectId }) {
         proyecto_id: row.proyecto_id,
         hora_entrada: row.hora_entrada,
       }));
-      const employeeIds = attendanceRows.map((row) => row.empleado_id).filter(Boolean);
+      const presentEmployeeIds = new Set(attendanceRows.map((row) => row.empleado_id));
+      const waitingRows = (requests || [])
+        .filter((request) => !presentEmployeeIds.has(request.empleado_id))
+        .map((request) => ({
+          id: `solicitud-${request.id}`,
+          solicitud_id: request.id,
+          fichaje_id: null,
+          empleado_id: request.empleado_id,
+          proyecto_id: request.proyecto_id,
+          hora_entrada: request.solicitada_at,
+          waitingWithoutClock: true,
+        }));
+      const workforceRows = [...attendanceRows, ...waitingRows];
+      const employeeIds = [...new Set(workforceRows.map((row) => row.empleado_id).filter(Boolean))];
       const [{ data: employees, error: employeesError }, { data: orders, error: ordersError }] = await Promise.all([
         employeeIds.length
           ? supabase.from('empleados').select('id,nombre,apellidos,email,foto_url,rol').in('id', employeeIds)
@@ -103,7 +124,7 @@ export default function ProjectWorkforceAssignmentPanel({ projectId }) {
       if (employeesError) throw employeesError;
       if (ordersError) throw ordersError;
 
-      return { attendance: attendanceRows, employees: employees || [], orders: orders || [] };
+      return { attendance: workforceRows, employees: employees || [], orders: orders || [] };
     },
     enabled: Boolean(projectId),
     refetchInterval: 10_000,
@@ -172,7 +193,9 @@ export default function ProjectWorkforceAssignmentPanel({ projectId }) {
       if (!assignDialog || !selectedTaskId) throw new Error('Selecciona la tarea que debe realizar.');
       const hours = plannedHours.trim() ? Number(plannedHours.replace(',', '.')) : null;
       if (hours !== null && (!Number.isFinite(hours) || hours <= 0)) throw new Error('Las horas previstas no son válidas.');
-      const rpcName = assignDialog.mode === 'queue' ? 'encolar_orden_trabajo' : 'preparar_orden_trabajo';
+      const rpcName = assignDialog.mode === 'queue' || assignDialog.waitingWithoutClock
+        ? 'encolar_orden_trabajo'
+        : 'preparar_orden_trabajo';
       const { error } = await supabase.rpc(rpcName, {
         p_proyecto_id: projectId,
         p_tarea_id: selectedTaskId,
@@ -189,8 +212,14 @@ export default function ProjectWorkforceAssignmentPanel({ projectId }) {
         queryClient.invalidateQueries({ queryKey: ['obra-gantt', projectId] }),
       ]);
       toast({
-        title: assignDialog?.mode === 'queue' ? 'Tarea añadida a la cola' : 'Trabajo asignado',
-        description: assignDialog?.mode === 'queue'
+        title: assignDialog?.waitingWithoutClock
+          ? 'Trabajo preparado'
+          : assignDialog?.mode === 'queue'
+            ? 'Tarea añadida a la cola'
+            : 'Trabajo asignado',
+        description: assignDialog?.waitingWithoutClock
+          ? 'El técnico ya puede fichar y la tarea se abrirá automáticamente.'
+          : assignDialog?.mode === 'queue'
           ? 'El técnico la verá como siguiente trabajo, sin marcarla como iniciada.'
           : 'El técnico ya puede verla e iniciarla directamente.',
       });
@@ -297,7 +326,7 @@ export default function ProjectWorkforceAssignmentPanel({ projectId }) {
                       <span className="font-mono text-[11px] text-muted-foreground">desde {formatClock(attendance.hora_entrada)}</span>
                     </div>
                     {waiting ? (
-                      <div className="mt-2 flex items-start gap-2 text-sm text-amber-900"><Clock3 className="mt-0.5 h-4 w-4 shrink-0" /><span><strong>Esperando asignación.</strong> El tiempo todavía no está imputado a una tarea.</span></div>
+                      <div className="mt-2 flex items-start gap-2 text-sm text-amber-900"><Clock3 className="mt-0.5 h-4 w-4 shrink-0" /><span><strong>Esperando asignación.</strong> No ha fichado y no se están computando horas ni costes.</span></div>
                     ) : (
                       <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5">
                         <div className="flex items-center gap-2 text-xs font-semibold text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />Trabajo liberado</div>
@@ -315,9 +344,11 @@ export default function ProjectWorkforceAssignmentPanel({ projectId }) {
                       <ClipboardList className="mr-2 h-4 w-4" />Cambiar actual
                     </Button>
                   )}
-                  <Button variant="outline" onClick={() => setTransferDialog({ ...attendance, employee })}>
-                    <ArrowRightLeft className="mr-2 h-4 w-4" />Reasignar
-                  </Button>
+                  {!attendance.waitingWithoutClock && (
+                    <Button variant="outline" onClick={() => setTransferDialog({ ...attendance, employee })}>
+                      <ArrowRightLeft className="mr-2 h-4 w-4" />Reasignar
+                    </Button>
+                  )}
                 </div>
               </article>
             );

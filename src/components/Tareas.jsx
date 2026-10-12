@@ -65,8 +65,11 @@ const Tareas = ({ forcedProjectId }) => {
       && !technicianActiveTasks.some((active) => active.id === task.id))
     .sort((a, b) => Number(a.orden_actuacion ?? 9999) - Number(b.orden_actuacion ?? 9999)
       || new Date(a.fecha_creacion || 0) - new Date(b.fecha_creacion || 0)), [tasks, technicianActiveTasks, technicianCompletedTasks]);
+  const managerReviewTasks = useMemo(() => tasks
+    .filter((task) => task.estado === 'pendiente_revision')
+    .sort((a, b) => new Date(a.fecha_completada || a.fecha_creacion || 0) - new Date(b.fecha_completada || b.fecha_creacion || 0)), [tasks]);
   const managerCompletedTasks = useMemo(() => tasks
-    .filter((task) => ['pendiente_revision', 'completada', 'completada_validada'].includes(task.estado))
+    .filter((task) => ['completada', 'completada_validada'].includes(task.estado))
     .sort((a, b) => new Date(b.fecha_completada || b.fecha_creacion || 0) - new Date(a.fecha_completada || a.fecha_creacion || 0)), [tasks]);
   const managerActiveTasks = useMemo(() => tasks
     .filter((task) => task.estado === 'en_progreso')
@@ -458,6 +461,11 @@ const Tareas = ({ forcedProjectId }) => {
       return;
     }
 
+    if (task.estado === 'pendiente_revision') {
+      setRevisionModalState({ isOpen: true, task });
+      return;
+    }
+
     setModalState({ isOpen: true, task, type: 'admin', readOnly: false });
   }, [canManage, currentEmployeeId, fichajeActual.fichajeId, fichajeActual.nombreUbicacion, fichajeActual.proyectoId]);
 
@@ -525,15 +533,21 @@ const Tareas = ({ forcedProjectId }) => {
         marker: 'bg-slate-100 text-slate-700',
         badge: 'border-slate-200 bg-slate-50 text-slate-700',
       },
+      review: {
+        section: 'bg-amber-50/55',
+        icon: 'text-amber-800',
+        marker: 'bg-amber-100 text-amber-900',
+        badge: 'border-amber-200 bg-amber-50 text-amber-900',
+      },
     };
     const style = tones[tone];
-    const SectionIcon = tone === 'completed' ? CheckCircle2 : tone === 'active' ? PlayCircle : CircleDashed;
+    const SectionIcon = tone === 'completed' ? CheckCircle2 : tone === 'active' ? PlayCircle : tone === 'review' ? AlertCircle : CircleDashed;
 
     return (
       <section className={cn('px-3 py-4 sm:px-4', style.section)}>
         <div className={cn('mb-2 flex items-center gap-2', style.icon)}>
           <SectionIcon className="h-4 w-4" />
-          <h2 className="text-xs font-bold uppercase tracking-wide">{number} · {title}</h2>
+          <h2 className="text-xs font-bold uppercase tracking-wide">{number ? `${number} · ` : ''}{title}</h2>
           <span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">{items.length}</span>
         </div>
 
@@ -543,7 +557,9 @@ const Tareas = ({ forcedProjectId }) => {
           <div className="overflow-hidden rounded-lg border border-border/60 bg-white divide-y divide-border/50">
             {items.map((task, index) => {
               const isReviewPending = task.estado === 'pendiente_revision';
-              const statusLabel = tone === 'completed'
+              const statusLabel = tone === 'review'
+                ? 'Revisar'
+                : tone === 'completed'
                 ? (isReviewPending ? 'Realizada · por revisar' : 'Realizada')
                 : tone === 'active'
                   ? 'En curso'
@@ -594,9 +610,10 @@ const Tareas = ({ forcedProjectId }) => {
     <div className="overflow-hidden rounded-xl border border-border/60 bg-card">
       <div className="border-b border-border/60 px-4 py-3">
         <p className="text-sm font-semibold">Tareas por orden de ejecución</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">Pulsa una tarea para consultar o editar todas sus indicaciones.</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">Revisa primero el trabajo finalizado; después consulta o edita el resto de tareas.</p>
       </div>
       <div className="divide-y divide-border/50">
+        {renderTechnicianSection({ title: 'Pendientes de revisión', items: managerReviewTasks, tone: 'review', emptyText: 'No hay trabajos esperando revisión.', showAssignee: true, markNext: false })}
         {renderTechnicianSection({ number: 1, title: 'Realizadas', items: managerCompletedTasks, tone: 'completed', emptyText: 'Todavía no hay tareas realizadas.', showAssignee: true, markNext: false })}
         {renderTechnicianSection({ number: 2, title: 'En curso', items: managerActiveTasks, tone: 'active', emptyText: 'No hay tareas en curso.', showAssignee: true, markNext: false })}
         {renderTechnicianSection({ number: 3, title: 'Pendientes', items: managerPendingTasks, tone: 'pending', emptyText: 'No quedan tareas pendientes.', showAssignee: true, markNext: false })}
