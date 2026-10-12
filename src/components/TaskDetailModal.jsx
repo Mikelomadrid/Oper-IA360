@@ -19,29 +19,49 @@ const TaskDetailModal = ({ isOpen, onClose, task, onEdit, onDelete }) => {
     const canManage = sessionRole?.rol === 'admin' || sessionRole?.rol === 'encargado' || sessionRole?.rol === 'manager';
 
     const [subtasks, setSubtasks] = useState([]);
+    const [workSessions, setWorkSessions] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [clockTick, setClockTick] = useState(Date.now());
 
-    const fetchSubtasks = useCallback(async () => {
+    const fetchTaskDetails = useCallback(async () => {
         if (!task || !isOpen) return;
         setIsLoading(true);
 
-        const { data, error } = await supabase
-            .from('subtareas')
-            .select('id, descripcion_subtarea, completada, fecha_completado')
-            .eq('tarea_id', task.id)
-            .order('fecha_creacion', { ascending: true });
+        const [subtasksResult, sessionsResult] = await Promise.all([
+            supabase
+                .from('subtareas')
+                .select('id, descripcion_subtarea, completada, fecha_completado')
+                .eq('tarea_id', task.id)
+                .order('fecha_creacion', { ascending: true }),
+            supabase
+                .from('tarea_sesiones_trabajo')
+                .select('id, empleado_id, estado, minutos_acumulados, ultimo_inicio_at, fin_at')
+                .eq('tarea_id', task.id)
+                .order('inicio_at', { ascending: true }),
+        ]);
 
-        if (!error && data) {
-            setSubtasks(data);
+        if (!subtasksResult.error && subtasksResult.data) {
+            setSubtasks(subtasksResult.data);
         } else {
             setSubtasks([]);
+        }
+        if (!sessionsResult.error && sessionsResult.data) {
+            setWorkSessions(sessionsResult.data);
+        } else {
+            setWorkSessions([]);
         }
         setIsLoading(false);
     }, [task, isOpen]);
 
     useEffect(() => {
-        fetchSubtasks();
-    }, [fetchSubtasks]);
+        fetchTaskDetails();
+    }, [fetchTaskDetails]);
+
+    useEffect(() => {
+        if (!isOpen || !workSessions.some((session) => session.estado === 'en_curso')) return undefined;
+        const timer = window.setInterval(() => setClockTick(Date.now()), 60000);
+        return () => window.clearInterval(timer);
+    }, [isOpen, workSessions]);
 
     if (!task) return null;
 
@@ -49,6 +69,34 @@ const TaskDetailModal = ({ isOpen, onClose, task, onEdit, onDelete }) => {
     const progressPercentage = subtasks.length > 0
         ? Math.round((completedSubtasksCount / subtasks.length) * 100)
         : (task.estado === 'completada' || task.estado === 'completada_validada' ? 100 : task.progressPercent || 0);
+
+    const plannedHoursPerTechnician = Number(task.duracion_planificada_horas || task.horas_calculadas || 0);
+    const technicianHours = (task.tecnicos || []).map((technician) => {
+        const technicianSessions = workSessions.filter((session) => session.empleado_id === technician.id);
+        const minutes = technicianSessions.reduce((sum, session) => {
+            let sessionMinutes = Number(session.minutos_acumulados || 0);
+            if (session.estado === 'en_curso' && session.ultimo_inicio_at) {
+                sessionMinutes += Math.max(0, (clockTick - new Date(session.ultimo_inicio_at).getTime()) / 60000);
+            }
+            return sum + sessionMinutes;
+        }, 0);
+        const activeSession = technicianSessions.find((session) => session.estado === 'en_curso');
+        const pausedSession = technicianSessions.find((session) => session.estado === 'pausada');
+        return {
+            ...technician,
+            actualHours: minutes / 60,
+            plannedHours: plannedHoursPerTechnician,
+            workStatus: activeSession ? 'en_curso' : pausedSession ? 'pausada' : technicianSessions.length > 0 ? 'finalizada' : 'sin_iniciar',
+        };
+    });
+
+    const formatHours = (hours) => {
+        const decimalHours = Math.max(0, Number(hours || 0));
+        return `${new Intl.NumberFormat('es-ES', {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2,
+        }).format(decimalHours)} h`;
+    };
 
     const getStatusBadge = () => {
         let bgColor = "bg-amber-100 border-amber-200";
@@ -172,12 +220,22 @@ const TaskDetailModal = ({ isOpen, onClose, task, onEdit, onDelete }) => {
                                 Técnicos Asignados
                             </h3>
                             <div className="bg-white dark:bg-slate-900 rounded-xl p-4 border border-slate-200 dark:border-slate-800 shadow-sm">
-                                {task.tecnicos && task.tecnicos.length > 0 ? (
+                                {technicianHours.length > 0 ? (
                                     <div className="flex flex-col gap-3">
-                                        {task.tecnicos.map(tec => (
+                                        {technicianHours.map(tec => {
+                                            const deviation = tec.actualHours - tec.plannedHours;
+                                            const isOverPlan = tec.plannedHours > 0 && deviation > 0.01;
+                                            const statusLabel = tec.workStatus === 'en_curso'
+                                                ? 'Trabajando'
+                                                : tec.workStatus === 'pausada'
+                                                    ? 'En pausa'
+                                                    : tec.workStatus === 'finalizada'
+                                                        ? 'Intervención cerrada'
+                                                        : 'Sin iniciar';
+                                            return (
                                             <div
                                                 key={tec.id}
-                                                className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                                                className="rounded-lg border border-slate-100 bg-slate-50/70 p-3 transition-colors hover:border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40 dark:hover:bg-slate-800"
                                                 onClick={() => {
                                                     onClose();
                                                     const returnUrl = encodeURIComponent(location.pathname + location.search);
@@ -185,20 +243,53 @@ const TaskDetailModal = ({ isOpen, onClose, task, onEdit, onDelete }) => {
                                                 }}
                                                 title={`Ver herramientas de ${tec.nombre}`}
                                             >
-                                                <Avatar className="w-8 h-8 border border-slate-200 dark:border-slate-700 shadow-sm">
-                                                    {tec.foto_url ? (
-                                                        <img src={tec.foto_url} alt={tec.nombre} className="w-full h-full object-cover rounded-full" />
-                                                    ) : (
-                                                        <AvatarFallback className="text-xs bg-slate-100 text-slate-700 font-semibold">
-                                                            {tec.nombre?.trim()?.substring(0, 2).toUpperCase() || 'SA'}
-                                                        </AvatarFallback>
-                                                    )}
-                                                </Avatar>
-                                                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                                                    {tec.nombre}
-                                                </span>
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div className="flex min-w-0 items-center gap-3">
+                                                        <Avatar className="w-8 h-8 border border-slate-200 dark:border-slate-700 shadow-sm">
+                                                            {tec.foto_url ? (
+                                                                <img src={tec.foto_url} alt={tec.nombre} className="w-full h-full object-cover rounded-full" />
+                                                            ) : (
+                                                                <AvatarFallback className="text-xs bg-slate-100 text-slate-700 font-semibold">
+                                                                    {tec.nombre?.trim()?.substring(0, 2).toUpperCase() || 'SA'}
+                                                                </AvatarFallback>
+                                                            )}
+                                                        </Avatar>
+                                                        <span className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
+                                                            {tec.nombre}
+                                                        </span>
+                                                    </div>
+                                                    <Badge variant="outline" className={cn(
+                                                        'shrink-0 px-2 py-0.5 text-[10px] font-medium shadow-none',
+                                                        tec.workStatus === 'en_curso' && 'border-violet-200 bg-violet-50 text-violet-700',
+                                                        tec.workStatus === 'pausada' && 'border-amber-200 bg-amber-50 text-amber-700',
+                                                        tec.workStatus === 'finalizada' && 'border-emerald-200 bg-emerald-50 text-emerald-700',
+                                                        tec.workStatus === 'sin_iniciar' && 'border-slate-200 bg-white text-slate-500'
+                                                    )}>
+                                                        {statusLabel}
+                                                    </Badge>
+                                                </div>
+                                                <div className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-200/70 pt-2 dark:border-slate-800">
+                                                    <div>
+                                                        <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Previstas</p>
+                                                        <p className="font-mono text-sm font-semibold tabular-nums text-violet-700">{formatHours(tec.plannedHours)}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Reales</p>
+                                                        <p className="font-mono text-sm font-semibold tabular-nums text-slate-800 dark:text-slate-100">{formatHours(tec.actualHours)}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Diferencia</p>
+                                                        <p className={cn(
+                                                            'font-mono text-sm font-semibold tabular-nums',
+                                                            isOverPlan ? 'text-amber-700' : 'text-emerald-700'
+                                                        )}>
+                                                            {deviation > 0 ? '+' : ''}{formatHours(Math.abs(deviation))}{deviation < 0 ? ' disponibles' : ''}
+                                                        </p>
+                                                    </div>
+                                                </div>
                                             </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 ) : (
                                     <span className="text-sm text-slate-500 italic block py-2">Sin técnicos asignados</span>

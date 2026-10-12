@@ -271,7 +271,7 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
             // Solo al crear tarea nueva (no al editar) y si hay fecha de inicio y técnicos
             if (!task && projectId && startDate && employeeIds.length > 0) {
                 try {
-                    const fechaNombre = format(startDate, 'dd-M-yyyy'); // ej: 26-3-2026
+                    const fechaNombre = format(startDate, 'dd-MM-yy'); // ej: 26-03-26
 
                     // 1. Buscar si ya existe la carpeta del día en la raíz (carpeta_padre_id null)
                     const { data: existentes } = await supabase

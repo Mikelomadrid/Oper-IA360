@@ -166,6 +166,20 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                 // Injections
                 const hasPersonalSection = items.some(i => i.key === 'personal');
                 if (hasPersonalSection) {
+                    if (['admin', 'encargado'].includes(sessionRole?.rol)) {
+                        items = items.filter(item =>
+                            item.key !== 'fichajes_equipo' && item.path !== '/personal/fichajes-admin'
+                        );
+                        items.push({
+                            key: 'fichajes_equipo',
+                            label: 'FICHAJES DEL EQUIPO',
+                            path: '/personal/fichajes-admin',
+                            parent: 'personal',
+                            orden: 62,
+                            icon: 'ClipboardCheck'
+                        });
+                    }
+
                     items = items.filter(item => item.key !== 'horas_extras');
                     items.push({
                         key: 'horas_extras',

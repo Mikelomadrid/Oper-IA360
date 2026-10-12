@@ -421,12 +421,15 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
 
     // --- Computed ---
 
-    // Parsea nombres de carpeta con formato dd-M-yyyy o dd-MM-yyyy
+    // Parsea carpetas diarias nuevas (dd-MM-yy) y conserva compatibilidad
+    // con las carpetas historicas (dd-M-yyyy / dd-MM-yyyy).
     const parseFechaCarpeta = (nombre) => {
         if (!nombre) return null;
-        const match = nombre.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+        const match = nombre.match(/^(\d{1,2})-(\d{1,2})-(\d{2}|\d{4})$/);
         if (match) {
-            return new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
+            const rawYear = parseInt(match[3], 10);
+            const year = match[3].length === 2 ? 2000 + rawYear : rawYear;
+            return new Date(year, parseInt(match[2], 10) - 1, parseInt(match[1], 10));
         }
         return null;
     };

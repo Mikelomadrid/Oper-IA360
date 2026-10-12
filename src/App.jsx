@@ -478,13 +478,17 @@ const AppContent = () => {
                         case 'proveedor-detail': return <ProveedorDetail proveedorId={activeModule.id} navigate={navigate} />;
 
                         case 'gestion/obras': return <Projects navigate={navigate} />;
-                        case 'cronograma-global': return <GlobalGanttView />;
+                        case 'cronograma-global':
+                          if (!['admin', 'encargado'].includes(sessionRole?.rol)) return <Navigate to="/personal/fichajes" />;
+                          return <GlobalGanttView />;
                         case 'project-detail': return <ProjectDetail projectId={activeModule.id} navigate={navigate} />;
                         case 'project-materials': return <ProjectMaterialsView />;
                         case 'gestion/actas-finalizacion': return <ProjectSelectionForCertificate navigate={navigate} />;
                         case 'gestion/acta-final': return <ProjectCompletionCertificate projectId={activeModule.id} navigate={navigate} />;
                         case 'gestion/acta-finalizacion': return <ActaFinalizacion navigate={navigate} />;
-                        case 'gestion/tareas': return <Tareas navigate={navigate} />;
+                        case 'gestion/tareas':
+                          if (!['admin', 'encargado'].includes(sessionRole?.rol)) return <Navigate to="/personal/fichajes" />;
+                          return <Tareas navigate={navigate} />;
                         case 'gestion/partes': return <PartesAdminView navigate={navigate} />;
                         case 'gestion/partes/nuevo': return <ParteCreateForm navigate={navigate} />;
 
@@ -504,8 +508,12 @@ const AppContent = () => {
                         case 'personal/horas-extras': return <ControlHorasView />;
                         case 'personal/horas-extras-2': return <ControlHorasView />;
                         case 'personal/fichajes': return <TechnicianWrapper><TechnicianFichajeView navigate={navigate} /></TechnicianWrapper>;
-                        case 'personal/fichajes-admin': return <AdminFichajes />;
-                        case 'personal/fichajes-admin/detail': return <AdminFichajes fichajeId={activeModule.id} />;
+                        case 'personal/fichajes-admin':
+                          if (!['admin', 'encargado'].includes(sessionRole?.rol)) return <Navigate to="/personal/fichajes" />;
+                          return <AdminFichajes />;
+                        case 'personal/fichajes-admin/detail':
+                          if (!['admin', 'encargado'].includes(sessionRole?.rol)) return <Navigate to="/personal/fichajes" />;
+                          return <AdminFichajes fichajeId={activeModule.id} />;
 
                         case 'personal/historico': return <HistoricoFichajes />;
                         case 'personal/calendario': return <EmployeeCalendarView navigate={navigate} />;

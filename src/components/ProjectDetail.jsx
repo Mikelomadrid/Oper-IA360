@@ -5,7 +5,7 @@ import { supabase } from '@/lib/customSupabaseClient';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
-import { Loader2, ArrowLeft, Building, LayoutDashboard, Package, HardHat, Image as ImageIcon, FileText, View, ShieldAlert, Banknote, ListChecks, MessageSquare, Share2, Pencil, Ruler, Brain, FileImage, ChevronDown, ClipboardList, ClipboardCheck, Users } from 'lucide-react';
+import { Loader2, ArrowLeft, Building, LayoutDashboard, Package, HardHat, Image as ImageIcon, FileText, View, ShieldAlert, Banknote, ListChecks, MessageSquare, Share2, Pencil, Ruler, Brain, FileImage, ChevronDown, ClipboardList, ClipboardCheck, Users, Timer } from 'lucide-react';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
@@ -40,6 +40,7 @@ import SeguimientoLeadTab from '@/components/SeguimientoLeadTab';
 import ProjectPedidosView from '@/components/ProjectPedidosView';
 import ProjectProductionView from '@/components/ProjectProductionView';
 import ProjectTeamView from '@/components/ProjectTeamView';
+import ProjectDailyWorkView from '@/components/ProjectDailyWorkView';
 
 const ProjectDetail = ({ projectId: propProjectId }) => {
     const navigate = useNavigate();
@@ -56,6 +57,15 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
     const [presupuestoScannerOpen, setPresupuestoScannerOpen] = useState(false);
 
     const canManage = React.useMemo(() => sessionRole?.rol === 'admin' || sessionRole?.rol === 'encargado', [sessionRole]);
+
+    useEffect(() => {
+        if (!canManage && ['cronograma', 'jornada', 'equipo'].includes(activeTab)) {
+            setActiveTab('dashboard');
+            const params = new URLSearchParams(location.search);
+            params.set('tab', 'dashboard');
+            navigate({ search: params.toString() }, { replace: true });
+        }
+    }, [activeTab, canManage, location.search, navigate]);
 
     const handleTabChange = (val) => {
         setActiveTab(val);
@@ -185,6 +195,7 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
                             onTabChange={handleTabChange}
                             esCompartida={project.es_compartida}
                             tieneLeadId={!!project.lead_id}
+                            canManage={canManage}
                         />
                     </div>
                 </div>
@@ -198,6 +209,10 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
 
                         <TabsContent value="cronograma" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
                             <ObraGanttTab obraId={projectId} />
+                        </TabsContent>
+
+                        <TabsContent value="jornada" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
+                            <ProjectDailyWorkView projectId={projectId} canManage={canManage} />
                         </TabsContent>
 
                         <TabsContent value="equipo" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
@@ -354,6 +369,7 @@ const NAV_GROUPS = (esCompartida, tieneLeadId) => [
         children: [
             { value: 'dashboard',   label: 'Dashboard',     icon: <LayoutDashboard className="w-3.5 h-3.5" /> },
             { value: 'cronograma',  label: 'Cronograma',    icon: <ListChecks className="w-3.5 h-3.5" /> },
+            { value: 'jornada',     label: 'Trabajo diario', icon: <Timer className="w-3.5 h-3.5" /> },
             { value: 'equipo',      label: 'Equipo de obra', icon: <Users className="w-3.5 h-3.5" /> },
             { value: 'replanteo',   label: 'Replanteo IA',  icon: <Brain className="w-3.5 h-3.5" /> },
             ...(esCompartida ? [{ value: 'liquidacion', label: 'Liquidación', icon: <Share2 className="w-3.5 h-3.5" /> }] : []),
@@ -396,11 +412,17 @@ const NAV_GROUPS = (esCompartida, tieneLeadId) => [
 // ─── Componente de navegación agrupada ────────────────────────────────────────
 // Navegación basada en click/tap (funciona igual en desktop y móvil).
 // No depende de hover (mouseEnter/mouseLeave no existen de forma fiable en táctil).
-const GroupedNav = ({ activeTab, onTabChange, esCompartida, tieneLeadId }) => {
+const GroupedNav = ({ activeTab, onTabChange, esCompartida, tieneLeadId, canManage }) => {
     const [openGroup, setOpenGroup] = useState(null);
     const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
     const navRef = useRef(null);
-    const groups = NAV_GROUPS(esCompartida, tieneLeadId);
+    const groups = NAV_GROUPS(esCompartida, tieneLeadId)
+        .map((group) => ({
+            ...group,
+            children: canManage
+                ? group.children
+                : group.children.filter((item) => !['cronograma', 'jornada', 'equipo'].includes(item.value)),
+        }));
     const activeGroup = groups.find(g => g.children.some(c => c.value === activeTab))?.id;
     const openGroupData = groups.find(g => g.id === openGroup);
 

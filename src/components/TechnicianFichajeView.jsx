@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
-import SeleccionTareaModal from '@/components/SeleccionTareaModal';
 import {
   Card,
   CardContent,
@@ -45,9 +44,17 @@ import {
   Clock,
   AlertCircle,
   Warehouse,
-  Info
+  Info,
+  ClipboardCheck,
+  ListChecks,
+  CircleDashed,
+  ArrowRightLeft,
+  CheckCircle2,
+  Camera,
+  ImagePlus
 } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
+import { Textarea } from '@/components/ui/textarea';
 import { fmtMadrid, cn, formatSecondsToHoursMinutes, getMadridLocalTime } from '@/lib/utils';
 import { DateRangePicker } from '@/components/DateRangePicker';
 import { format } from 'date-fns';
@@ -55,6 +62,7 @@ import { es } from 'date-fns/locale';
 import TimeClockMap from '@/components/TimeClockMap';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import FontaneriaModal from '@/components/FontaneriaModal';
+import PhotoUploadModal from '@/components/PhotoUploadModal';
 
 /* 
    NO frontend duration/pauses/hour calculations; 
@@ -74,6 +82,7 @@ const TechnicianFichajeView = ({ navigate }) => {
   const [actionLoading, setActionLoading] = useState(false);
   const [currentStatus, setCurrentStatus] = useState({
     fichajeId: null,
+    proyectoId: null,
     enPausa: false,
     nombreUbicacion: null,
     pauseStartTime: null,
@@ -86,9 +95,16 @@ const TechnicianFichajeView = ({ navigate }) => {
   const [fontaneriaModalOpen, setFontaneriaModalOpen] = useState(false);
   const [fechaSalida, setFechaSalida] = useState(null);
 
-  // --- STATE FOR TASK SELECTION MODAL ---
-  const [tareaModalOpen, setTareaModalOpen] = useState(false);
-  const [proyectoFichado, setProyectoFichado] = useState(null);
+  // --- ÓRDENES DIARIAS LIBERADAS POR EL ENCARGADO ---
+  const [workOrders, setWorkOrders] = useState([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [exitReviewOpen, setExitReviewOpen] = useState(false);
+  const [exitResults, setExitResults] = useState({});
+  const [exitNotes, setExitNotes] = useState({});
+  const [pendingTransfer, setPendingTransfer] = useState(null);
+  const [evidenceCapture, setEvidenceCapture] = useState({ open: false, mode: null, order: null });
+  const [exitEvidenceFiles, setExitEvidenceFiles] = useState({});
+  const [evidenceUploading, setEvidenceUploading] = useState(false);
 
   // Detectar si el usuario actual es Fran
   const esFran = user?.email?.toLowerCase() === FRAN_EMAIL;
@@ -105,9 +121,12 @@ const TechnicianFichajeView = ({ navigate }) => {
 
   // --- INITIAL DATA LOADING ---
   useEffect(() => {
-    fetchProjects();
     fetchCurrentStatus();
   }, []);
+
+  useEffect(() => {
+    if (sessionRole?.rol) fetchProjects();
+  }, [sessionRole?.rol, sessionRole?.empleadoId]);
 
   useEffect(() => {
     if (activeTab === 'historial') {
@@ -117,15 +136,22 @@ const TechnicianFichajeView = ({ navigate }) => {
 
   const fetchProjects = async () => {
     try {
-      const { data, error } = await supabase
-        .from('vw_selector_fichaje_obras_v1')
-        .select('value, label');
+      const isManager = ['admin', 'encargado'].includes(sessionRole?.rol);
+      const { data, error } = isManager
+        ? await supabase
+          .from('proyectos')
+          .select('id,nombre_proyecto')
+          .in('estado', ['activo', 'en_espera'])
+          .order('nombre_proyecto')
+        : await supabase.rpc('rpc_selector_proyectos_fichaje_tecnico');
       
       if (error) throw error;
-      setProjects(data || []);
+      setProjects(isManager
+        ? (data || []).map((project) => ({ value: project.id, label: project.nombre_proyecto }))
+        : (data || []));
     } catch (err) {
       console.error("Error loading projects:", err);
-      toast({ variant: "destructive", title: "Error", description: "No se pudieron cargar los proyectos." });
+      toast({ variant: "destructive", title: "Error", description: "No se pudieron cargar las obras disponibles para fichar." });
     }
   };
 
@@ -137,6 +163,11 @@ const TechnicianFichajeView = ({ navigate }) => {
 
       if (data && data.length > 0) {
         let pauseStartTime = null;
+        let proyectoId = null;
+
+        const { data: activeClock } = await supabase
+          .rpc('obtener_contexto_fichaje_actual');
+        proyectoId = activeClock?.[0]?.proyecto_id || null;
         
         if (data[0].en_pausa) {
              const { data: pauseData } = await supabase
@@ -154,6 +185,7 @@ const TechnicianFichajeView = ({ navigate }) => {
 
         setCurrentStatus({
           fichajeId: data[0].fichaje_id,
+          proyectoId,
           enPausa: data[0].en_pausa,
           nombreUbicacion: data[0].nombre_ubicacion,
           pauseStartTime,
@@ -162,6 +194,7 @@ const TechnicianFichajeView = ({ navigate }) => {
       } else {
         setCurrentStatus({
           fichajeId: null,
+          proyectoId: null,
           enPausa: false,
           nombreUbicacion: null,
           pauseStartTime: null,
@@ -171,6 +204,130 @@ const TechnicianFichajeView = ({ navigate }) => {
     } catch (err) {
       console.error("Error status:", err);
       setCurrentStatus(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const fetchWorkOrders = async (projectId = currentStatus.proyectoId) => {
+    if (!sessionRole?.empleadoId || !projectId) {
+      setWorkOrders([]);
+      setPendingTransfer(null);
+      return;
+    }
+    setOrdersLoading(true);
+    try {
+      const [ordersResult, transferResult] = await Promise.all([
+        supabase
+          .from('ordenes_trabajo_diarias')
+          .select(`
+            id, proyecto_id, tarea_id, empleado_id, fichaje_id, fecha_asignacion,
+            orden, estado, horas_previstas, notas_encargado, asignada_at,
+            tarea:tareas(id,titulo,descripcion,orden)
+          `)
+          .eq('empleado_id', sessionRole.empleadoId)
+          .eq('proyecto_id', projectId)
+          .in('estado', ['asignada', 'activa', 'pendiente_continuar'])
+          .order('orden', { ascending: true })
+          .order('asignada_at', { ascending: true }),
+        supabase
+          .from('traslados_personal')
+          .select(`
+            id,motivo,notas,estado,proyecto_destino_id,centro_destino_id,
+            proyecto_destino:proyectos!traslados_personal_proyecto_destino_id_fkey(nombre_proyecto),
+            centro_destino:centros_coste_internos!traslados_personal_centro_destino_id_fkey(nombre_centro)
+          `)
+          .eq('empleado_id', sessionRole.empleadoId)
+          .in('estado', ['pendiente_salida', 'en_desplazamiento'])
+          .order('ordenado_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      if (ordersResult.error) throw ordersResult.error;
+      // La orden de trabajo es la información principal de esta vista. Un fallo
+      // en la consulta auxiliar de traslados (por ejemplo, por permisos sobre
+      // centros internos) no debe ocultar una tarea que ya está asignada.
+      if (transferResult.error) {
+        console.warn('No se pudo cargar el traslado pendiente:', transferResult.error);
+      }
+      setWorkOrders(ordersResult.data || []);
+      setPendingTransfer(transferResult.error ? null : (transferResult.data || null));
+    } catch (err) {
+      const missingInfrastructure = err?.code === '42P01'
+        || err?.code === 'PGRST205'
+        || err?.message?.includes('ordenes_trabajo_diarias');
+      if (!missingInfrastructure) console.error('Error loading daily work orders:', err);
+      setWorkOrders([]);
+      setPendingTransfer(null);
+    } finally {
+      setOrdersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!currentStatus.fichajeId || !currentStatus.proyectoId) {
+      setWorkOrders([]);
+      setPendingTransfer(null);
+      return undefined;
+    }
+    fetchWorkOrders(currentStatus.proyectoId);
+    const interval = window.setInterval(() => fetchWorkOrders(currentStatus.proyectoId), 8_000);
+    return () => window.clearInterval(interval);
+  }, [currentStatus.fichajeId, currentStatus.proyectoId, sessionRole?.empleadoId]);
+
+  const uploadWorkOrderEvidence = async (order, files, moment) => {
+    if (!order?.id || !order?.tarea_id || !order?.proyecto_id || !files?.length) {
+      throw new Error('Selecciona al menos una foto de evidencia.');
+    }
+
+    const uploadedPaths = [];
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const originalExtension = file.name?.split('.').pop()?.toLowerCase();
+      const extension = originalExtension && /^[a-z0-9]+$/.test(originalExtension) ? originalExtension : 'jpg';
+      const uniquePart = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${index}`;
+      const storagePath = `${order.proyecto_id}/tareas/${order.tarea_id}/ordenes/${order.id}/${moment}/${uniquePart}.${extension}`;
+      const { error: uploadError } = await supabase.storage
+        .from('proyecto_fotos')
+        .upload(storagePath, file, { contentType: file.type || 'image/jpeg', upsert: false });
+      if (uploadError) throw uploadError;
+      uploadedPaths.push(`proyecto_fotos/${storagePath}`);
+    }
+    return uploadedPaths;
+  };
+
+  const startWorkOrder = async (order) => {
+    setActionLoading(true);
+    try {
+      const { error } = await supabase.rpc('iniciar_orden_trabajo', {
+        p_orden_id: order.id,
+      });
+      if (error) throw error;
+      toast({
+        title: order.estado === 'pendiente_continuar' ? 'Trabajo reanudado' : 'Trabajo iniciado',
+        description: 'La tarea ya está en curso.',
+        className: 'bg-green-600 text-white',
+      });
+      await fetchWorkOrders(order.proyecto_id);
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'No se pudo iniciar la tarea', description: err.message });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleEvidenceSelected = async (files) => {
+    const { mode, order } = evidenceCapture;
+    if (!files?.length || !order) return;
+
+    if (mode === 'salida') {
+      setExitEvidenceFiles((current) => ({
+        ...current,
+        [order.id]: [...(current[order.id] || []), ...files],
+      }));
+      setEvidenceCapture({ open: false, mode: null, order: null });
+      setExitReviewOpen(true);
+      return;
     }
   };
 
@@ -210,7 +367,9 @@ const TechnicianFichajeView = ({ navigate }) => {
              params = {
                 ...params,
                 p_proyecto_id: null,
-                p_centro_coste_interno_id: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+                // El RPC resuelve el centro marcado como taller en esta instalación.
+                // No se usa un UUID fijo porque cambia entre entornos.
+                p_centro_coste_interno_id: null,
                 p_tipo: 'nave_taller'
              };
         } else {
@@ -245,14 +404,14 @@ const TechnicianFichajeView = ({ navigate }) => {
 
       await fetchCurrentStatus();
 
-      // ✅ Si es fichaje de ENTRADA en OBRA (no nave), abrir modal de tareas
       if (actionType === 'entrada' && selectedProject && selectedProject !== 'nave') {
-        setProyectoFichado(selectedProject);
-        setTareaModalOpen(true);
+        await fetchWorkOrders(selectedProject);
       }
 
       if (actionType === 'salida') {
         setSelectedProject(null);
+        setWorkOrders([]);
+        setPendingTransfer(null);
         // ✅ Si es Fran, abrir el modal de fontanería
         if (esFran) {
           setFechaSalida(format(new Date(), 'yyyy-MM-dd'));
@@ -268,6 +427,65 @@ const TechnicianFichajeView = ({ navigate }) => {
       });
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const requestExit = () => {
+    const reviewOrders = workOrders.filter((order) => order.estado === 'activa');
+    if (!currentStatus.proyectoId || reviewOrders.length === 0) {
+      performAction('salida');
+      return;
+    }
+    const defaultResults = {};
+    const defaultNotes = {};
+    reviewOrders.forEach((order) => {
+      defaultResults[order.id] = 'pendiente_continuar';
+      defaultNotes[order.id] = '';
+    });
+    setExitEvidenceFiles({});
+    setExitResults(defaultResults);
+    setExitNotes(defaultNotes);
+    setEvidenceCapture({ open: true, mode: 'salida', order: reviewOrders[0] });
+  };
+
+  const updateExitResult = (order, value) => {
+    setExitResults((current) => ({ ...current, [order.id]: value }));
+  };
+
+  const confirmExit = async () => {
+    const reviewOrders = workOrders.filter((order) => order.estado === 'activa');
+    const missingFinalEvidence = reviewOrders.find((order) => !(exitEvidenceFiles[order.id]?.length > 0));
+    if (missingFinalEvidence) {
+      toast({
+        variant: 'destructive',
+        title: 'Falta la evidencia de salida',
+        description: 'Para cerrar la jornada debes adjuntar al menos una fotografía del estado en que queda el trabajo.',
+      });
+      setExitReviewOpen(false);
+      setEvidenceCapture({ open: true, mode: 'salida', order: missingFinalEvidence });
+      return;
+    }
+
+    setActionLoading(true);
+    try {
+      for (const order of reviewOrders) {
+        const result = exitResults[order.id] || 'pendiente_continuar';
+        const uploadedPaths = await uploadWorkOrderEvidence(order, exitEvidenceFiles[order.id], 'finalizacion');
+        const { error } = await supabase.rpc('cerrar_orden_trabajo_con_evidencias', {
+          p_orden_id: order.id,
+          p_resultado: result,
+          p_notas: exitNotes[order.id]?.trim() || null,
+          p_archivos: uploadedPaths,
+        });
+        if (error) throw error;
+      }
+      setExitReviewOpen(false);
+      setExitEvidenceFiles({});
+      setActionLoading(false);
+      await performAction('salida');
+    } catch (err) {
+      setActionLoading(false);
+      toast({ variant: 'destructive', title: 'No se pudo cerrar la jornada', description: err.message });
     }
   };
 
@@ -477,6 +695,83 @@ const TechnicianFichajeView = ({ navigate }) => {
                 </div>
               )}
 
+              {currentStatus.fichajeId && currentStatus.proyectoId && (
+                <div className="space-y-3">
+                  {pendingTransfer?.estado === 'pendiente_salida' && (
+                    <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3">
+                      <div className="flex items-start gap-3">
+                        <ArrowRightLeft className="mt-0.5 h-5 w-5 shrink-0 text-violet-700" />
+                        <div>
+                          <p className="text-sm font-semibold text-violet-950">El encargado ha preparado un traslado</p>
+                          <p className="mt-0.5 text-sm text-violet-800">{pendingTransfer.motivo} · Destino: {pendingTransfer.proyecto_destino?.nombre_proyecto || pendingTransfer.centro_destino?.nombre_centro || 'por confirmar'}</p>
+                          {pendingTransfer.notas && <p className="mt-1 text-xs text-violet-700">{pendingTransfer.notas}</p>}
+                          <p className="mt-2 text-xs font-medium text-violet-900">Ficha la salida de esta obra antes de desplazarte.</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="rounded-xl border border-border/60 bg-card overflow-hidden">
+                    <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/20 px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <ListChecks className="h-4 w-4 text-primary" />
+                        <p className="text-sm font-semibold">Trabajo asignado</p>
+                      </div>
+                      {workOrders.length > 0 && <span className="font-mono text-xs text-muted-foreground">{workOrders.length} {workOrders.length === 1 ? 'orden' : 'órdenes'}</span>}
+                    </div>
+
+                    {ordersLoading && workOrders.length === 0 ? (
+                      <div className="flex items-center gap-2 px-4 py-5 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Comprobando la asignación…</div>
+                    ) : workOrders.length === 0 ? (
+                      <div className="flex items-start gap-3 bg-amber-50/60 px-4 py-5">
+                        <CircleDashed className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+                        <div>
+                          <p className="font-semibold text-amber-950">Esperando asignación del encargado</p>
+                          <p className="mt-1 text-sm text-amber-800">No elijas ninguna tarea. El encargado te asignará el siguiente trabajo desde su móvil.</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-border/50">
+                        {[...workOrders]
+                          .sort((a, b) => {
+                            const priority = { pendiente_continuar: 0, activa: 1, asignada: 2 };
+                            return (priority[a.estado] ?? 3) - (priority[b.estado] ?? 3)
+                              || Number(a.orden || 0) - Number(b.orden || 0);
+                          })
+                          .map((order, index) => (
+                            <div key={order.id} className="flex items-start gap-3 px-4 py-4">
+                              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-bold ${order.estado === 'pendiente_continuar' ? 'bg-amber-100 text-amber-800' : index === 0 ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'}`}>{index + 1}</span>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-sm font-semibold leading-snug">{order.tarea?.titulo || 'Orden de trabajo'}</p>
+                                  {order.estado === 'pendiente_continuar' && <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800">Continuar</span>}
+                                  {order.estado === 'activa' && <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">En curso</span>}
+                                  {order.estado === 'asignada' && <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">Siguiente</span>}
+                                </div>
+                                {order.notas_encargado && <p className="mt-1 text-xs text-muted-foreground">{order.notas_encargado}</p>}
+                                {order.horas_previstas != null && <p className="mt-2 font-mono text-xs font-semibold tabular-nums text-violet-700">{Number(order.horas_previstas).toLocaleString('es-ES', { maximumFractionDigits: 2 })} h previstas</p>}
+                                {index === 0 && ['asignada', 'pendiente_continuar'].includes(order.estado) && (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    className="mt-3 h-10 w-full justify-center bg-emerald-600 hover:bg-emerald-700 sm:w-auto"
+                                    onClick={() => startWorkOrder(order)}
+                                    disabled={evidenceUploading || actionLoading}
+                                  >
+                                    {actionLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlayCircle className="mr-2 h-4 w-4" />}
+                                    {order.estado === 'pendiente_continuar' ? 'Continuar tarea' : 'Empezar tarea'}
+                                  </Button>
+                                )}
+                              </div>
+                              {index === 0 && order.estado !== 'pendiente_continuar' && <ClipboardCheck className="h-5 w-5 shrink-0 text-emerald-600" />}
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {!currentStatus.fichajeId ? (
                   <Button 
@@ -518,7 +813,7 @@ const TechnicianFichajeView = ({ navigate }) => {
                       size="lg" 
                       variant="destructive"
                       className="w-full h-16 text-lg shadow-lg shadow-red-900/20"
-                      onClick={() => performAction('salida')}
+                      onClick={requestExit}
                       disabled={actionLoading || currentStatus.enPausa} 
                     >
                       {actionLoading ? <Loader2 className="mr-2 h-6 w-6 animate-spin" /> : <StopCircle className="mr-2 h-6 w-6" />}
@@ -785,22 +1080,86 @@ const TechnicianFichajeView = ({ navigate }) => {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={exitReviewOpen} onOpenChange={(open) => !actionLoading && !evidenceUploading && setExitReviewOpen(open)}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5 text-primary" />Resumen antes de salir</DialogTitle>
+            <DialogDescription>Indica cómo queda cada trabajo. Al confirmar se detendrán las horas y los costes de esta obra.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            {workOrders.filter((order) => order.estado !== 'asignada').map((order) => (
+              <div key={order.id} className="rounded-xl border border-border/60 bg-muted/10 p-4">
+                <p className="text-sm font-semibold leading-snug">{order.tarea?.titulo || 'Orden de trabajo'}</p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-[210px_minmax(0,1fr)]">
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-muted-foreground">Resultado</label>
+                    <Select value={exitResults[order.id] || 'pendiente_continuar'} onValueChange={(value) => updateExitResult(order, value)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="completada">Terminada</SelectItem>
+                        <SelectItem value="pendiente_continuar">Pendiente de continuar</SelectItem>
+                        <SelectItem value="no_realizada">No realizada</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-muted-foreground">Observación opcional</label>
+                    <Textarea value={exitNotes[order.id] || ''} onChange={(event) => setExitNotes((current) => ({ ...current, [order.id]: event.target.value }))} placeholder="Motivo, avance o incidencia…" rows={2} />
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-col gap-3 rounded-lg border border-emerald-200 bg-emerald-50/70 p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-start gap-2">
+                      <ImagePlus className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
+                      <div>
+                        <p className="text-sm font-semibold text-emerald-950">Evidencia al cerrar la jornada</p>
+                        <p className="text-xs text-emerald-800">
+                          {exitEvidenceFiles[order.id]?.length
+                            ? `${exitEvidenceFiles[order.id].length} foto(s) preparada(s)`
+                            : 'Obligatoria tanto si continúa otro día como si queda terminada.'}
+                        </p>
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-emerald-300 bg-white text-emerald-800 hover:bg-emerald-100"
+                      onClick={() => {
+                        setExitReviewOpen(false);
+                        setEvidenceCapture({ open: true, mode: 'salida', order });
+                      }}
+                      disabled={actionLoading}
+                    >
+                      <Camera className="mr-2 h-4 w-4" />
+                      {exitEvidenceFiles[order.id]?.length ? 'Añadir más fotos' : 'Elegir o hacer fotos'}
+                    </Button>
+                  </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExitReviewOpen(false)} disabled={actionLoading || evidenceUploading}>Volver</Button>
+            <Button variant="destructive" onClick={confirmExit} disabled={actionLoading || evidenceUploading}>
+              {(actionLoading || evidenceUploading) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Guardar y fichar salida
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <PhotoUploadModal
+        isOpen={evidenceCapture.open}
+        onClose={() => {
+          if (!evidenceUploading) setEvidenceCapture({ open: false, mode: null, order: null });
+        }}
+        onPhotosSelected={handleEvidenceSelected}
+        title="Fotos al cerrar la jornada"
+        allowMultiple
+      />
+
       {/* ✅ MODAL FONTANERÍA — Solo se muestra si el usuario es fran@orkaled.com */}
       <FontaneriaModal
         isOpen={fontaneriaModalOpen}
         onClose={() => setFontaneriaModalOpen(false)}
         fecha={fechaSalida}
-      />
-
-      {/* ✅ MODAL SELECCIÓN DE TAREA — Se muestra al fichar entrada en obra */}
-      <SeleccionTareaModal
-        isOpen={tareaModalOpen}
-        onClose={() => setTareaModalOpen(false)}
-        proyectoId={proyectoFichado}
-        empleadoId={sessionRole?.empleadoId}
-        onTareaSeleccionada={(tarea) => {
-          console.log('Tarea seleccionada:', tarea);
-        }}
       />
 
     </div>

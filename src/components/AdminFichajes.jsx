@@ -526,7 +526,7 @@ const AdminFichajes = () => {
     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mx-auto w-full">
       <div>
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100 flex items-center gap-3">
-          Fichajes
+          Fichajes del equipo
           {isReadOnly && (
             <Badge variant="outline" className="text-xs font-medium bg-slate-50 text-slate-600 border-slate-200 flex items-center gap-1">
               <Eye className="w-3 h-3" /> Solo lectura

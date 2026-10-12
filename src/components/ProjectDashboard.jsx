@@ -14,6 +14,7 @@ import { formatDate } from '@/lib/utils';
 import { useInformeObraPDF } from '@/components/useInformeObraPDF';
 import LeadInheritedInfo from '@/components/LeadInheritedInfo';
 import { fetchProjectMaterialBaseTotal } from '@/lib/projectMaterialCosts';
+import ProjectProfitabilityForecast from '@/components/ProjectProfitabilityForecast';
 
 const StatCard = ({ title, value, icon, description, trend, trendValue, colorClass }) => {
     const TrendIcon = trend === 'up' ? TrendingUp : trend === 'down' ? TrendingDown : Minus;
@@ -406,9 +407,9 @@ Responde SOLO con este JSON sin texto adicional ni markdown:
 
     const cards = [
         { title: "Presupuesto", value: formatCurrency(kpis.presupuesto_aceptado), icon: <Euro />, description: `Cliente: ${project?.cliente?.nombre || clientData?.nombre || 'N/A'}`, colorClass: 'bg-blue-500' },
-        { title: "Coste Total", value: formatCurrency(kpis.costo_total), icon: <Users />, description: "Mat. + Mano Obra", colorClass: 'bg-orange-500' },
-        { title: "Margen Bruto", value: formatCurrency(kpis.margen), icon: isProfit ? <CheckCircle2 /> : <AlertTriangle />, description: isProfit ? 'Beneficio' : 'Pérdida', colorClass: isProfit ? 'bg-green-500' : 'bg-red-500' },
-        { title: "Rentabilidad", value: `${rentabilidadPct.toFixed(2)}%`, icon: <BarChart3 />, description: `Real`, colorClass: isRentable ? 'bg-purple-500' : 'bg-yellow-500' },
+        { title: "Coste acumulado", value: formatCurrency(kpis.costo_total), icon: <Users />, description: "Real hasta hoy", colorClass: 'bg-orange-500' },
+        { title: "Margen acumulado", value: formatCurrency(kpis.margen), icon: isProfit ? <CheckCircle2 /> : <AlertTriangle />, description: isProfit ? 'Todavía no es el margen final' : 'Pérdida acumulada', colorClass: isProfit ? 'bg-green-500' : 'bg-red-500' },
+        { title: "Rentabilidad actual", value: `${rentabilidadPct.toFixed(2)}%`, icon: <BarChart3 />, description: `Acumulada hasta hoy`, colorClass: isRentable ? 'bg-purple-500' : 'bg-yellow-500' },
     ];
 
     const displayClienteName = clientData?.nombre || project?.contacto_nombre || '-';
@@ -563,6 +564,8 @@ Responde SOLO con este JSON sin texto adicional ni markdown:
                     </Card>
                 </div>
             </div>
+
+            <ProjectProfitabilityForecast projectId={projectId} project={project} kpis={kpis} />
 
             {/* ===================== INFO CLIENTE (OBRA SIN LEAD) ===================== */}
             {/* Mismo diseño que la tarjeta del lead: grid compacto de 2-3 columnas.   */}
