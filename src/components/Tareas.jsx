@@ -6,8 +6,7 @@ import { toast } from '@/components/ui/use-toast';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ClipboardList, Loader2, ServerCrash, Inbox, Plus, Filter, LayoutGrid, List, ChevronDown, ChevronUp, CheckCircle2, AlertCircle, PlayCircle } from 'lucide-react';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ClipboardList, Loader2, ServerCrash, Inbox, Plus, Filter, LayoutGrid, List, ChevronDown, ChevronUp, ChevronRight, CheckCircle2, AlertCircle, PlayCircle, CircleDashed } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import TaskCard from '@/components/TaskCard';
@@ -25,10 +24,10 @@ const Tareas = ({ forcedProjectId }) => {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [modalState, setModalState] = useState({ isOpen: false, task: null, type: null });
+  const [modalState, setModalState] = useState({ isOpen: false, task: null, type: null, readOnly: false });
   const [revisionModalState, setRevisionModalState] = useState({ isOpen: false, task: null });
   const [evidenciasModalState, setEvidenciasModalState] = useState({ isOpen: false, task: null, subtaskId: null, readOnly: true, onUploadComplete: null });
-  const [viewMode, setViewMode] = useState('cluster'); // 'cluster' | 'list'
+  const [viewMode, setViewMode] = useState('list'); // 'cluster' | 'list'
 
   // New state for completed tasks tab
   const [isCompletedOpen, setIsCompletedOpen] = useState(false);
@@ -55,6 +54,27 @@ const Tareas = ({ forcedProjectId }) => {
   // Filter tasks
   const activeTasks = useMemo(() => tasks.filter(t => !['completada', 'completada_validada'].includes(t.estado)), [tasks]);
   const completedTasks = useMemo(() => tasks.filter(t => ['completada', 'completada_validada'].includes(t.estado)), [tasks]);
+  const technicianCompletedTasks = useMemo(() => tasks
+    .filter((task) => task.estado_orden === 'completada' || ['pendiente_revision', 'completada', 'completada_validada'].includes(task.estado))
+    .sort((a, b) => new Date(b.cerrada_at || b.fecha_completada || 0) - new Date(a.cerrada_at || a.fecha_completada || 0)), [tasks]);
+  const technicianActiveTasks = useMemo(() => tasks
+    .filter((task) => task.estado_orden === 'activa')
+    .sort((a, b) => Number(a.orden_actuacion || 0) - Number(b.orden_actuacion || 0)), [tasks]);
+  const technicianPendingTasks = useMemo(() => tasks
+    .filter((task) => !technicianCompletedTasks.some((completed) => completed.id === task.id)
+      && !technicianActiveTasks.some((active) => active.id === task.id))
+    .sort((a, b) => Number(a.orden_actuacion ?? 9999) - Number(b.orden_actuacion ?? 9999)
+      || new Date(a.fecha_creacion || 0) - new Date(b.fecha_creacion || 0)), [tasks, technicianActiveTasks, technicianCompletedTasks]);
+  const managerCompletedTasks = useMemo(() => tasks
+    .filter((task) => ['pendiente_revision', 'completada', 'completada_validada'].includes(task.estado))
+    .sort((a, b) => new Date(b.fecha_completada || b.fecha_creacion || 0) - new Date(a.fecha_completada || a.fecha_creacion || 0)), [tasks]);
+  const managerActiveTasks = useMemo(() => tasks
+    .filter((task) => task.estado === 'en_progreso')
+    .sort((a, b) => Number(a.orden_actuacion ?? 9999) - Number(b.orden_actuacion ?? 9999)), [tasks]);
+  const managerPendingTasks = useMemo(() => tasks
+    .filter((task) => !['en_progreso', 'pendiente_revision', 'completada', 'completada_validada'].includes(task.estado))
+    .sort((a, b) => Number(a.orden_actuacion ?? 9999) - Number(b.orden_actuacion ?? 9999)
+      || new Date(a.fecha_creacion || 0) - new Date(b.fecha_creacion || 0)), [tasks]);
 
   useEffect(() => {
     const fetchEmployeeId = async () => {
@@ -81,15 +101,22 @@ const Tareas = ({ forcedProjectId }) => {
     }
 
     try {
-      const { data, error } = await supabase.rpc('get_estado_fichaje_sesion');
-      
-      if (error) throw error;
+      const [estadoResult, contextoResult] = await Promise.all([
+        supabase.rpc('get_estado_fichaje_sesion'),
+        supabase.rpc('obtener_contexto_fichaje_actual')
+      ]);
 
-      if (data && data.length > 0) {
+      if (estadoResult.error) throw estadoResult.error;
+      if (contextoResult.error) throw contextoResult.error;
+
+      const estado = estadoResult.data?.[0] || null;
+      const contexto = contextoResult.data?.[0] || null;
+
+      if (estado) {
         setFichajeActual({
-          fichajeId: data[0].fichaje_id,
-          proyectoId: data[0].proyecto_id,
-          nombreUbicacion: data[0].nombre_ubicacion,
+          fichajeId: estado.fichaje_id,
+          proyectoId: contexto?.proyecto_id || estado.proyecto_id || null,
+          nombreUbicacion: estado.nombre_ubicacion,
           loading: false
         });
       } else {
@@ -157,6 +184,7 @@ const Tareas = ({ forcedProjectId }) => {
           estado: current.estado_tarea,
           fecha_limite: current.fecha_limite,
           fecha_completada: current.fecha_completado,
+          fecha_creacion: current.fecha_creacion,
           fecha_inicio_real: current.fecha_inicio_real, // ✅ AÑADIDO
           nombre_proyecto: current.nombre_proyecto,
           tecnico_nombre: current.tecnico_nombre,
@@ -248,6 +276,12 @@ const Tareas = ({ forcedProjectId }) => {
         setTasks(mappedTasks);
       }
     } else {
+      if (!currentEmployeeId || !fichajeActual.fichajeId || !fichajeActual.proyectoId) {
+        setTasks([]);
+        setLoading(false);
+        return;
+      }
+
       // ✅ MODIFICADO: Añadir fecha_inicio_real al select
       let query = supabase.from('v_tareas_detalle_para_ui').select(`
         tarea_id,
@@ -274,18 +308,9 @@ const Tareas = ({ forcedProjectId }) => {
         fecha_revision,
         revisor_nombre,
         fecha_creacion
-      `).order('fecha_creacion', { ascending: false });
-
-      if (filterProjectId !== 'all') {
-        query = query.eq('proyecto_id', filterProjectId);
-      }
-
-      // Si no tenemos el UUID del empleado cargado aún, evitamos lanzar query
-      if (!currentEmployeeId) {
-        setTasks([]);
-        setLoading(false);
-        return;
-      }
+      `)
+        .eq('proyecto_id', fichajeActual.proyectoId)
+        .order('fecha_creacion', { ascending: false });
 
       const { data: misAsignaciones } = await supabase.from('tarea_empleados').select('tarea_id').eq('empleado_id', currentEmployeeId);
       const misTareasIdsTemp = misAsignaciones?.map(a => a.tarea_id) || [];
@@ -307,19 +332,41 @@ const Tareas = ({ forcedProjectId }) => {
 
         const taskIds = grouped.map(t => t.id);
         if (taskIds.length > 0) {
-          const { data: allRelatedAssig } = await supabase.from('tarea_empleados').select('*').in('tarea_id', taskIds);
+          const [{ data: allRelatedAssig }, { data: dailyOrders }] = await Promise.all([
+            supabase.from('tarea_empleados').select('*').in('tarea_id', taskIds),
+            supabase
+              .from('ordenes_trabajo_diarias')
+              .select('tarea_id,orden,estado,horas_previstas,notas_encargado,iniciada_at,cerrada_at,asignada_at')
+              .eq('empleado_id', currentEmployeeId)
+              .eq('proyecto_id', fichajeActual.proyectoId)
+              .in('tarea_id', taskIds)
+              .order('asignada_at', { ascending: false }),
+          ]);
           if (allRelatedAssig) {
             const aggr = {};
             allRelatedAssig.forEach(a => { if (!aggr[a.tarea_id]) aggr[a.tarea_id] = []; aggr[a.tarea_id].push(a); });
             grouped.forEach(t => t.asignados = aggr[t.id] || []);
           }
+          const latestOrderByTask = {};
+          (dailyOrders || []).forEach((order) => {
+            if (!latestOrderByTask[order.tarea_id]) latestOrderByTask[order.tarea_id] = order;
+          });
+          grouped.forEach((task) => {
+            const order = latestOrderByTask[task.id];
+            task.orden_actuacion = order?.orden ?? null;
+            task.estado_orden = order?.estado ?? null;
+            task.horas_previstas = order?.horas_previstas ?? null;
+            task.notas_encargado = order?.notas_encargado ?? null;
+            task.iniciada_at = order?.iniciada_at ?? task.fecha_inicio_real;
+            task.cerrada_at = order?.cerrada_at ?? task.fecha_completada;
+          });
         }
 
         setTasks(grouped);
       }
     }
     setLoading(false);
-  }, [loadingAuth, sessionRole, canManage, filterProjectId, currentEmployeeId]);
+  }, [loadingAuth, sessionRole, canManage, filterProjectId, currentEmployeeId, fichajeActual.fichajeId, fichajeActual.proyectoId]);
 
   const fetchCrudData = useCallback(async () => {
     if (!canManage) return;
@@ -375,54 +422,44 @@ const Tareas = ({ forcedProjectId }) => {
     }
   };
 
-  // ✅ MODIFICADO: handleCardClick ahora verifica accesibilidad
   const handleCardClick = useCallback((task) => {
-    // ✅ NUEVO: Bloquear si está pendiente de revisión o completada (para técnicos)
-    if (!canManage && ['pendiente_revision', 'completada', 'completada_validada'].includes(task.estado)) {
-      toast({
-        title: 'Tarea bloqueada',
-        description: task.estado === 'pendiente_revision' 
-          ? 'Esta tarea está pendiente de revisión. No puedes modificarla hasta que sea revisada.'
-          : 'Esta tarea ya ha sido completada.',
-        className: 'bg-amber-600 text-white'
-      });
-      return;
-    }
-
-    // Verificar si la tarea es accesible
-    if (!canManage && !isTaskAccessible(task)) {
-      // Mostrar mensaje explicativo
+    if (!canManage) {
       if (!fichajeActual.fichajeId) {
         toast({
           variant: 'destructive',
           title: 'No estás fichado',
           description: 'Debes fichar entrada en una obra para acceder a tus tareas.',
         });
+        return;
       } else if (task.proyecto_id !== fichajeActual.proyectoId) {
         toast({
           variant: 'destructive',
           title: 'Tarea de otra obra',
           description: `Esta tarea pertenece a otra obra. Estás fichado en: ${fichajeActual.nombreUbicacion}`,
         });
-      } else if (!task.fecha_inicio_real) {
+        return;
+      }
+
+      const isAssignedToMe = currentEmployeeId
+        && (task.empleado_asignado_id === currentEmployeeId
+          || task.asignados?.some((assignment) => assignment.empleado_id === currentEmployeeId));
+      if (!isAssignedToMe) {
         toast({
           variant: 'destructive',
-          title: 'Tarea no iniciada',
-          description: 'Esta tarea aún no ha sido iniciada. Selecciónala al fichar entrada.',
+          title: 'Tarea no asignada',
+          description: 'Esta tarea no está asignada a tu usuario.',
         });
+        return;
       }
+
+      const lockedStatus = ['pendiente_revision', 'completada', 'completada_validada'].includes(task.estado);
+      const readOnly = lockedStatus || task.estado_orden !== 'activa';
+      setModalState({ isOpen: true, task, type: 'tecnico', readOnly });
       return;
     }
 
-    const isAssignedToMe = currentEmployeeId &&
-      (task.empleado_asignado_id === currentEmployeeId ||
-        (task.asignados && task.asignados.some(a => a.empleado_id === currentEmployeeId)));
-    if (!canManage || isAssignedToMe) {
-      setModalState({ isOpen: true, task, type: 'tecnico' });
-    } else if (canManage) {
-      setModalState({ isOpen: true, task, type: 'admin' });
-    }
-  }, [canManage, currentEmployeeId, fichajeActual.fichajeId, fichajeActual.nombreUbicacion, fichajeActual.proyectoId, isTaskAccessible]);
+    setModalState({ isOpen: true, task, type: 'admin', readOnly: false });
+  }, [canManage, currentEmployeeId, fichajeActual.fichajeId, fichajeActual.nombreUbicacion, fichajeActual.proyectoId]);
 
   useEffect(() => {
     if (!focusTaskId || loading || tasks.length === 0 || openedFocusTaskIdRef.current === focusTaskId) return;
@@ -434,15 +471,15 @@ const Tareas = ({ forcedProjectId }) => {
   }, [focusTaskId, handleCardClick, loading, tasks]);
 
   const handleEditClick = (task) => {
-    setModalState({ isOpen: true, task, type: 'admin' });
+    setModalState({ isOpen: true, task, type: 'admin', readOnly: false });
   };
 
   const handleCreateClick = () => {
-    setModalState({ isOpen: true, task: null, type: 'admin' });
+    setModalState({ isOpen: true, task: null, type: 'admin', readOnly: false });
   };
 
   const handleCloseModal = () => {
-    setModalState({ isOpen: false, task: null, type: null });
+    setModalState({ isOpen: false, task: null, type: null, readOnly: false });
   };
 
   const handleOpenEvidenceModal = (task, subtaskId) => {
@@ -467,6 +504,105 @@ const Tareas = ({ forcedProjectId }) => {
       default: return <Badge variant="secondary">Pendiente</Badge>;
     }
   };
+
+  const renderTechnicianSection = ({ number, title, items, tone, emptyText, showAssignee = false, markNext = true }) => {
+    const tones = {
+      completed: {
+        section: 'bg-emerald-50/35',
+        icon: 'text-emerald-700',
+        marker: 'bg-emerald-100 text-emerald-800',
+        badge: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+      },
+      active: {
+        section: 'bg-violet-50/30',
+        icon: 'text-violet-700',
+        marker: 'bg-violet-600 text-white',
+        badge: 'border-violet-200 bg-violet-50 text-violet-800',
+      },
+      pending: {
+        section: 'bg-slate-50/45',
+        icon: 'text-slate-600',
+        marker: 'bg-slate-100 text-slate-700',
+        badge: 'border-slate-200 bg-slate-50 text-slate-700',
+      },
+    };
+    const style = tones[tone];
+    const SectionIcon = tone === 'completed' ? CheckCircle2 : tone === 'active' ? PlayCircle : CircleDashed;
+
+    return (
+      <section className={cn('px-3 py-4 sm:px-4', style.section)}>
+        <div className={cn('mb-2 flex items-center gap-2', style.icon)}>
+          <SectionIcon className="h-4 w-4" />
+          <h2 className="text-xs font-bold uppercase tracking-wide">{number} · {title}</h2>
+          <span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">{items.length}</span>
+        </div>
+
+        {items.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border/60 bg-white/50 px-3 py-3 text-sm text-muted-foreground">{emptyText}</p>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-border/60 bg-white divide-y divide-border/50">
+            {items.map((task, index) => {
+              const isReviewPending = task.estado === 'pendiente_revision';
+              const statusLabel = tone === 'completed'
+                ? (isReviewPending ? 'Realizada · por revisar' : 'Realizada')
+                : tone === 'active'
+                  ? 'En curso'
+                  : markNext && index === 0 ? 'Siguiente' : 'Pendiente';
+
+              return (
+                <button
+                  type="button"
+                  key={task.id}
+                  onClick={() => handleCardClick(task)}
+                  className="group flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                >
+                  <span className={cn('flex h-7 min-w-7 shrink-0 items-center justify-center rounded-md px-1 font-mono text-[11px] font-bold tabular-nums', style.marker)}>
+                    {task.orden_actuacion ?? index + 1}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-foreground">{task.titulo || 'Tarea sin título'}</span>
+                    <span className="mt-1 block truncate text-xs text-muted-foreground">
+                      {task.nombre_proyecto}{showAssignee && task.tecnico_nombre ? ` · ${task.tecnico_nombre}` : ''}
+                    </span>
+                  </span>
+                  <span className={cn('inline-flex shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold', style.badge)}>{statusLabel}</span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    );
+  };
+
+  const renderTechnicianQueue = () => (
+    <div className="overflow-hidden rounded-xl border border-border/60 bg-card">
+      <div className="border-b border-border/60 px-4 py-3">
+        <p className="text-sm font-semibold">Mis tareas en esta obra</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">Pulsa una tarea para consultar todas sus indicaciones.</p>
+      </div>
+      <div className="divide-y divide-border/50">
+        {renderTechnicianSection({ number: 1, title: 'Realizadas', items: technicianCompletedTasks, tone: 'completed', emptyText: 'Todavía no has finalizado ninguna tarea en esta obra.' })}
+        {renderTechnicianSection({ number: 2, title: 'En curso', items: technicianActiveTasks, tone: 'active', emptyText: 'No tienes ninguna tarea en curso.' })}
+        {renderTechnicianSection({ number: 3, title: 'Pendientes', items: technicianPendingTasks, tone: 'pending', emptyText: 'No quedan tareas pendientes en esta obra.' })}
+      </div>
+    </div>
+  );
+
+  const renderManagerQueue = () => (
+    <div className="overflow-hidden rounded-xl border border-border/60 bg-card">
+      <div className="border-b border-border/60 px-4 py-3">
+        <p className="text-sm font-semibold">Tareas por orden de ejecución</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">Pulsa una tarea para consultar o editar todas sus indicaciones.</p>
+      </div>
+      <div className="divide-y divide-border/50">
+        {renderTechnicianSection({ number: 1, title: 'Realizadas', items: managerCompletedTasks, tone: 'completed', emptyText: 'Todavía no hay tareas realizadas.', showAssignee: true, markNext: false })}
+        {renderTechnicianSection({ number: 2, title: 'En curso', items: managerActiveTasks, tone: 'active', emptyText: 'No hay tareas en curso.', showAssignee: true, markNext: false })}
+        {renderTechnicianSection({ number: 3, title: 'Pendientes', items: managerPendingTasks, tone: 'pending', emptyText: 'No quedan tareas pendientes.', showAssignee: true, markNext: false })}
+      </div>
+    </div>
+  );
 
   const renderTasksContent = (taskList) => {
     if (viewMode === 'cluster') {
@@ -493,75 +629,33 @@ const Tareas = ({ forcedProjectId }) => {
       );
     }
     return (
-      <div className="bg-card rounded-xl border shadow-sm overflow-hidden">
-        <Table>
-          <TableHeader>
-            <TableRow className="bg-muted/50 hover:bg-muted/50">
-              <TableHead className="w-[40%] sm:w-auto pl-4">Tarea</TableHead>
-              <TableHead className="hidden md:table-cell">Proyecto</TableHead>
-              <TableHead className="hidden lg:table-cell">Asignado a</TableHead>
-              <TableHead className="hidden sm:table-cell">
-                Fecha {taskList === completedTasks ? 'Fin' : 'Límite'}
-              </TableHead>
-              <TableHead className="hidden md:table-cell">Progreso</TableHead>
-              <TableHead className="w-[100px]">Estado</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {taskList.map(task => {
-              const accessible = isTaskAccessible(task);
-              return (
-                <TableRow
-                  key={task.id}
-                  onClick={() => handleCardClick(task)}
-                  className={cn(
-                    "transition-colors group",
-                    accessible 
-                      ? "cursor-pointer hover:bg-muted/50" 
-                      : "cursor-not-allowed opacity-50 grayscale"
-                  )}
-                >
-                  <TableCell className="font-medium pl-4">
-                    <div className="flex flex-col gap-1">
-                      <span className={!accessible ? "text-muted-foreground" : ""}>{task.titulo}</span>
-                      <span className="text-xs text-muted-foreground line-clamp-1">{task.descripcion}</span>
-                      <div className="md:hidden text-[10px] text-muted-foreground flex flex-col gap-0.5 mt-1">
-                        <span className="font-semibold text-foreground/80">{task.nombre_proyecto}</span>
-                        {task.fecha_limite && !['completada', 'completada_validada'].includes(task.estado) && <span>Vence: {new Date(task.fecha_limite).toLocaleDateString()}</span>}
-                        {(task.estado === 'completada' || task.estado === 'completada_validada') && task.fecha_completada && (
-                          <span className="text-green-600">Fin: {new Date(task.fecha_completada).toLocaleDateString()}</span>
-                        )}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{task.nombre_proyecto}</TableCell>
-                  <TableCell className="hidden lg:table-cell text-sm">{task.tecnico_nombre}</TableCell>
-                  <TableCell className="hidden sm:table-cell text-sm">
-                    {(['completada', 'completada_validada'].includes(task.estado) && task.fecha_completada) ? (
-                      <span className="text-green-600 font-medium" title="Fecha de finalización">
-                        {new Date(task.fecha_completada).toLocaleDateString()}
-                      </span>
-                    ) : (
-                      task.fecha_limite ? new Date(task.fecha_limite).toLocaleDateString() : '-'
-                    )}
-                  </TableCell>
-                  <TableCell className="hidden md:table-cell">
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-primary transition-all duration-500"
-                          style={{ width: `${task.total_subtareas > 0 ? (task.subtareas_completadas / task.total_subtareas) * 100 : 0}%` }}
-                        />
-                      </div>
-                      <span>{task.subtareas_completadas}/{task.total_subtareas}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell>{getStatusBadge(task.estado)}</TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
+      <div className="overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm">
+        <div className="border-b border-border/60 px-4 py-3">
+          <p className="text-sm font-semibold">Listado de tareas</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">Pulsa una tarea para consultar o editar todos sus datos.</p>
+        </div>
+        <div className="divide-y divide-border/50">
+          {taskList.map((task, index) => (
+            <button
+              type="button"
+              key={task.id}
+              onClick={() => handleCardClick(task)}
+              className="group flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-4"
+            >
+              <span className="flex h-7 min-w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 px-1 font-mono text-[11px] font-bold tabular-nums text-slate-700">
+                {task.orden_actuacion ?? index + 1}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold text-foreground">{task.titulo || 'Tarea sin título'}</span>
+                <span className="mt-1 block truncate text-xs text-muted-foreground">
+                  {task.nombre_proyecto}{task.tecnico_nombre ? ` · ${task.tecnico_nombre}` : ''}
+                </span>
+              </span>
+              <span className="shrink-0">{getStatusBadge(task.estado)}</span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+            </button>
+          ))}
+        </div>
       </div>
     );
   };
@@ -592,7 +686,7 @@ const Tareas = ({ forcedProjectId }) => {
       <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
         <div className="flex items-center gap-3">
           <ClipboardList className="w-8 h-8 text-primary" />
-          <h1 className="text-3xl font-bold">Tareas</h1>
+          <h1 className="text-3xl font-bold">{canManage ? 'Tareas' : 'Mis tareas'}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
           {canManage && (
@@ -608,24 +702,26 @@ const Tareas = ({ forcedProjectId }) => {
             </Select>
           )}
 
-          <div className="flex items-center bg-muted rounded-lg p-1 border">
-            <Button
-              variant={viewMode === 'cluster' ? 'default' : 'ghost'}
-              size="icon"
-              className="h-8 w-8 rounded-md"
-              onClick={() => setViewMode('cluster')}
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={viewMode === 'list' ? 'default' : 'ghost'}
-              size="icon"
-              className="h-8 w-8 rounded-md"
-              onClick={() => setViewMode('list')}
-            >
-              <List className="h-4 w-4" />
-            </Button>
-          </div>
+          {canManage && (
+            <div className="flex items-center bg-muted rounded-lg p-1 border">
+              <Button
+                variant={viewMode === 'cluster' ? 'default' : 'ghost'}
+                size="icon"
+                className="h-8 w-8 rounded-md"
+                onClick={() => setViewMode('cluster')}
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </Button>
+              <Button
+                variant={viewMode === 'list' ? 'default' : 'ghost'}
+                size="icon"
+                className="h-8 w-8 rounded-md"
+                onClick={() => setViewMode('list')}
+              >
+                <List className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
 
           {canManage && (
             <Button onClick={handleCreateClick}>
@@ -685,48 +781,52 @@ const Tareas = ({ forcedProjectId }) => {
         </motion.div>
       )}
 
-      <AnimatePresence mode="wait">
-        {activeTasks.length > 0 ? (
-          <motion.div
-            key="active-tasks"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            {renderTasksContent(activeTasks)}
-          </motion.div>
-        ) : (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center justify-center p-12 text-center bg-card rounded-lg border border-dashed mt-8">
-            <Inbox className="w-20 h-20 text-primary/50 mb-4" />
-            <h3 className="text-xl font-semibold">¡Todo al día!</h3>
-            <p className="text-muted-foreground mt-2">
-              No hay tareas pendientes en la selección actual.
-            </p>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {!canManage ? (
+        fichajeActual.fichajeId ? renderTechnicianQueue() : null
+      ) : viewMode === 'list' ? (
+        renderManagerQueue()
+      ) : (
+        <>
+          <AnimatePresence mode="wait">
+            {activeTasks.length > 0 ? (
+              <motion.div
+                key="active-tasks"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                {renderTasksContent(activeTasks)}
+              </motion.div>
+            ) : (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center justify-center p-12 text-center bg-card rounded-lg border border-dashed mt-8">
+                <Inbox className="w-20 h-20 text-primary/50 mb-4" />
+                <h3 className="text-xl font-semibold">¡Todo al día!</h3>
+                <p className="text-muted-foreground mt-2">No hay tareas pendientes en la selección actual.</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-      {completedTasks.length > 0 && (
-        <div className="mt-8">
-          <Collapsible open={isCompletedOpen} onOpenChange={setIsCompletedOpen} className="border rounded-xl bg-card shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
-              <h3 className="font-semibold text-muted-foreground flex items-center gap-2 text-sm uppercase tracking-wide">
-                <CheckCircle2 className="w-4 h-4 text-green-600" />
-                Tareas Finalizadas ({completedTasks.length})
-              </h3>
-              <CollapsibleTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                  {isCompletedOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                </Button>
-              </CollapsibleTrigger>
+          {completedTasks.length > 0 && (
+            <div className="mt-8">
+              <Collapsible open={isCompletedOpen} onOpenChange={setIsCompletedOpen} className="border rounded-xl bg-card shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
+                  <h3 className="font-semibold text-muted-foreground flex items-center gap-2 text-sm uppercase tracking-wide">
+                    <CheckCircle2 className="w-4 h-4 text-green-600" />
+                    Tareas Finalizadas ({completedTasks.length})
+                  </h3>
+                  <CollapsibleTrigger asChild>
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                      {isCompletedOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </Button>
+                  </CollapsibleTrigger>
+                </div>
+                <CollapsibleContent>
+                  <div className="p-4 bg-slate-50/50 dark:bg-muted/10">{renderTasksContent(completedTasks)}</div>
+                </CollapsibleContent>
+              </Collapsible>
             </div>
-            <CollapsibleContent>
-              <div className="p-4 bg-slate-50/50 dark:bg-muted/10">
-                {renderTasksContent(completedTasks)}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-        </div>
+          )}
+        </>
       )}
 
       {modalState.isOpen && modalState.type === 'admin' && (
@@ -745,6 +845,7 @@ const Tareas = ({ forcedProjectId }) => {
           onClose={handleCloseModal}
           onSave={fetchData}
           task={modalState.task}
+          readOnly={modalState.readOnly}
           onAllSubtasksComplete={handleOpenEvidenceModal}
         />
       )}

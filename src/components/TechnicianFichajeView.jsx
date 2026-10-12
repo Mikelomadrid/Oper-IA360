@@ -221,11 +221,12 @@ const TechnicianFichajeView = ({ navigate }) => {
           .select(`
             id, proyecto_id, tarea_id, empleado_id, fichaje_id, fecha_asignacion,
             orden, estado, horas_previstas, notas_encargado, asignada_at,
+            iniciada_at, cerrada_at,
             tarea:tareas(id,titulo,descripcion,orden)
           `)
           .eq('empleado_id', sessionRole.empleadoId)
           .eq('proyecto_id', projectId)
-          .in('estado', ['asignada', 'activa', 'pendiente_continuar'])
+          .in('estado', ['asignada', 'activa', 'pendiente_continuar', 'completada'])
           .order('orden', { ascending: true })
           .order('asignada_at', { ascending: true }),
         supabase
@@ -316,6 +317,62 @@ const TechnicianFichajeView = ({ navigate }) => {
     }
   };
 
+  const completeWorkOrderAndContinue = async (order, files) => {
+    if (!files?.length) {
+      toast({
+        variant: 'destructive',
+        title: 'Falta una fotografía',
+        description: 'Debes adjuntar al menos una imagen para finalizar la tarea.',
+      });
+      return;
+    }
+
+    setEvidenceUploading(true);
+    try {
+      const uploadedPaths = await uploadWorkOrderEvidence(order, files, 'finalizacion');
+      const { error: closeError } = await supabase.rpc('cerrar_orden_trabajo_con_evidencias', {
+        p_orden_id: order.id,
+        p_resultado: 'completada',
+        p_notas: null,
+        p_archivos: uploadedPaths,
+      });
+      if (closeError) throw closeError;
+
+      const nextOrder = workOrders
+        .filter((candidate) => candidate.id !== order.id && ['asignada', 'pendiente_continuar'].includes(candidate.estado))
+        .sort((a, b) => Number(a.orden || 0) - Number(b.orden || 0)
+          || new Date(a.asignada_at || 0) - new Date(b.asignada_at || 0))[0];
+
+      let nextOrderStarted = false;
+      if (nextOrder) {
+        const { error: startError } = await supabase.rpc('iniciar_orden_trabajo', {
+          p_orden_id: nextOrder.id,
+        });
+        if (!startError) nextOrderStarted = true;
+      }
+
+      setEvidenceCapture({ open: false, mode: null, order: null });
+      toast({
+        title: nextOrderStarted ? 'Tarea terminada. Siguiente tarea iniciada' : 'Tarea terminada',
+        description: nextOrderStarted
+          ? `Ahora continúa con: ${nextOrder.tarea?.titulo || 'la siguiente tarea asignada'}.`
+          : nextOrder
+            ? 'La siguiente tarea está disponible en la bandeja para iniciarla.'
+            : 'No quedan más tareas pendientes en esta obra.',
+        className: 'bg-green-600 text-white',
+      });
+      await fetchWorkOrders(order.proyecto_id);
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'No se pudo finalizar la tarea',
+        description: err.message,
+      });
+    } finally {
+      setEvidenceUploading(false);
+    }
+  };
+
   const handleEvidenceSelected = async (files) => {
     const { mode, order } = evidenceCapture;
     if (!files?.length || !order) return;
@@ -328,6 +385,10 @@ const TechnicianFichajeView = ({ navigate }) => {
       setEvidenceCapture({ open: false, mode: null, order: null });
       setExitReviewOpen(true);
       return;
+    }
+
+    if (mode === 'finalizar_tarea') {
+      await completeWorkOrderAndContinue(order, files);
     }
   };
 
@@ -609,6 +670,17 @@ const TechnicianFichajeView = ({ navigate }) => {
     }
   };
 
+  const completedWorkOrders = workOrders
+    .filter((order) => order.estado === 'completada')
+    .sort((a, b) => new Date(b.cerrada_at || 0) - new Date(a.cerrada_at || 0));
+  const activeWorkOrders = workOrders
+    .filter((order) => order.estado === 'activa')
+    .sort((a, b) => Number(a.orden || 0) - Number(b.orden || 0));
+  const pendingWorkOrders = workOrders
+    .filter((order) => ['asignada', 'pendiente_continuar'].includes(order.estado))
+    .sort((a, b) => Number(a.orden || 0) - Number(b.orden || 0)
+      || new Date(a.asignada_at || 0) - new Date(b.asignada_at || 0));
+
   return (
     <div className="p-4 max-w-4xl mx-auto space-y-6">
       <div className="flex items-center gap-3 mb-2">
@@ -711,13 +783,13 @@ const TechnicianFichajeView = ({ navigate }) => {
                     </div>
                   )}
 
-                  <div className="rounded-xl border border-border/60 bg-card overflow-hidden">
+                  <div className="overflow-hidden rounded-xl border border-border/60 bg-card">
                     <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/20 px-4 py-3">
                       <div className="flex items-center gap-2">
                         <ListChecks className="h-4 w-4 text-primary" />
-                        <p className="text-sm font-semibold">Trabajo asignado</p>
+                        <p className="text-sm font-semibold">Mis tareas en esta obra</p>
                       </div>
-                      {workOrders.length > 0 && <span className="font-mono text-xs text-muted-foreground">{workOrders.length} {workOrders.length === 1 ? 'orden' : 'órdenes'}</span>}
+                      {workOrders.length > 0 && <span className="font-mono text-xs text-muted-foreground">{workOrders.length} {workOrders.length === 1 ? 'tarea' : 'tareas'}</span>}
                     </div>
 
                     {ordersLoading && workOrders.length === 0 ? (
@@ -732,40 +804,99 @@ const TechnicianFichajeView = ({ navigate }) => {
                       </div>
                     ) : (
                       <div className="divide-y divide-border/50">
-                        {[...workOrders]
-                          .sort((a, b) => {
-                            const priority = { pendiente_continuar: 0, activa: 1, asignada: 2 };
-                            return (priority[a.estado] ?? 3) - (priority[b.estado] ?? 3)
-                              || Number(a.orden || 0) - Number(b.orden || 0);
-                          })
-                          .map((order, index) => (
-                            <div key={order.id} className="flex items-start gap-3 px-4 py-4">
-                              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-bold ${order.estado === 'pendiente_continuar' ? 'bg-amber-100 text-amber-800' : index === 0 ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'}`}>{index + 1}</span>
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-sm font-semibold leading-snug">{order.tarea?.titulo || 'Orden de trabajo'}</p>
-                                  {order.estado === 'pendiente_continuar' && <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800">Continuar</span>}
-                                  {order.estado === 'activa' && <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">En curso</span>}
-                                  {order.estado === 'asignada' && <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">Siguiente</span>}
+                        {completedWorkOrders.length > 0 && (
+                          <section className="bg-emerald-50/35 px-4 py-4">
+                            <div className="mb-3 flex items-center gap-2 text-emerald-800">
+                              <CheckCircle2 className="h-4 w-4" />
+                              <h3 className="text-xs font-bold uppercase tracking-wide">1 · Realizadas</h3>
+                            </div>
+                            <div className="space-y-2">
+                              {completedWorkOrders.map((order) => (
+                                <div key={order.id} className="flex items-start gap-3 rounded-lg border border-emerald-200/80 bg-white/80 px-3 py-3">
+                                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-semibold leading-snug text-slate-800">{order.tarea?.titulo || 'Tarea realizada'}</p>
+                                    <p className="mt-1 text-xs font-medium text-emerald-700">
+                                      Realizada{order.cerrada_at ? ` · ${fmtMadrid(order.cerrada_at, 'time')}` : ''}
+                                    </p>
+                                  </div>
                                 </div>
-                                {order.notas_encargado && <p className="mt-1 text-xs text-muted-foreground">{order.notas_encargado}</p>}
-                                {order.horas_previstas != null && <p className="mt-2 font-mono text-xs font-semibold tabular-nums text-violet-700">{Number(order.horas_previstas).toLocaleString('es-ES', { maximumFractionDigits: 2 })} h previstas</p>}
-                                {index === 0 && ['asignada', 'pendiente_continuar'].includes(order.estado) && (
+                              ))}
+                            </div>
+                          </section>
+                        )}
+
+                        <section className="px-4 py-4">
+                          <div className="mb-3 flex items-center gap-2 text-violet-800">
+                            <PlayCircle className="h-4 w-4" />
+                            <h3 className="text-xs font-bold uppercase tracking-wide">2 · En curso</h3>
+                          </div>
+                          {activeWorkOrders.length > 0 ? (
+                            <div className="space-y-3">
+                              {activeWorkOrders.map((order) => (
+                                <div key={order.id} className="rounded-xl border border-violet-200 bg-violet-50/55 p-4">
+                                  <div className="flex items-start gap-3">
+                                    <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-600 text-sm font-bold text-white">{Number(order.orden || 0)}</span>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-sm font-bold leading-snug text-violet-950">{order.tarea?.titulo || 'Tarea en curso'}</p>
+                                      {order.notas_encargado && <p className="mt-1 text-xs text-violet-800">{order.notas_encargado}</p>}
+                                      {order.horas_previstas != null && <p className="mt-2 font-mono text-xs font-semibold tabular-nums text-violet-700">{Number(order.horas_previstas).toLocaleString('es-ES', { maximumFractionDigits: 2 })} h previstas</p>}
+                                    </div>
+                                  </div>
                                   <Button
                                     type="button"
-                                    size="sm"
-                                    className="mt-3 h-10 w-full justify-center bg-emerald-600 hover:bg-emerald-700 sm:w-auto"
-                                    onClick={() => startWorkOrder(order)}
+                                    className="mt-4 h-12 w-full bg-emerald-600 text-base font-semibold hover:bg-emerald-700"
+                                    onClick={() => setEvidenceCapture({ open: true, mode: 'finalizar_tarea', order })}
                                     disabled={evidenceUploading || actionLoading}
                                   >
-                                    {actionLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlayCircle className="mr-2 h-4 w-4" />}
-                                    {order.estado === 'pendiente_continuar' ? 'Continuar tarea' : 'Empezar tarea'}
+                                    {evidenceUploading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Camera className="mr-2 h-5 w-5" />}
+                                    Finalizar tarea y añadir fotos
                                   </Button>
-                                )}
-                              </div>
-                              {index === 0 && order.estado !== 'pendiente_continuar' && <ClipboardCheck className="h-5 w-5 shrink-0 text-emerald-600" />}
+                                </div>
+                              ))}
                             </div>
-                          ))}
+                          ) : (
+                            <p className="rounded-lg border border-dashed border-violet-200 bg-violet-50/30 px-3 py-3 text-sm text-violet-800">No hay ninguna tarea en curso.</p>
+                          )}
+                        </section>
+
+                        <section className="bg-slate-50/45 px-4 py-4">
+                          <div className="mb-3 flex items-center gap-2 text-slate-700">
+                            <CircleDashed className="h-4 w-4" />
+                            <h3 className="text-xs font-bold uppercase tracking-wide">3 · Pendientes</h3>
+                          </div>
+                          {pendingWorkOrders.length > 0 ? (
+                            <div className="space-y-2">
+                              {pendingWorkOrders.map((order, index) => (
+                                <div key={order.id} className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-3 py-3">
+                                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 font-mono text-xs font-bold text-slate-700">{Number(order.orden || index + 1)}</span>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="text-sm font-semibold leading-snug">{order.tarea?.titulo || 'Tarea pendiente'}</p>
+                                      {index === 0 && <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-800">Siguiente</span>}
+                                    </div>
+                                    {order.notas_encargado && <p className="mt-1 text-xs text-muted-foreground">{order.notas_encargado}</p>}
+                                    {order.horas_previstas != null && <p className="mt-2 font-mono text-xs font-semibold tabular-nums text-violet-700">{Number(order.horas_previstas).toLocaleString('es-ES', { maximumFractionDigits: 2 })} h previstas</p>}
+                                    {index === 0 && activeWorkOrders.length === 0 && (
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        className="mt-3 h-10 w-full justify-center bg-violet-600 hover:bg-violet-700 sm:w-auto"
+                                        onClick={() => startWorkOrder(order)}
+                                        disabled={evidenceUploading || actionLoading}
+                                      >
+                                        {actionLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlayCircle className="mr-2 h-4 w-4" />}
+                                        {order.estado === 'pendiente_continuar' ? 'Continuar tarea' : 'Empezar tarea'}
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">No quedan tareas pendientes en esta obra.</p>
+                          )}
+                        </section>
                       </div>
                     )}
                   </div>
@@ -1151,7 +1282,7 @@ const TechnicianFichajeView = ({ navigate }) => {
           if (!evidenceUploading) setEvidenceCapture({ open: false, mode: null, order: null });
         }}
         onPhotosSelected={handleEvidenceSelected}
-        title="Fotos al cerrar la jornada"
+        title={evidenceCapture.mode === 'finalizar_tarea' ? 'Fotos para finalizar la tarea' : 'Fotos al cerrar la jornada'}
         allowMultiple
       />
 

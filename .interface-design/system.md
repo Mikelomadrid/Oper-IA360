@@ -78,3 +78,17 @@ Nunca utilizar la eliminación como única forma de resolver una decisión. Most
 - Los valores se presentan con cifras tabulares; la descripción conserva la mayor anchura disponible.
 - El registro de producción parte siempre de una partida de la obra, nunca de la biblioteca completa.
 - Las partidas sin vínculo técnico permanecen visibles, pero explican por qué todavía no permiten registrar producción.
+
+### Bandeja de trabajo del técnico
+
+- Solo existe mientras hay un fichaje abierto en una obra y muestra exclusivamente las tareas del empleado autenticado en esa obra.
+- Orden visual fijo: realizadas, en curso y pendientes; las pendientes conservan el orden de actuación definido por el encargado.
+- El listado usa filas compactas de una sola línea con orden, título recortado, obra y estado. La descripción completa, las indicaciones y las subtareas solo aparecen al pulsar la tarea.
+- La tarea en curso concentra la acción principal. Finalizar exige al menos una fotografía y activa automáticamente la siguiente tarea disponible.
+- Las tareas realizadas permanecen visibles en verde como confirmación; el técnico nunca accede al cronograma completo ni al trabajo de otros empleados.
+- Las fotografías se presentan dentro de la carpeta diaria del empleado y muestran únicamente fecha y hora de subida como metadatos visibles.
+
+### Bandeja de tareas del encargado
+
+- Reutiliza el mismo listado compacto y el mismo orden visual que la bandeja del técnico: realizadas, en curso y pendientes.
+- Añade el nombre del empleado asignado y conserva el acceso a edición; la cuadrícula de tarjetas queda como vista alternativa, no como vista inicial.

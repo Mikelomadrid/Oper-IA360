@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Loader2, CheckCircle2, Clock, Lock } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 
-const TecnicoTaskModal = ({ isOpen, onClose, onSave, task, onAllSubtasksComplete }) => {
+const TecnicoTaskModal = ({ isOpen, onClose, onSave, task, readOnly = false, onAllSubtasksComplete }) => {
     const [subtasks, setSubtasks] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isFetchingDetails, setIsFetchingDetails] = useState(false);
@@ -16,6 +16,7 @@ const TecnicoTaskModal = ({ isOpen, onClose, onSave, task, onAllSubtasksComplete
     const isLocked = task?.estado === 'pendiente_revision' || 
                      task?.estado === 'completada' || 
                      task?.estado === 'completada_validada';
+    const effectiveReadOnly = readOnly || isLocked;
 
     const fetchSubtasks = useCallback(async () => {
         if (!task) return;
@@ -101,8 +102,10 @@ const TecnicoTaskModal = ({ isOpen, onClose, onSave, task, onAllSubtasksComplete
         <Dialog open={isOpen} onOpenChange={onClose}>
             <DialogContent className="sm:max-w-[500px]">
                 <DialogHeader>
-                    <DialogTitle>Completar Tarea</DialogTitle>
-                    <DialogDescription>Marca las subtareas que has finalizado.</DialogDescription>
+                    <DialogTitle>Detalle de la tarea</DialogTitle>
+                    <DialogDescription>
+                        {effectiveReadOnly ? 'Consulta todas las indicaciones del trabajo.' : 'Consulta las indicaciones y actualiza el avance.'}
+                    </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto pr-4">
                     {isFetchingDetails ? (
@@ -111,12 +114,36 @@ const TecnicoTaskModal = ({ isOpen, onClose, onSave, task, onAllSubtasksComplete
                         <>
                             <div className="space-y-1">
                                 <Label className="text-muted-foreground">Tarea</Label>
-                                <p className="font-semibold">{task?.titulo}</p>
+                                <p className="font-semibold leading-snug">{task?.titulo}</p>
                             </div>
-                            <div className="space-y-1">
-                                <Label className="text-muted-foreground">Proyecto</Label>
-                                <p className="font-semibold">{task?.nombre_proyecto}</p>
+                            <div className="grid grid-cols-2 gap-3 rounded-lg border border-border/60 bg-muted/20 p-3">
+                                <div>
+                                    <Label className="text-muted-foreground">Obra</Label>
+                                    <p className="mt-1 text-sm font-semibold">{task?.nombre_proyecto}</p>
+                                </div>
+                                <div>
+                                    <Label className="text-muted-foreground">Orden de actuación</Label>
+                                    <p className="mt-1 font-mono text-sm font-semibold tabular-nums">{task?.orden_actuacion ?? '—'}</p>
+                                </div>
                             </div>
+                            {task?.descripcion && (
+                                <div className="space-y-1.5">
+                                    <Label className="text-muted-foreground">Descripción completa</Label>
+                                    <p className="whitespace-pre-wrap rounded-lg border border-border/60 bg-background p-3 text-sm leading-relaxed">{task.descripcion}</p>
+                                </div>
+                            )}
+                            {task?.notas_encargado && (
+                                <div className="space-y-1.5">
+                                    <Label className="text-muted-foreground">Indicaciones del encargado</Label>
+                                    <p className="whitespace-pre-wrap rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-relaxed text-amber-950">{task.notas_encargado}</p>
+                                </div>
+                            )}
+                            {task?.horas_previstas != null && (
+                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                    <Clock className="h-4 w-4" />
+                                    <span><strong className="font-mono tabular-nums text-foreground">{Number(task.horas_previstas).toLocaleString('es-ES', { maximumFractionDigits: 2 })} h</strong> previstas</span>
+                                </div>
+                            )}
                             <div className="space-y-4 pt-4">
                                 <Label className="font-semibold">Subtareas</Label>
                                 {subtasks.length > 0 ? subtasks.map((st) => (
@@ -124,6 +151,7 @@ const TecnicoTaskModal = ({ isOpen, onClose, onSave, task, onAllSubtasksComplete
                                         <Checkbox
                                             id={`subtask-${st.id}`}
                                             checked={st.completada}
+                                            disabled={effectiveReadOnly}
                                             onCheckedChange={() => handleSubtaskToggle(st.id)}
                                         />
                                         <label
@@ -139,10 +167,12 @@ const TecnicoTaskModal = ({ isOpen, onClose, onSave, task, onAllSubtasksComplete
                     )}
                 </div>
                 <DialogFooter>
-                    <Button variant="outline" onClick={onClose}>Cancelar</Button>
-                    <Button onClick={handleSubmit} disabled={isLoading || isFetchingDetails}>
-                        {isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Guardando...</> : 'Guardar Progreso'}
-                    </Button>
+                    <Button variant="outline" onClick={onClose}>Cerrar</Button>
+                    {!effectiveReadOnly && (
+                        <Button onClick={handleSubmit} disabled={isLoading || isFetchingDetails}>
+                            {isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Guardando...</> : 'Guardar progreso'}
+                        </Button>
+                    )}
                 </DialogFooter>
             </DialogContent>
         </Dialog>

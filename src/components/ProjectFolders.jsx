@@ -26,7 +26,7 @@ import { X, Maximize2 } from 'lucide-react';
 import { generateThumbnail } from '@/utils/generateThumbnail';
 
 // --- Galería con navegación entre fotos ---
-const GaleriaNavegable = ({ previewOpen, fotos, onClose, onDownload, onDownloadBulk, formatCreatorName }) => {
+const GaleriaNavegable = ({ previewOpen, fotos, onClose, onDownload, onDownloadBulk }) => {
     const [idx, setIdx] = useState(0);
     const [zoomed, setZoomed] = useState(false);
     const [seleccionadas, setSeleccionadas] = useState(new Set());
@@ -55,12 +55,11 @@ const GaleriaNavegable = ({ previewOpen, fotos, onClose, onDownload, onDownloadB
     if (!foto) return null;
 
     const formatStamp = (f) => {
-        const nombre = formatCreatorName(f.creator) || 'Desconocido';
-        if (!f.created_at) return nombre;
+        if (!f.created_at) return 'Fecha y hora no disponibles';
         const d = new Date(f.created_at);
-        const hora = d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-        const fecha = d.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
-        return `${hora} · ${fecha} · ${nombre}`;
+        const hora = d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid' });
+        const fecha = d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Madrid' });
+        return `${fecha} · ${hora}`;
     };
 
     const toggleSeleccion = (fotoId) => {
@@ -134,7 +133,7 @@ const GaleriaNavegable = ({ previewOpen, fotos, onClose, onDownload, onDownloadB
                                 </div>
                                 {/* Stamp */}
                                 <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-2 py-1">
-                                    <p className="text-white text-[10px] truncate">{formatCreatorName(f.creator)}</p>
+                                    <p className="text-white text-[10px] tabular-nums">{formatStamp(f)}</p>
                                 </div>
                             </div>
                         ))}
@@ -189,8 +188,7 @@ const GaleriaNavegable = ({ previewOpen, fotos, onClose, onDownload, onDownloadB
             {!modoSeleccion && (
                 <div className="shrink-0 bg-black/60 backdrop-blur-md px-6 py-3 flex justify-between items-center text-white">
                     <div>
-                        <p className="font-bold text-sm">{foto.nombre}</p>
-                        <p className="text-xs opacity-60">{formatStamp(foto)}</p>
+                        <p className="font-mono text-sm font-semibold tabular-nums">{formatStamp(foto)}</p>
                     </div>
                     <div className="flex items-center gap-3">
                         <span className="text-xs opacity-40">{idx + 1} / {fotos.length}</span>
