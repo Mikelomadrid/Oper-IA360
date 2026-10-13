@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Bluetooth,
   Briefcase,
   Calculator,
   CheckCircle2,
@@ -36,6 +37,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import MedicionVisitMode from './MedicionVisitMode';
 import { mapPlaudPayloadToBudget, parsePlaudStructuredMarkdown, rankSystemCandidates } from '@/lib/plaudStructuredImport';
 import {
   AlertDialog,
@@ -442,6 +444,14 @@ const calculateMeasurement = (measurement) => {
       formula: `${formatMeasure(largo)} × ${formatMeasure(alto)} = ${formatMeasure(result)} m²`,
     };
   }
+  if (measurement.elemento === 'rodapie' && largo && ancho) {
+    const result = 2 * (largo + ancho);
+    return {
+      resultado: Number(result.toFixed(4)),
+      unidad: 'ml',
+      formula: `2 × (${formatMeasure(largo)} + ${formatMeasure(ancho)}) = ${formatMeasure(result)} ml`,
+    };
+  }
   return {};
 };
 
@@ -461,10 +471,42 @@ const normalizeMeasurement = (measurement, index) => {
     fuente: measurement.fuente || 'manual',
     estado_revision: measurement.estado_revision || 'pendiente',
     observaciones: measurement.observaciones || '',
+    captura_medicion_id: measurement.captura_medicion_id || null,
   };
   // La IA identifica la medida; el ERP realiza la aritmetica para evitar
   // resultados incoherentes aunque la formula textual sea correcta.
   return { ...normalized, ...calculateMeasurement(normalized) };
+};
+
+const mergeCapturedRoomMeasurements = (currentMeasurements, rooms) => {
+  if (!rooms.length) return currentMeasurements;
+  const capturedRoomIds = new Set(rooms.map((room) => room.savedId).filter(Boolean));
+  const previousCaptured = new Map(currentMeasurements
+    .filter((measurement) => measurement.captura_medicion_id)
+    .map((measurement) => [`${measurement.captura_medicion_id}:${measurement.elemento}`, measurement]));
+  const retainedMeasurements = currentMeasurements.filter((measurement) => (
+    !capturedRoomIds.has(measurement.captura_medicion_id)
+  ));
+  const capturedMeasurements = rooms.flatMap((room) => {
+    const { length, width, height } = room.metrics;
+    return ['suelo', 'techo', 'paredes', 'rodapie'].map((elemento) => {
+      const previous = previousCaptured.get(`${room.savedId}:${elemento}`);
+      return normalizeMeasurement({
+        ...previous,
+        id: previous?.id || newMeasurementId(),
+        captura_medicion_id: room.savedId,
+        estancia: room.name,
+        elemento,
+        largo: length,
+        ancho: width,
+        alto: height,
+        fuente: 'captura_visita',
+        texto_origen: 'Capturada durante la visita con el catálogo de estancias.',
+        estado_revision: previous?.estado_revision || 'pendiente',
+      }, 0);
+    });
+  });
+  return [...retainedMeasurements, ...capturedMeasurements];
 };
 
 const toDataUrl = (file) => new Promise((resolve, reject) => {
@@ -503,12 +545,13 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
   const [conversionEmission, setConversionEmission] = useState(null);
   const [conversionStartDate, setConversionStartDate] = useState('');
   const [converting, setConverting] = useState(false);
+  const [isVisitMeasurementOpen, setIsVisitMeasurementOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
       setLoadingDraft(true);
-      const [systemsResponse, draftResponse, emissionsResponse] = await Promise.all([
+      const [systemsResponse, draftResponse, emissionsResponse, capturedResponse] = await Promise.all([
         supabase
           .from('sistemas_rendimiento')
           .select('id,codigo,nombre,capitulo,categoria_detalle,unidad_base')
@@ -527,14 +570,37 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
           .select('id,visita_id,numero,version,estado,base_imponible,iva,total,emitido_at,enviado_at,respondido_at,respuesta_notas,proyecto_id')
           .eq('lead_id', leadId)
           .order('emitido_at', { ascending: false }),
+        supabase
+          .from('mediciones')
+          .select('id,nombre,medicion_lineas(ancho,largo,altura,orden)')
+          .eq('origen_tipo', 'lead')
+          .eq('origen_id', leadId)
+          .order('created_at', { ascending: true }),
       ]);
       if (!active) return;
       const loadedSystems = systemsResponse.error ? [] : (systemsResponse.data || []);
       const loadedSystemMap = new Map(loadedSystems.map((system) => [system.id, system]));
       if (!systemsResponse.error) setSystems(loadedSystems);
       if (!emissionsResponse.error) setEmissions(emissionsResponse.data || []);
+      const capturedRooms = (capturedResponse.error ? [] : (capturedResponse.data || []))
+        .map((measurement) => {
+          const line = [...(measurement.medicion_lineas || [])]
+            .sort((a, b) => Number(a.orden || 0) - Number(b.orden || 0))[0];
+          if (!line) return null;
+          return {
+            savedId: measurement.id,
+            name: measurement.nombre,
+            metrics: {
+              length: Number(line.largo),
+              width: Number(line.ancho),
+              height: line.altura === null ? null : Number(line.altura),
+            },
+          };
+        })
+        .filter(Boolean);
       if (draftResponse.data) {
         const draft = draftResponse.data;
+        const draftMeasurements = (draft.mediciones || []).map(normalizeMeasurement);
         setDraftId(draft.id);
         setNotes(draft.notas_originales || '');
         setCommercialSettings(normalizeCommercialSettings(draft.ajustes_comerciales));
@@ -545,7 +611,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
           necesidades_cliente: draft.necesidades_cliente || [],
           datos_pendientes: normalizePendingDecisions(draft.datos_pendientes),
           observaciones: draft.observaciones || [],
-          mediciones: (draft.mediciones || []).map(normalizeMeasurement),
+          mediciones: mergeCapturedRoomMeasurements(draftMeasurements, capturedRooms),
           revision_alcance: draft.revision_alcance || [],
           partidas: ensureExecutionPlan((draft.partidas || [])
             .sort((a, b) => a.orden - b.orden)
@@ -569,6 +635,11 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
                 desglose_precio: normalizePriceBreakdown(line.desglose_precio),
               };
             }), loadedSystems),
+        });
+      } else if (capturedRooms.length) {
+        setResult({
+          ...emptyResult(),
+          mediciones: mergeCapturedRoomMeasurements([], capturedRooms),
         });
       }
       setLoadingDraft(false);
@@ -983,6 +1054,19 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
         texto_origen: 'Añadida manualmente',
       }, current.mediciones.length)],
     }));
+  };
+
+  const addCapturedVisitMeasurements = ({ rooms = [] }) => {
+    if (!rooms.length) return;
+    setResult((current) => ({
+      ...current,
+      mediciones: mergeCapturedRoomMeasurements(current.mediciones, rooms),
+    }));
+    setIsVisitMeasurementOpen(false);
+    toast({
+      title: 'Estancias incorporadas al lead',
+      description: `${rooms.length} ${rooms.length === 1 ? 'estancia preparada' : 'estancias preparadas'} para utilizar en el presupuesto.`,
+    });
   };
 
   const removeMeasurement = (index) => {
@@ -1501,12 +1585,15 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <CardTitle className="flex items-center gap-2 text-base"><Ruler className="h-4 w-4 text-primary" />Cuaderno de mediciones</CardTitle>
-              <CardDescription className="mt-1">La IA extrae las medidas de la conversación. También puedes introducirlas o corregirlas a mano.</CardDescription>
+              <CardDescription className="mt-1">Durante la visita selecciona las estancias del catálogo y captura sus medidas sin escribir nombres.</CardDescription>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {!!result.mediciones.length && <Badge variant="outline" className="bg-white font-mono">{result.mediciones.length} medidas</Badge>}
+              <Button type="button" size="sm" onClick={() => setIsVisitMeasurementOpen(true)} disabled={!canEdit}>
+                <Bluetooth className="mr-2 h-4 w-4" />Medir estancias
+              </Button>
               <Button type="button" variant="outline" size="sm" onClick={addMeasurement} disabled={!canEdit}>
-                <PenLine className="mr-2 h-4 w-4" />Añadir medición
+                <PenLine className="mr-2 h-4 w-4" />Dato suelto
               </Button>
             </div>
           </div>
@@ -1516,7 +1603,10 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
             <div className="rounded-lg border border-dashed border-border/70 bg-stone-50/40 px-5 py-7 text-center">
               <Ruler className="mx-auto h-7 w-7 text-muted-foreground/60" />
               <p className="mt-2 text-sm font-medium text-foreground">Todavía no hay medidas registradas</p>
-              <p className="mt-1 text-sm text-muted-foreground">Analiza una transcripción que contenga medidas o añádelas manualmente.</p>
+              <p className="mt-1 text-sm text-muted-foreground">Pulsa «Medir estancias» y elige Cocina, Salón, Dormitorio u otro espacio del catálogo.</p>
+              <Button type="button" className="mt-4" onClick={() => setIsVisitMeasurementOpen(true)} disabled={!canEdit}>
+                <Bluetooth className="mr-2 h-4 w-4" />Comenzar medición de la visita
+              </Button>
             </div>
           )}
           {result.mediciones.map((measurement, index) => (
@@ -1525,7 +1615,13 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-xs font-semibold text-muted-foreground">M-{String(index + 1).padStart(2, '0')}</span>
                   <Badge variant="outline" className={measurement.fuente === 'manual' ? 'border-slate-200 bg-white text-slate-700' : 'border-violet-200 bg-violet-50 text-violet-800'}>
-                    {measurement.fuente === 'transcripcion' ? 'Extraída de la transcripción' : measurement.fuente === 'corregida' ? 'Corregida manualmente' : 'Introducida manualmente'}
+                    {measurement.fuente === 'transcripcion'
+                      ? 'Extraída de la transcripción'
+                      : measurement.fuente === 'corregida'
+                        ? 'Corregida manualmente'
+                        : measurement.fuente === 'captura_visita'
+                          ? 'Capturada en la visita'
+                          : 'Introducida manualmente'}
                   </Badge>
                   {(() => {
                     const linkedCount = result.partidas.filter((line) => line.medicion_id === measurement.id).length;
@@ -1547,7 +1643,12 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
               </div>
               <div className="space-y-4 p-4">
                 <div className="grid gap-4 md:grid-cols-[minmax(180px,.8fr)_minmax(220px,1fr)_minmax(220px,1.2fr)]">
-                  <div className="space-y-2"><Label>Estancia o zona</Label><Input value={measurement.estancia} onChange={(event) => updateMeasurement(index, { estancia: event.target.value })} placeholder="Ej.: Cocina" disabled={!canEdit} /></div>
+                  <div className="space-y-2">
+                    <Label>Estancia o zona</Label>
+                    {measurement.fuente === 'captura_visita'
+                      ? <div className="flex h-10 items-center rounded-md border border-violet-200 bg-violet-50/60 px-3 text-sm font-medium text-violet-950">{measurement.estancia}</div>
+                      : <Input value={measurement.estancia} onChange={(event) => updateMeasurement(index, { estancia: event.target.value })} placeholder="Ej.: Cocina" disabled={!canEdit} />}
+                  </div>
                   <div className="space-y-2"><Label>Elemento medido</Label><Combobox options={measurementOptions} value={measurement.elemento} onSelect={(value) => updateMeasurement(index, { elemento: value }, true)} placeholder="Seleccionar elemento…" searchPlaceholder="Buscar elemento…" emptyText="No se encontró el elemento." /></div>
                   <div className="space-y-2"><Label>Acabado o aplicación</Label><Input value={measurement.acabado} onChange={(event) => updateMeasurement(index, { acabado: event.target.value })} placeholder="Ej.: Alicatado porcelánico" disabled={!canEdit} /></div>
                 </div>
@@ -2171,6 +2272,16 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
           <Button onClick={saveDraft} disabled={!canEdit || saving || (!notes.trim() && !sourceFile && !result.mediciones.length)}>{saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Guardar borrador</Button>
         </div>
       )}
+
+      <MedicionVisitMode
+        key={`lead-measurements-${leadId}`}
+        open={isVisitMeasurementOpen}
+        onOpenChange={setIsVisitMeasurementOpen}
+        onSaved={addCapturedVisitMeasurements}
+        originType="lead"
+        originId={leadId}
+        contextLabel={`Lead · ${lead?.nombre_empresa || lead?.nombre_contacto || 'Visita a cliente'}`}
+      />
 
       <AlertDialog open={emitDialogOpen} onOpenChange={setEmitDialogOpen}>
         <AlertDialogContent>

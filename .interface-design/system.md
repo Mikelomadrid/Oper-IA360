@@ -111,3 +111,14 @@ Nunca utilizar la eliminación como única forma de resolver una decisión. Most
 - Las combinaciones de trabajadores se consideran equipos distintos y se muestran solo por sus nombres, sin etiquetas de cargo.
 - Violeta identifica el dato individual, verde una diferencia positiva y ámbar una diferencia negativa o una muestra todavía insuficiente.
 - Esta información solo se muestra a encargado y administración; el estado vacío explica cómo se generarán los primeros datos reales.
+
+### Modo visita de mediciones
+
+- El flujo se diseña primero para móvil y evita formularios largos: seleccionar estancia, capturar Medida A y Medida B y continuar.
+- La altura general se indica una sola vez y se hereda en todas las estancias, con posibilidad de sustituirla puntualmente.
+- Medida A y Medida B se normalizan automáticamente: la mayor se guarda como largo y la menor como ancho.
+- El catálogo muestra primero los espacios habituales del tipo de inmueble y mantiene “Otro espacio” siempre disponible para nombres no previstos.
+- Las estancias repetidas se numeran automáticamente. Se permite duplicar solo la estructura o también sus mediciones.
+- Cada valor conserva en el borrador su procedencia manual o GLM; el violeta identifica la captura activa y el verde una estancia completa.
+- El resumen calcula suelo/techo, paredes y rodapié sin descontar puertas ni ventanas, según el criterio operativo de ORKALED.
+- El borrador se conserva en el dispositivo para proteger la visita ante cierres o pérdidas de conexión.

@@ -1,21 +1,26 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '@/lib/customSupabaseClient';
-import { Loader2, AlertTriangle, Ruler, Maximize2, Columns, Layers, Plus } from 'lucide-react';
+import { Loader2, AlertTriangle, Ruler, Maximize2, Columns, Layers, Plus, Bluetooth, ClipboardList } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import MedicionCreateModal from './MedicionCreateModal';
+import BluetoothLaserTester from './BluetoothLaserTester';
+import MedicionVisitMode from './MedicionVisitMode';
 
 export default function MedicionesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [mediciones, setMediciones] = useState([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isLaserTesterOpen, setIsLaserTesterOpen] = useState(false);
+  const [isVisitModeOpen, setIsVisitModeOpen] = useState(false);
 
   const fetchData = async () => {
     try {
       setLoading(true);
+      setError(null);
       // Fetching from the view as requested originally, assuming create updates base table 'mediciones' 
       // and view 'v_mediciones_validas' reflects it.
       const { data, error } = await supabase
@@ -46,19 +51,6 @@ export default function MedicionesPage() {
       <div className="flex h-full w-full flex-col items-center justify-center p-10 bg-background/50">
         <Loader2 className="h-10 w-10 animate-spin text-primary/70 mb-4" />
         <p className="text-muted-foreground animate-pulse">Cargando mediciones...</p>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center p-10">
-        <div className="bg-destructive/10 p-6 rounded-full mb-6">
-          <AlertTriangle className="h-12 w-12 text-destructive" />
-        </div>
-        <h3 className="text-xl font-bold text-destructive mb-2">Error de Carga</h3>
-        <p className="text-muted-foreground max-w-md text-center">{error}</p>
-        <Button variant="outline" className="mt-4" onClick={fetchData}>Reintentar</Button>
       </div>
     );
   }
@@ -96,20 +88,52 @@ export default function MedicionesPage() {
               </p>
             </div>
             
-            <Button 
-              size="lg" 
-              onClick={() => setIsCreateModalOpen(true)}
-              className="bg-white text-black hover:bg-zinc-200 shadow-lg font-semibold shrink-0"
-            >
-              <Plus className="w-5 h-5 mr-2" />
-              Nueva medición
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                size="lg"
+                onClick={() => setIsVisitModeOpen(true)}
+                className="bg-white text-black shadow-lg font-semibold hover:bg-zinc-200"
+              >
+                <ClipboardList className="w-5 h-5 mr-2" />
+                Modo visita
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={() => setIsLaserTesterOpen(true)}
+                className="border-white/30 bg-black/25 text-white shadow-lg backdrop-blur-sm hover:bg-white/15 hover:text-white"
+              >
+                <Bluetooth className="w-5 h-5 mr-2" />
+                Probar GLM
+              </Button>
+              <Button
+                size="lg"
+                onClick={() => setIsCreateModalOpen(true)}
+                variant="outline"
+                className="border-white/30 bg-black/25 text-white shadow-lg backdrop-blur-sm hover:bg-white/15 hover:text-white"
+              >
+                <Plus className="w-5 h-5 mr-2" />
+                Medición manual
+              </Button>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Main Content */}
       <div className="flex-1 overflow-auto p-4 sm:p-6 space-y-6">
+        {error && (
+          <div className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+              <div>
+                <p className="font-semibold">No se ha podido cargar el listado guardado</p>
+                <p className="text-sm">{error} La prueba del láser sí está disponible.</p>
+              </div>
+            </div>
+            <Button variant="outline" className="border-amber-400 bg-white/70" onClick={fetchData}>Reintentar</Button>
+          </div>
+        )}
         
         {/* Quick Stats */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -210,6 +234,15 @@ export default function MedicionesPage() {
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
         onSuccess={handleCreateSuccess}
+      />
+      <BluetoothLaserTester
+        open={isLaserTesterOpen}
+        onOpenChange={setIsLaserTesterOpen}
+      />
+      <MedicionVisitMode
+        open={isVisitModeOpen}
+        onOpenChange={setIsVisitModeOpen}
+        onSaved={handleCreateSuccess}
       />
     </div>
   );
