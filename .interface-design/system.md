@@ -79,6 +79,14 @@ Nunca utilizar la eliminación como única forma de resolver una decisión. Most
 - El registro de producción parte siempre de una partida de la obra, nunca de la biblioteca completa.
 - Las partidas sin vínculo técnico permanecen visibles, pero explican por qué todavía no permiten registrar producción.
 
+### Creación de tareas con trazabilidad
+
+- Toda tarea operativa nace vinculada a una partida de la misma obra; nunca se elige desde la biblioteca general.
+- La partida aporta código, descripción, capítulo, zona, cantidad y unidad. El encargado puede ajustar la cantidad prevista sin perder el vínculo contractual.
+- Una partida solo puede tener una tarea activa asociada. Las partidas ya utilizadas permanecen visibles, pero deshabilitadas y rotuladas como “ya tiene tarea”.
+- El título operativo debe ser corto y reconocible desde el móvil; la descripción contractual y las indicaciones para el equipo se conservan en campos separados.
+- Los estados vacíos distinguen entre una obra sin partidas y una obra cuyas partidas ya están completamente convertidas en tareas, indicando la siguiente acción correcta.
+
 ### Bandeja de trabajo del técnico
 
 - Solo existe mientras hay un fichaje abierto en una obra y muestra exclusivamente las tareas del empleado autenticado en esa obra.
@@ -95,3 +103,11 @@ Nunca utilizar la eliminación como única forma de resolver una decisión. Most
 - Las tareas pendientes de validación aparecen en un bloque ámbar separado, antes del listado operativo, para que no se confundan con trabajos ya aprobados.
 - La revisión sigue un orden fijo: evidencia fotográfica, responsable y horas previstas/reales, descripción del trabajo y decisión final.
 - Aprobar utiliza verde y exige al menos una fotografía. Devolver para corregir utiliza ámbar, exige un comentario y reabre la tarea para el equipo.
+
+### Rendimiento observado de empleados y equipos
+
+- Sustituye las habilidades declaradas manualmente por muestras procedentes exclusivamente de tareas medidas y aprobadas.
+- La información se agrupa primero por oficio y después por partida; cada partida compara empleado, equipo exacto y media global.
+- Las combinaciones de trabajadores se consideran equipos distintos y se muestran solo por sus nombres, sin etiquetas de cargo.
+- Violeta identifica el dato individual, verde una diferencia positiva y ámbar una diferencia negativa o una muestra todavía insuficiente.
+- Esta información solo se muestra a encargado y administración; el estado vacío explica cómo se generarán los primeros datos reales.

@@ -4,12 +4,22 @@ import { toast } from '@/components/ui/use-toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { AlertTriangle, Camera, CheckCircle2, Clock3, ExternalLink, Image as ImageIcon, Loader2, RotateCcw, Users, X } from 'lucide-react';
+import { AlertTriangle, Camera, CheckCircle2, Clock3, ExternalLink, Gauge, Image as ImageIcon, Loader2, RotateCcw, Users, X } from 'lucide-react';
 import { RadioGroup as ShadRadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 
-const EMPTY_DETAILS = { orders: [], sessions: [], employees: [], evidences: [] };
+const EMPTY_DETAILS = { orders: [], sessions: [], employees: [], evidences: [], taskInfo: null, partida: null };
+const CONDITION_OPTIONS = [
+  ['obra_ocupada', 'Vivienda u obra ocupada'],
+  ['acceso_dificil', 'Acceso difícil'],
+  ['espacio_reducido', 'Espacio reducido'],
+  ['trabajo_altura', 'Trabajo en altura'],
+  ['proteccion_especial', 'Protección especial'],
+  ['imprevistos', 'Imprevistos durante la ejecución'],
+];
 
 const formatHours = (minutes) => `${(Number(minutes || 0) / 60).toLocaleString('es-ES', { maximumFractionDigits: 2 })} h`;
 const formatPlannedHours = (hours) => `${Number(hours || 0).toLocaleString('es-ES', { maximumFractionDigits: 2 })} h`;
@@ -35,6 +45,11 @@ const RevisionTareaModal = ({ isOpen, onClose, onSubmitted, task }) => {
   const [loadError, setLoadError] = useState('');
   const [details, setDetails] = useState(EMPTY_DETAILS);
   const [selectedEvidence, setSelectedEvidence] = useState(null);
+  const [actualQuantity, setActualQuantity] = useState('');
+  const [actualUnit, setActualUnit] = useState('');
+  const [conditions, setConditions] = useState([]);
+  const [incidents, setIncidents] = useState('');
+  const [dailyQuantities, setDailyQuantities] = useState({});
 
   useEffect(() => {
     if (!isOpen || !task?.id) return undefined;
@@ -46,15 +61,19 @@ const RevisionTareaModal = ({ isOpen, onClose, onSubmitted, task }) => {
       setSelectedEvidence(null);
       setLoadError('');
       setDetails(EMPTY_DETAILS);
+      setConditions([]);
+      setIncidents('');
+      setDailyQuantities({});
       setIsLoading(true);
       try {
-        const [ordersResult, sessionsResult, newEvidenceResult, legacyEvidenceResult] = await Promise.all([
+        const [ordersResult, sessionsResult, newEvidenceResult, legacyEvidenceResult, taskResult] = await Promise.all([
           supabase.from('ordenes_trabajo_diarias').select('id,empleado_id,estado,horas_previstas,notas_encargado,resultado_notas,iniciada_at,cerrada_at,asignada_at').eq('tarea_id', task.id).order('asignada_at', { ascending: true }),
           supabase.from('tarea_sesiones_trabajo').select('id,empleado_id,estado,inicio_at,fin_at,minutos_acumulados,notas,fecha_trabajo').eq('tarea_id', task.id).order('inicio_at', { ascending: true }),
           supabase.from('ordenes_trabajo_evidencias').select('id,orden_trabajo_id,empleado_id,momento,archivo_path,created_at').eq('tarea_id', task.id).order('created_at', { ascending: true }),
           supabase.rpc('get_evidencias_por_tarea', { p_tarea_id: task.id }),
+          supabase.from('tareas').select('id,obra_partida_id,cantidad_medible,unidad_medible').eq('id', task.id).maybeSingle(),
         ]);
-        const firstError = [ordersResult.error, sessionsResult.error, newEvidenceResult.error].find(Boolean);
+        const firstError = [ordersResult.error, sessionsResult.error, newEvidenceResult.error, taskResult.error].find(Boolean);
         if (firstError) throw firstError;
 
         const orders = ordersResult.data || [];
@@ -77,8 +96,32 @@ const RevisionTareaModal = ({ isOpen, onClose, onSubmitted, task }) => {
           ? await supabase.from('empleados').select('id,nombre,apellidos,email').in('id', employeeIds)
           : { data: [], error: null };
         if (employeesResult.error) throw employeesResult.error;
+        const partidaResult = taskResult.data?.obra_partida_id
+          ? await supabase.from('obras_partidas').select('id,codigo,descripcion,capitulo,zona,cantidad_total,unidad,sistema_id').eq('id', taskResult.data.obra_partida_id).maybeSingle()
+          : { data: null, error: null };
+        if (partidaResult.error) throw partidaResult.error;
         const evidences = await Promise.all([...newEvidences, ...legacyEvidences].map(signEvidence));
-        if (!cancelled) setDetails({ orders, sessions, employees: employeesResult.data || [], evidences });
+        if (!cancelled) {
+          const quantity = Number(taskResult.data?.cantidad_medible ?? partidaResult.data?.cantidad_total ?? 0);
+          const unit = taskResult.data?.unidad_medible || partidaResult.data?.unidad || 'ud';
+          const dates = [...new Set(sessions.map((session) => session.fecha_trabajo).filter(Boolean))];
+          const totalMinutes = sessions.reduce((sum, session) => sum + Number(session.minutos_acumulados || 0), 0);
+          const initialDaily = {};
+          dates.forEach((date, index) => {
+            const dateMinutes = sessions.filter((session) => session.fecha_trabajo === date).reduce((sum, session) => sum + Number(session.minutos_acumulados || 0), 0);
+            initialDaily[date] = dates.length === 1
+              ? quantity.toFixed(3)
+              : (quantity * (totalMinutes > 0 ? dateMinutes / totalMinutes : 1 / dates.length)).toFixed(3);
+            if (index === dates.length - 1 && dates.length > 1) {
+              const previous = Object.entries(initialDaily).filter(([key]) => key !== date).reduce((sum, [, value]) => sum + Number(value || 0), 0);
+              initialDaily[date] = Math.max(0, quantity - previous).toFixed(3);
+            }
+          });
+          setActualQuantity(quantity > 0 ? String(quantity) : '');
+          setActualUnit(unit);
+          setDailyQuantities(initialDaily);
+          setDetails({ orders, sessions, employees: employeesResult.data || [], evidences, taskInfo: taskResult.data, partida: partidaResult.data });
+        }
       } catch (error) {
         console.error('Error cargando la revisión de tarea:', error);
         if (!cancelled) setLoadError(error.message || 'No se pudo cargar el detalle de revisión.');
@@ -99,10 +142,44 @@ const RevisionTareaModal = ({ isOpen, onClose, onSubmitted, task }) => {
   const plannedHours = useMemo(() => details.orders.reduce((total, order) => total + Number(order.horas_previstas || 0), 0), [details.orders]);
   const actualMinutes = useMemo(() => details.sessions.reduce((total, session) => total + Number(session.minutos_acumulados || 0), 0), [details.sessions]);
   const hasEvidence = details.evidences.length > 0;
+  const teamDays = useMemo(() => {
+    const grouped = new Map();
+    details.sessions.forEach((session) => {
+      const date = session.fecha_trabajo || 'sin-fecha';
+      if (!grouped.has(date)) grouped.set(date, { date, minutes: 0, employeeIds: new Set() });
+      const row = grouped.get(date);
+      row.minutes += Number(session.minutos_acumulados || 0);
+      if (session.empleado_id) row.employeeIds.add(session.empleado_id);
+    });
+    return [...grouped.values()].sort((a, b) => a.date.localeCompare(b.date)).map((row) => ({
+      ...row,
+      employeeIds: [...row.employeeIds],
+      names: [...row.employeeIds].map((id) => employeeName(employeesById.get(id))).sort((a, b) => a.localeCompare(b, 'es')).join(' + '),
+    }));
+  }, [details.sessions, employeesById]);
+  const dailyQuantityTotal = useMemo(() => Object.values(dailyQuantities).reduce((sum, value) => sum + Number(value || 0), 0), [dailyQuantities]);
+  const quantityDifference = Number(actualQuantity || 0) - dailyQuantityTotal;
+  const quantityIsValid = Number(actualQuantity) > 0 && actualUnit.trim() && actualMinutes > 0 && teamDays.length > 0 && Math.abs(quantityDifference) <= 0.02;
+
+  const distributeQuantity = () => {
+    const quantity = Number(actualQuantity || 0);
+    const totalMinutes = teamDays.reduce((sum, day) => sum + day.minutes, 0);
+    const next = {};
+    teamDays.forEach((day, index) => {
+      next[day.date] = index === teamDays.length - 1
+        ? Math.max(0, quantity - Object.values(next).reduce((sum, value) => sum + Number(value || 0), 0)).toFixed(3)
+        : (quantity * (totalMinutes > 0 ? day.minutes / totalMinutes : 1 / teamDays.length)).toFixed(3);
+    });
+    setDailyQuantities(next);
+  };
 
   const handleSave = async () => {
     if (aprobado && !hasEvidence) {
       toast({ variant: 'destructive', title: 'Faltan fotografías', description: 'No se puede aprobar una tarea sin al menos una evidencia.' });
+      return;
+    }
+    if (aprobado && !quantityIsValid) {
+      toast({ variant: 'destructive', title: 'Revisa la medición real', description: 'Confirma cantidad, unidad y que el reparto por equipos coincida con el total.' });
       return;
     }
     if (!aprobado && !comentario.trim()) {
@@ -111,10 +188,15 @@ const RevisionTareaModal = ({ isOpen, onClose, onSubmitted, task }) => {
     }
     setIsSaving(true);
     try {
-      const { error } = await supabase.rpc('admin_guardar_revision_tarea', {
+      const { error } = await supabase.rpc('admin_guardar_revision_tarea_v2', {
         p_tarea_id: task.id,
         p_resultado: aprobado ? 'aprobada' : 'rechazada',
         p_comentario: comentario.trim() || null,
+        p_cantidad_ejecutada: aprobado ? Number(actualQuantity) : null,
+        p_unidad: aprobado ? actualUnit.trim() : null,
+        p_condiciones: conditions,
+        p_incidencias: incidents.trim() || null,
+        p_equipos: teamDays.map((day) => ({ fecha: day.date, cantidad: Number(dailyQuantities[day.date] || 0) })),
       });
       if (error) throw error;
       toast({
@@ -169,6 +251,80 @@ const RevisionTareaModal = ({ isOpen, onClose, onSubmitted, task }) => {
                   <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground"><Camera className="h-4 w-4" />Evidencias</div>
                   <p className="mt-2 font-mono text-lg font-bold tabular-nums">{details.evidences.length}</p>
                   <p className="mt-1 text-xs text-muted-foreground">fotografías registradas</p>
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-violet-200 bg-violet-50/35 p-4 sm:p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-semibold text-violet-950"><Gauge className="h-4 w-4" />Ficha de ejecución real</div>
+                    <p className="mt-1 text-xs text-violet-800">Estos datos nutrirán los rendimientos de la partida, de cada empleado y de cada combinación de equipo.</p>
+                  </div>
+                  {details.partida?.codigo && <Badge variant="outline" className="border-violet-200 bg-white text-violet-800">{details.partida.codigo}</Badge>}
+                </div>
+
+                {details.partida && (
+                  <div className="mt-4 rounded-lg border border-violet-100 bg-white/75 px-3 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Partida vinculada</p>
+                    <p className="mt-1 text-sm font-medium">{details.partida.descripcion}</p>
+                    {(details.partida.capitulo || details.partida.zona) && <p className="mt-1 text-xs text-muted-foreground">{[details.partida.capitulo, details.partida.zona].filter(Boolean).join(' · ')}</p>}
+                  </div>
+                )}
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_160px]">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="cantidad-ejecutada">Cantidad realmente ejecutada</Label>
+                    <Input id="cantidad-ejecutada" type="number" min="0" step="0.001" value={actualQuantity} onChange={(event) => setActualQuantity(event.target.value)} placeholder="Ej. 24,5" />
+                    <p className="text-[11px] text-muted-foreground">Prevista: {Number(details.taskInfo?.cantidad_medible ?? details.partida?.cantidad_total ?? 0).toLocaleString('es-ES')} {details.taskInfo?.unidad_medible || details.partida?.unidad || ''}</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="unidad-ejecutada">Unidad</Label>
+                    <Input id="unidad-ejecutada" value={actualUnit} onChange={(event) => setActualUnit(event.target.value)} placeholder="m², ml, ud…" />
+                  </div>
+                </div>
+
+                {teamDays.length > 0 && (
+                  <div className="mt-5 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Equipos reales por jornada</p><p className="mt-0.5 text-xs text-muted-foreground">Cada combinación diferente se medirá como un equipo distinto.</p></div>
+                      {teamDays.length > 1 && <Button type="button" variant="outline" size="sm" onClick={distributeQuantity} className="h-8 border-violet-200 bg-white text-xs">Repartir por horas</Button>}
+                    </div>
+                    <div className="space-y-2">
+                      {teamDays.map((day) => (
+                        <div key={day.date} className="grid gap-3 rounded-lg border border-border/60 bg-white px-3 py-3 sm:grid-cols-[110px_1fr_115px] sm:items-center">
+                          <div><p className="font-mono text-xs font-semibold tabular-nums">{day.date === 'sin-fecha' ? 'Sin fecha' : new Intl.DateTimeFormat('es-ES').format(new Date(`${day.date}T12:00:00`))}</p><p className="mt-0.5 text-[11px] text-muted-foreground">{formatHours(day.minutes)} persona</p></div>
+                          <div className="min-w-0"><p className="truncate text-sm font-medium">{day.names || 'Equipo sin identificar'}</p><p className="mt-0.5 text-[11px] text-muted-foreground">{day.employeeIds.length} {day.employeeIds.length === 1 ? 'persona' : 'personas'}</p></div>
+                          <div className="space-y-1"><Label htmlFor={`cantidad-${day.date}`} className="text-[11px]">Cantidad</Label><Input id={`cantidad-${day.date}`} type="number" min="0" step="0.001" value={dailyQuantities[day.date] ?? ''} onChange={(event) => setDailyQuantities((current) => ({ ...current, [day.date]: event.target.value }))} className="h-9 font-mono text-sm tabular-nums" /></div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className={`flex items-center justify-between rounded-md px-3 py-2 text-xs ${Math.abs(quantityDifference) <= 0.02 ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-900'}`}>
+                      <span>Suma de equipos</span><span className="font-mono font-semibold tabular-nums">{dailyQuantityTotal.toLocaleString('es-ES', { maximumFractionDigits: 3 })} / {Number(actualQuantity || 0).toLocaleString('es-ES', { maximumFractionDigits: 3 })} {actualUnit}</span>
+                    </div>
+                  </div>
+                )}
+
+                {teamDays.length === 0 && (
+                  <div className="mt-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-900">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <p>No hay tiempo real registrado en esta tarea. No se puede aprobar como muestra de rendimiento hasta que exista al menos una sesión de trabajo.</p>
+                  </div>
+                )}
+
+                <div className="mt-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Condiciones que afectaron al rendimiento</p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {CONDITION_OPTIONS.map(([value, label]) => (
+                      <Label key={value} htmlFor={`condition-${value}`} className="flex cursor-pointer items-center gap-2 rounded-md border border-border/50 bg-white px-3 py-2 text-xs font-normal">
+                        <Checkbox id={`condition-${value}`} checked={conditions.includes(value)} onCheckedChange={(checked) => setConditions((current) => checked ? [...current, value] : current.filter((item) => item !== value))} />
+                        {label}
+                      </Label>
+                    ))}
+                  </div>
+                  <div className="mt-3 space-y-1.5">
+                    <Label htmlFor="incidencias-ejecucion">Incidencias o contexto especial (opcional)</Label>
+                    <Textarea id="incidencias-ejecucion" value={incidents} onChange={(event) => setIncidents(event.target.value)} placeholder="Describe solo lo que pueda explicar una desviación del tiempo normal…" className="min-h-[72px] bg-white" />
+                  </div>
                 </div>
               </section>
 
@@ -234,7 +390,7 @@ const RevisionTareaModal = ({ isOpen, onClose, onSubmitted, task }) => {
 
         <DialogFooter className="shrink-0 border-t border-border/60 bg-card px-6 py-4 shadow-[0_-6px_18px_rgba(15,23,42,0.05)]">
           <Button variant="outline" onClick={onClose} disabled={isSaving} className="w-full sm:w-auto">Cancelar</Button>
-          <Button onClick={handleSave} disabled={isSaving || isLoading || Boolean(loadError) || (aprobado && !hasEvidence) || (!aprobado && !comentario.trim())} className={`w-full sm:w-auto ${aprobado ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-600 text-white hover:bg-amber-700'}`}>
+          <Button onClick={handleSave} disabled={isSaving || isLoading || Boolean(loadError) || (aprobado && (!hasEvidence || !quantityIsValid)) || (!aprobado && !comentario.trim())} className={`w-full sm:w-auto ${aprobado ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-600 text-white hover:bg-amber-700'}`}>
             {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : aprobado ? <CheckCircle2 className="mr-2 h-4 w-4" /> : <RotateCcw className="mr-2 h-4 w-4" />}
             {aprobado ? 'Guardar y aprobar' : 'Guardar y devolver'}
           </Button>

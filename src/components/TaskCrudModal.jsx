@@ -1,20 +1,26 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '@/lib/customSupabaseClient';
 import { toast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
-import { AlertTriangle, Loader2, Plus, X, CalendarPlus as CalendarIcon } from 'lucide-react';
+import { AlertTriangle, Link2, Loader2, MapPin, Plus, Ruler, X, CalendarPlus as CalendarIcon } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
     const [title, setTitle] = useState('');
+    const [description, setDescription] = useState('');
     const [projectId, setProjectId] = useState(defaultProjectId || '');
+    const [workItemId, setWorkItemId] = useState('');
+    const [plannedQuantity, setPlannedQuantity] = useState('');
+    const [plannedUnit, setPlannedUnit] = useState('');
+    const [originGeneration, setOriginGeneration] = useState('manual');
     const [employeeIds, setEmployeeIds] = useState([]);
     const [startDate, setStartDate] = useState(null);
     const [deadline, setDeadline] = useState(null);
@@ -23,6 +29,9 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
     const [isFetchingDetails, setIsFetchingDetails] = useState(false);
     const [projects, setProjects] = useState([]);
     const [employees, setEmployees] = useState([]);
+    const [workItems, setWorkItems] = useState([]);
+    const [isFetchingWorkItems, setIsFetchingWorkItems] = useState(false);
+    const [workItemsError, setWorkItemsError] = useState('');
     const [teamEmployeeIds, setTeamEmployeeIds] = useState(null);
     const [initialEmployeeIds, setInitialEmployeeIds] = useState([]);
 
@@ -50,11 +59,25 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
         const fetchTaskDetails = async () => {
             if (task) {
                 setIsFetchingDetails(true);
-                setTitle(task.titulo);
-                setProjectId(task.proyecto_id);
-                setEmployeeIds(task.empleado_asignado_id ? [task.empleado_asignado_id] : []);
-                setStartDate(task.fecha_inicio ? new Date(task.fecha_inicio) : null);
-                setDeadline(task.fecha_limite ? new Date(task.fecha_limite) : null);
+                const { data: taskDetails, error: taskDetailsError } = await supabase
+                    .from('tareas')
+                    .select('id,titulo,descripcion,proyecto_id,empleado_asignado_id,fecha_inicio,fecha_limite,obra_partida_id,cantidad_medible,unidad_medible,origen_generacion')
+                    .eq('id', task.id)
+                    .single();
+                if (taskDetailsError) {
+                    toast({ variant: 'destructive', title: 'Error cargando la tarea', description: taskDetailsError.message });
+                }
+                const currentTask = taskDetails || task;
+                setTitle(currentTask.titulo || '');
+                setDescription(currentTask.descripcion || '');
+                setProjectId(currentTask.proyecto_id || defaultProjectId || '');
+                setWorkItemId(currentTask.obra_partida_id || '');
+                setPlannedQuantity(currentTask.cantidad_medible ?? '');
+                setPlannedUnit(currentTask.unidad_medible || '');
+                setOriginGeneration(currentTask.origen_generacion || 'manual');
+                setEmployeeIds(currentTask.empleado_asignado_id ? [currentTask.empleado_asignado_id] : []);
+                setStartDate(currentTask.fecha_inicio ? new Date(currentTask.fecha_inicio) : null);
+                setDeadline(currentTask.fecha_limite ? new Date(currentTask.fecha_limite) : null);
 
                 const { data: subtasksData, error } = await supabase
                     .from('subtareas')
@@ -71,7 +94,12 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
                 setIsFetchingDetails(false);
             } else {
                 setTitle('');
+                setDescription('');
                 setProjectId(defaultProjectId || '');
+                setWorkItemId('');
+                setPlannedQuantity('');
+                setPlannedUnit('');
+                setOriginGeneration('manual');
                 setEmployeeIds([]);
                 setInitialEmployeeIds([]);
                 setStartDate(null);
@@ -85,6 +113,53 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
             fetchTaskDetails();
         }
     }, [task, isOpen, defaultProjectId, fetchDropdownData]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const fetchWorkItems = async () => {
+            if (!isOpen || !projectId) {
+                setWorkItems([]);
+                setWorkItemsError('');
+                return;
+            }
+
+            setIsFetchingWorkItems(true);
+            setWorkItemsError('');
+            const [itemsResult, linkedResult] = await Promise.all([
+                supabase
+                    .from('obras_partidas')
+                    .select('id,codigo,descripcion,capitulo,zona,cantidad_total,unidad,sistema_id,orden,activa')
+                    .eq('obra_id', projectId)
+                    .order('orden', { ascending: true }),
+                supabase
+                    .from('tareas')
+                    .select('id,obra_partida_id')
+                    .eq('proyecto_id', projectId)
+                    .not('obra_partida_id', 'is', null),
+            ]);
+
+            if (cancelled) return;
+            if (itemsResult.error || linkedResult.error) {
+                setWorkItems([]);
+                setWorkItemsError(itemsResult.error?.message || linkedResult.error?.message || 'No se pudieron cargar las partidas.');
+                setIsFetchingWorkItems(false);
+                return;
+            }
+
+            const linkedByWorkItem = new Map(
+                (linkedResult.data || []).map((row) => [row.obra_partida_id, row.id]),
+            );
+            const nextItems = (itemsResult.data || [])
+                .filter((item) => item.activa || item.id === workItemId)
+                .map((item) => ({ ...item, linkedTaskId: linkedByWorkItem.get(item.id) || null }));
+            setWorkItems(nextItems);
+            setIsFetchingWorkItems(false);
+        };
+
+        fetchWorkItems();
+        return () => { cancelled = true; };
+    }, [isOpen, projectId, task?.id, workItemId]);
 
     useEffect(() => {
         const fetchProjectTeam = async () => {
@@ -140,6 +215,47 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
         }
     };
 
+    const selectedWorkItem = useMemo(
+        () => workItems.find((item) => item.id === workItemId) || null,
+        [workItems, workItemId],
+    );
+
+    const availableWorkItems = useMemo(
+        () => workItems.filter((item) => !item.linkedTaskId || item.linkedTaskId === task?.id),
+        [workItems, task?.id],
+    );
+
+    const isFormReady = Boolean(
+        title.trim().length >= 3
+        && projectId
+        && workItemId
+        && plannedUnit.trim()
+        && Number(plannedQuantity) > 0,
+    );
+
+    const handleProjectChange = (nextProjectId) => {
+        setProjectId(nextProjectId);
+        setWorkItemId('');
+        setPlannedQuantity('');
+        setPlannedUnit('');
+        setTitle('');
+        setDescription('');
+    };
+
+    const handleWorkItemChange = (nextWorkItemId) => {
+        const nextWorkItem = workItems.find((item) => item.id === nextWorkItemId);
+        setWorkItemId(nextWorkItemId);
+        if (!nextWorkItem) return;
+
+        setPlannedQuantity(nextWorkItem.cantidad_total ?? '');
+        setPlannedUnit(nextWorkItem.unidad || '');
+        if (!task) {
+            const sourceTitle = [nextWorkItem.codigo, nextWorkItem.descripcion].filter(Boolean).join(' · ');
+            setTitle(sourceTitle.slice(0, 255));
+            setDescription(nextWorkItem.descripcion || '');
+        }
+    };
+
     const handleSubmit = async () => {
         if (!title.trim() || title.trim().length < 3) {
             toast({ variant: 'destructive', title: 'Título inválido', description: 'El título es obligatorio y debe tener al menos 3 caracteres.' });
@@ -147,6 +263,27 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
         }
         if (!projectId) {
             toast({ variant: 'destructive', title: 'Proyecto requerido', description: 'Debes seleccionar un proyecto.' });
+            return;
+        }
+        if (!workItemId) {
+            toast({ variant: 'destructive', title: 'Partida requerida', description: 'Selecciona la partida de esta obra que origina la tarea.' });
+            return;
+        }
+        if (!selectedWorkItem) {
+            toast({ variant: 'destructive', title: 'Partida no disponible', description: 'Actualiza el formulario y selecciona una partida activa de la obra.' });
+            return;
+        }
+        if (selectedWorkItem.linkedTaskId && selectedWorkItem.linkedTaskId !== task?.id) {
+            toast({ variant: 'destructive', title: 'Partida ya vinculada', description: 'Esta partida ya tiene una tarea operativa. Edita esa tarea en lugar de crear otra.' });
+            return;
+        }
+        const parsedQuantity = Number(plannedQuantity);
+        if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
+            toast({ variant: 'destructive', title: 'Medición requerida', description: 'Indica una cantidad prevista mayor que cero.' });
+            return;
+        }
+        if (!plannedUnit.trim()) {
+            toast({ variant: 'destructive', title: 'Unidad requerida', description: 'La partida debe tener una unidad de medición antes de crear la tarea.' });
             return;
         }
         if (employeeIds.length === 0) {
@@ -191,7 +328,7 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
                     p_empleado_asignado_id: employeeIds[0], // primary assignee for legacy code
                     p_fecha_limite: deadline ? format(deadline, 'yyyy-MM-dd') : null,
                     p_subtareas: subtasksPayload,
-                    p_descripcion: null,
+                    p_descripcion: description.trim() || null,
                 });
                 if (error) throw error;
                 toast({ title: 'Tarea actualizada con éxito' });
@@ -203,9 +340,13 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
                         proyecto_id: projectId,
                         empleado_asignado_id: employeeIds[0], // primary assignee for legacy code
                         titulo: title.trim(),
-                        descripcion: null,
+                        descripcion: description.trim() || null,
                         fecha_limite: deadline ? format(deadline, 'yyyy-MM-dd') : null,
                         fecha_inicio: startDate ? format(startDate, 'yyyy-MM-dd') : null,
+                        obra_partida_id: workItemId,
+                        cantidad_medible: parsedQuantity,
+                        unidad_medible: plannedUnit.trim(),
+                        origen_generacion: 'manual',
                         estado: 'pendiente' // Default status
                     })
                     .select('id');
@@ -234,7 +375,13 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
                 if (task) {
                     const { error: updateError } = await supabase
                         .from('tareas')
-                        .update({ fecha_inicio: format(startDate, 'yyyy-MM-dd') })
+                        .update({
+                            fecha_inicio: format(startDate, 'yyyy-MM-dd'),
+                            descripcion: description.trim() || null,
+                            ...(originGeneration !== 'presupuesto_aceptado' ? { obra_partida_id: workItemId } : {}),
+                            cantidad_medible: parsedQuantity,
+                            unidad_medible: plannedUnit.trim(),
+                        })
                         .eq('id', finalIdToUpdate);
                     if (updateError) console.error("Could not update fecha_inicio", updateError);
                 }
@@ -335,6 +482,9 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
                 projectId,
                 fechaInicio: startDate ? format(startDate, 'yyyy-MM-dd') : null,
                 fechaLimite: deadline ? format(deadline, 'yyyy-MM-dd') : null,
+                workItemId,
+                cantidadMedible: parsedQuantity,
+                unidadMedible: plannedUnit.trim(),
                 isNew: !task,
             });
         } catch (error) {
@@ -353,21 +503,17 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
 
     return (
         <Dialog open={isOpen} onOpenChange={onClose}>
-            <DialogContent className="sm:max-w-[600px]">
+            <DialogContent className="sm:max-w-[720px]">
                 <DialogHeader>
                     <DialogTitle>{task ? 'Editar Tarea' : 'Crear Nueva Tarea'}</DialogTitle>
                 </DialogHeader>
                 <div className="grid gap-4 py-4 max-h-[70vh] overflow-y-auto pr-4">
                     {isFetchingDetails ? <div className="flex justify-center items-center h-48"><Loader2 className="animate-spin" /></div> : (
                         <>
-                            <div className="grid gap-2">
-                                <Label htmlFor="title">Título</Label>
-                                <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
-                            </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="grid gap-2">
                                     <Label htmlFor="project">Proyecto</Label>
-                                    <Select value={projectId} onValueChange={setProjectId} disabled={!!defaultProjectId || !!task}>
+                                    <Select value={projectId} onValueChange={handleProjectChange} disabled={!!defaultProjectId || !!task}>
                                         <SelectTrigger><SelectValue placeholder="Seleccionar proyecto..." /></SelectTrigger>
                                         <SelectContent>
                                             {projects.map(p => <SelectItem key={p.id} value={p.id}>{p.nombre_proyecto}</SelectItem>)}
@@ -412,6 +558,113 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
                                         </SelectContent>
                                     </Select>
                                 </div>
+                            </div>
+                            <div className="grid gap-3 rounded-lg border border-violet-100 bg-violet-50/40 p-4">
+                                <div className="flex items-start gap-3">
+                                    <div className="mt-0.5 rounded-md border border-violet-100 bg-white p-2 text-violet-700">
+                                        <Link2 className="h-4 w-4" />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                        <Label className="text-sm font-semibold text-slate-900">Partida de origen *</Label>
+                                        <p className="mt-1 text-xs leading-5 text-slate-500">
+                                            Solo se muestran partidas de esta obra. Este vínculo permitirá comparar lo previsto con el tiempo y coste reales.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {workItemsError ? (
+                                    <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                                        {workItemsError}
+                                    </div>
+                                ) : (
+                                    <Select
+                                        value={workItemId}
+                                        onValueChange={handleWorkItemChange}
+                                        disabled={!projectId || isFetchingWorkItems || originGeneration === 'presupuesto_aceptado'}
+                                    >
+                                        <SelectTrigger className="bg-white">
+                                            <SelectValue placeholder={isFetchingWorkItems ? 'Cargando partidas…' : 'Seleccionar partida de esta obra…'} />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {workItems.map((item) => {
+                                                const occupied = item.linkedTaskId && item.linkedTaskId !== task?.id;
+                                                const label = [item.codigo, item.descripcion].filter(Boolean).join(' · ');
+                                                return (
+                                                    <SelectItem key={item.id} value={item.id} disabled={occupied}>
+                                                        {label}{occupied ? ' — ya tiene tarea' : ''}
+                                                    </SelectItem>
+                                                );
+                                            })}
+                                        </SelectContent>
+                                    </Select>
+                                )}
+
+                                {originGeneration === 'presupuesto_aceptado' && selectedWorkItem && (
+                                    <div className="flex gap-2 rounded-md border border-violet-200 bg-white p-3 text-xs leading-5 text-violet-800">
+                                        <Link2 className="mt-0.5 h-4 w-4 shrink-0" />
+                                        Tarea generada automáticamente desde el presupuesto aceptado. La partida de origen queda protegida; puedes ajustar la medición, el equipo y la planificación.
+                                    </div>
+                                )}
+
+                                {!isFetchingWorkItems && !workItemsError && projectId && workItems.length === 0 && (
+                                    <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                                        Esta obra no tiene partidas activas disponibles. Crea o revisa primero sus partidas de obra.
+                                    </div>
+                                )}
+
+                                {!isFetchingWorkItems && !workItemsError && workItems.length > 0 && availableWorkItems.length === 0 && (
+                                    <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                                        Todas las partidas de esta obra ya tienen una tarea asociada. Edita la tarea existente en lugar de crear un duplicado.
+                                    </div>
+                                )}
+
+                                {selectedWorkItem && (
+                                    <div className="rounded-md border border-violet-100 bg-white p-3">
+                                        <p className="text-sm font-medium leading-5 text-slate-900">{selectedWorkItem.descripcion}</p>
+                                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                                            {selectedWorkItem.capitulo && <span>{selectedWorkItem.capitulo}</span>}
+                                            {selectedWorkItem.zona && <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{selectedWorkItem.zona}</span>}
+                                            <span className="flex items-center gap-1"><Ruler className="h-3 w-3" />Medición contractual</span>
+                                        </div>
+                                        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_120px] gap-3">
+                                            <div className="grid gap-1.5">
+                                                <Label htmlFor="planned-quantity" className="text-xs">Cantidad prevista *</Label>
+                                                <Input
+                                                    id="planned-quantity"
+                                                    type="number"
+                                                    min="0"
+                                                    step="any"
+                                                    value={plannedQuantity}
+                                                    onChange={(event) => setPlannedQuantity(event.target.value)}
+                                                    className="bg-slate-50 tabular-nums"
+                                                />
+                                            </div>
+                                            <div className="grid gap-1.5">
+                                                <Label htmlFor="planned-unit" className="text-xs">Unidad *</Label>
+                                                <Input id="planned-unit" value={plannedUnit} readOnly className="bg-slate-50 font-mono" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="grid gap-2">
+                                <Label htmlFor="title">Título operativo *</Label>
+                                <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
+                                <p className="text-xs text-slate-500">Debe identificar el trabajo en el móvil sin sustituir la descripción contractual.</p>
+                            </div>
+                            <div className="grid gap-2">
+                                <Label htmlFor="description">Indicaciones para el equipo</Label>
+                                <Textarea
+                                    id="description"
+                                    value={description}
+                                    onChange={(event) => setDescription(event.target.value)}
+                                    rows={3}
+                                    maxLength={1200}
+                                    placeholder="Alcance, estancia, condiciones, materiales o precauciones relevantes…"
+                                />
                             </div>
                             <div className="grid gap-2">
                                 <Label>Subtareas</Label>
@@ -465,7 +718,7 @@ const TaskCrudModal = ({ isOpen, onClose, onSave, task, defaultProjectId }) => {
                 </div>
                 <DialogFooter>
                     <Button variant="outline" onClick={onClose}>Cancelar</Button>
-                    <Button onClick={handleSubmit} disabled={isLoading || isFetchingDetails}>
+                    <Button onClick={handleSubmit} disabled={isLoading || isFetchingDetails || !isFormReady}>
                         {isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Guardando...</> : 'Guardar Tarea'}
                     </Button>
                 </DialogFooter>

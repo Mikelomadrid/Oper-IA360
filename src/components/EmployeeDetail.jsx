@@ -32,7 +32,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import EmployeeHabilidadesTab from '@/components/EmployeeHabilidadesTab';
+import EmployeeRendimientoTab from '@/components/EmployeeRendimientoTab';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import FileManager from '@/components/FileManager';
 import EmployeeFolders from '@/components/EmployeeFolders';
@@ -485,9 +485,9 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                     <TabsTrigger value="documentos_v2">📁 Documentos NUEVO</TabsTrigger>
                                     <TabsTrigger value="historial">Ausencias</TabsTrigger>
                                     <TabsTrigger value="extras">Horas Extras</TabsTrigger>
-                                    <TabsTrigger value="habilidades">Habilidades</TabsTrigger>
                                     {isAdminOrEncargado && (
                                         <>
+                                            <TabsTrigger value="habilidades">Rendimiento</TabsTrigger>
                                             <TabsTrigger value="anticipos">
                                                 <CreditCard className="w-4 h-4 mr-2 text-green-600" />
                                                 Anticipos
@@ -669,11 +669,11 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                 {/* Only HorasExtras2View embedded here, replacing previous duplicate logic */}
                                 <HorasExtras2View employeeId={employee.id} isEmbedded={true} />
                             </TabsContent>
-                            <TabsContent value="habilidades" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                                <EmployeeHabilidadesTab employeeId={employee.id} isAdminOrEncargado={isAdminOrEncargado} />
-                            </TabsContent>
                             {isAdminOrEncargado && (
                                 <>
+                                    <TabsContent value="habilidades" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                        <EmployeeRendimientoTab employeeId={employee.id} isAdminOrEncargado={isAdminOrEncargado} />
+                                    </TabsContent>
                                     <TabsContent value="anticipos" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                         <EmployeeAnticiposTab employee={employee} sessionRole={sessionRole} currentUser={user} />
                                     </TabsContent>

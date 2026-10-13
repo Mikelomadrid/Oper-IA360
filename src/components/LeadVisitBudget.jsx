@@ -5,6 +5,7 @@ import {
   Calculator,
   CheckCircle2,
   ClipboardCheck,
+  FileCheck2,
   Download,
   FileAudio2,
   FileText,
@@ -35,6 +36,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { mapPlaudPayloadToBudget, parsePlaudStructuredMarkdown, rankSystemCandidates } from '@/lib/plaudStructuredImport';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -82,8 +84,8 @@ const commercialStatusMeta = {
 };
 
 const normalizeCommercialSettings = (settings = {}) => ({
-  gastos_generales_pct: Math.max(0, Number(settings.gastos_generales_pct) || 0),
-  margen_pct: Math.max(0, Number(settings.margen_pct) || 0),
+  gastos_generales_pct: 0,
+  margen_pct: 0,
   iva_pct: Math.max(0, Number(settings.iva_pct ?? 21) || 0),
 });
 
@@ -480,6 +482,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
   const budgetPreviewRef = useRef(null);
   const [notes, setNotes] = useState('');
   const [sourceFile, setSourceFile] = useState(null);
+  const [structuredImport, setStructuredImport] = useState(null);
   const [result, setResult] = useState(emptyResult);
   const [commercialSettings, setCommercialSettings] = useState(defaultCommercialSettings);
   const [systems, setSystems] = useState([]);
@@ -548,8 +551,17 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
             .sort((a, b) => a.orden - b.orden)
             .map((line) => {
               const linkedSystem = loadedSystemMap.get(line.sistema_id);
+              const candidates = linkedSystem ? [] : rankSystemCandidates({
+                titulo: line.descripcion,
+                descripcion: line.descripcion,
+                capitulo: line.capitulo || line.capitulo_snapshot,
+                unidad: line.unidad,
+              }, loadedSystems);
               return {
                 ...line,
+                sistema_sugerido_id: candidates[0]?.system_id || null,
+                candidatos_biblioteca: candidates,
+                vinculacion_confirmada: !!linkedSystem,
                 codigo: line.codigo || line.codigo_snapshot || linkedSystem?.codigo || null,
                 capitulo: line.capitulo || line.capitulo_snapshot || linkedSystem?.capitulo || linkedSystem?.categoria_detalle || null,
                 cantidad: line.cantidad ?? '',
@@ -990,12 +1002,20 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
     const system = systemMap.get(systemId);
     const patch = system ? {
       sistema_id: system.id,
+      sistema_sugerido_id: null,
+      vinculacion_confirmada: true,
       codigo: system.codigo,
       capitulo: system.capitulo || system.categoria_detalle || null,
       descripcion: system.nombre,
       unidad: system.unidad_base,
       estado_revision: 'propuesta',
-    } : { sistema_id: null, codigo: null, estado_revision: 'sin_coincidencia' };
+    } : {
+      sistema_id: null,
+      sistema_sugerido_id: null,
+      vinculacion_confirmada: false,
+      codigo: null,
+      estado_revision: 'sin_coincidencia',
+    };
     updateLine(index, {
       ...patch,
       fase_ejecucion: inferExecutionPhase({ ...result.partidas[index], ...patch, fase_ejecucion: null }),
@@ -1021,8 +1041,32 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
     if (isTextFile(file)) {
       const text = await file.text();
       setNotes(text);
+      try {
+        const parsed = parsePlaudStructuredMarkdown(text);
+        if (parsed.detected) {
+          const mapped = mapPlaudPayloadToBudget(parsed.payload, systems);
+          setStructuredImport({ ...mapped, warnings: parsed.warnings, filename: file.name });
+          setResult({
+            ...emptyResult(),
+            ...mapped.result,
+            mediciones: mapped.result.mediciones.map(normalizeMeasurement),
+            datos_pendientes: normalizePendingDecisions(mapped.result.datos_pendientes),
+            partidas: ensureExecutionPlan(mapped.result.partidas, systems),
+          });
+          toast({
+            title: 'Informe estructurado importado',
+            description: `${mapped.summary.partidas} partidas y ${mapped.summary.mediciones} mediciones preparadas para revisión.`,
+          });
+        } else {
+          setStructuredImport(null);
+        }
+      } catch (error) {
+        setStructuredImport({ error: error.message, filename: file.name });
+        toast({ variant: 'destructive', title: 'El bloque estructurado necesita revisión', description: error.message });
+      }
     } else {
       setNotes('');
+      setStructuredImport(null);
     }
   };
 
@@ -1030,6 +1074,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
     setDraftId(null);
     setNotes('');
     setSourceFile(null);
+    setStructuredImport(null);
     setResult(emptyResult());
     setCommercialSettings(defaultCommercialSettings);
     if (fileRef.current) fileRef.current.value = '';
@@ -1039,6 +1084,20 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
     if (!notes.trim() && !sourceFile) return;
     setAnalyzing(true);
     try {
+      const parsedStructured = parsePlaudStructuredMarkdown(notes);
+      if (parsedStructured.detected) {
+        const mapped = mapPlaudPayloadToBudget(parsedStructured.payload, systems);
+        setStructuredImport({ ...mapped, warnings: parsedStructured.warnings, filename: sourceFile?.name || null });
+        setResult({
+          ...emptyResult(),
+          ...mapped.result,
+          mediciones: mapped.result.mediciones.map(normalizeMeasurement),
+          datos_pendientes: normalizePendingDecisions(mapped.result.datos_pendientes),
+          partidas: ensureExecutionPlan(mapped.result.partidas, systems),
+        });
+        toast({ title: 'Informe estructurado recargado', description: 'Los datos de PLAUD están listos para revisión sin volver a interpretarlos con IA.' });
+        return;
+      }
       let file = null;
       if (sourceFile && !isTextFile(sourceFile)) file = await toDataUrl(sourceFile);
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
@@ -1353,7 +1412,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
           </div>
           <h2 className="mt-1 text-2xl font-bold tracking-tight">Preparar presupuesto desde la conversación</h2>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Importa la transcripción de PLAUD o escribe tus notas. La IA propondrá partidas, pero nada se aprobará ni enviará sin tu revisión.
+            Importa el informe estructurado de PLAUD o escribe tus notas. El ERP preparará las partidas, pero nada se aprobará ni enviará sin tu revisión.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1367,7 +1426,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
       <Card className="border-border/60 shadow-sm">
         <CardHeader className="border-b border-border/50 pb-4">
           <CardTitle className="flex items-center gap-2 text-base"><FileText className="h-4 w-4 text-primary" />Fuente de la visita</CardTitle>
-          <CardDescription>PLAUD: exporta preferentemente la transcripción completa con interlocutores en TXT, SRT, DOCX o PDF.</CardDescription>
+          <CardDescription>PLAUD: importa preferentemente el informe estructurado en Markdown. TXT, SRT, DOCX y PDF siguen disponibles para transcripciones sin estructurar.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 pt-5">
           <input
@@ -1384,10 +1443,38 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
             {sourceFile && (
               <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-sm">
                 <span className="max-w-[320px] truncate font-medium">{sourceFile.name}</span>
-                <button type="button" onClick={() => setSourceFile(null)} className="text-muted-foreground hover:text-destructive" aria-label="Quitar archivo"><Trash2 className="h-4 w-4" /></button>
+                <button type="button" onClick={() => { setSourceFile(null); setStructuredImport(null); }} className="text-muted-foreground hover:text-destructive" aria-label="Quitar archivo"><Trash2 className="h-4 w-4" /></button>
               </div>
             )}
           </div>
+          {structuredImport?.summary && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-4 text-emerald-950">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-emerald-200 bg-white text-emerald-700"><FileCheck2 className="h-4 w-4" /></span>
+                  <div>
+                    <p className="text-sm font-semibold">Informe estructurado de PLAUD detectado</p>
+                    <p className="mt-1 text-xs leading-5 text-emerald-800">El JSON se ha validado y cargado directamente. Revisa las decisiones, mediciones y vínculos con la biblioteca antes de guardar.</p>
+                  </div>
+                </div>
+                <Badge variant="outline" className="w-fit shrink-0 border-emerald-300 bg-white font-mono text-emerald-800">orkaled_visita_1.0</Badge>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
+                {[
+                  ['Partidas', structuredImport.summary.partidas],
+                  ['Mediciones', structuredImport.summary.mediciones],
+                  ['Decisiones', structuredImport.summary.decisiones],
+                  ['Sugeridas', structuredImport.summary.sugeridas],
+                  ['Excluidas', structuredImport.summary.excluidas],
+                  ['Terceros', structuredImport.summary.terceros],
+                  ['Con candidatos', structuredImport.summary.sistemasConCandidatos || 0],
+                  ['Sin vincular', structuredImport.summary.sistemasPendientes],
+                ].map(([label, value]) => <div key={label} className="rounded-md border border-emerald-200/80 bg-white/80 px-3 py-2"><p className="font-mono text-base font-bold tabular-nums">{value}</p><p className="text-[10px] font-medium uppercase tracking-wide text-emerald-700">{label}</p></div>)}
+              </div>
+              {!!structuredImport.warnings?.length && <div className="mt-3 space-y-1 border-t border-emerald-200 pt-3 text-xs text-amber-900">{structuredImport.warnings.map((warning) => <p key={warning} className="flex items-start gap-2"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{warning}</p>)}</div>}
+            </div>
+          )}
+          {structuredImport?.error && <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="font-semibold">No se pudo leer el bloque estructurado</p><p className="mt-1 text-xs leading-5">{structuredImport.error}</p></div></div>}
           <div className="space-y-2">
             <Label htmlFor="visit-notes">Transcripción o notas originales</Label>
             <Textarea
@@ -1403,7 +1490,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
           <div className="flex justify-end">
             <Button onClick={analyze} disabled={!canEdit || analyzing || (!notes.trim() && !sourceFile)}>
               {analyzing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-              {analyzing ? 'Analizando conversación…' : 'Extraer trabajos y partidas'}
+              {analyzing ? 'Procesando visita…' : structuredImport?.summary ? 'Recargar bloque estructurado' : 'Extraer trabajos y partidas'}
             </Button>
           </div>
         </CardContent>
@@ -1567,6 +1654,44 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
           <CardContent className="space-y-3 pt-5">
             {orderedLineEntries.map(({ line, index }) => (
               <article id={`partida-propuesta-${index}`} key={line.id || index} className="scroll-mt-24 rounded-lg border border-border/60 bg-background p-4">
+                {!line.sistema_id && Array.isArray(line.candidatos_biblioteca) && line.candidatos_biblioteca.length > 0 && (
+                  <div className="mb-4 rounded-md border border-violet-200/70 bg-violet-50/45 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold text-violet-950">Coincidencias encontradas en la biblioteca</p>
+                        <p className="mt-0.5 text-xs text-violet-800">Confirma una opción o utiliza el buscador si ninguna corresponde al trabajo real.</p>
+                      </div>
+                      <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">Pendiente de confirmar</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2 xl:grid-cols-3">
+                      {line.candidatos_biblioteca.map((candidate, candidateIndex) => {
+                        const percentage = Math.round(Number(candidate.score || 0) * 100);
+                        const confidenceLabel = percentage >= 85 ? 'Alta' : percentage >= 60 ? 'Media' : 'Orientativa';
+                        return (
+                          <button
+                            key={candidate.system_id}
+                            type="button"
+                            onClick={() => selectSystem(index, candidate.system_id)}
+                            disabled={!canEdit}
+                            className="group flex min-h-[92px] flex-col justify-between rounded-md border border-violet-200 bg-white p-3 text-left transition-colors hover:border-violet-400 hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <span>
+                              <span className="flex items-center justify-between gap-2">
+                                <span className="font-mono text-[11px] font-semibold text-violet-700">{candidate.codigo || 'Sin código'}</span>
+                                {candidateIndex === 0 && <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700">Mejor opción</span>}
+                              </span>
+                              <span className="mt-1 block text-xs font-medium leading-4 text-slate-900">{candidate.nombre}</span>
+                            </span>
+                            <span className="mt-2 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                              <span>{candidate.unidad || 'Sin unidad'}{candidate.capitulo ? ` · ${candidate.capitulo}` : ''}</span>
+                              <span className="font-mono text-violet-700">{confidenceLabel} · {percentage}%</span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 <div className="grid gap-4 lg:grid-cols-[minmax(260px,1.35fr)_minmax(230px,1fr)_minmax(160px,.75fr)_110px_110px_auto] lg:items-end">
                   <div className="space-y-2"><Label>Partida de la biblioteca</Label><Combobox options={systemOptions} value={line.sistema_id || ''} onSelect={(value) => selectSystem(index, value)} placeholder="Relacionar partida…" searchPlaceholder="Buscar código o descripción…" emptyText="No se encontró ninguna partida." /></div>
                   <div className="space-y-2"><Label>Medición vinculada</Label><Combobox options={linkedMeasurementOptions} value={line.medicion_id || ''} onSelect={(value) => selectMeasurement(index, value)} placeholder="Vincular medición…" searchPlaceholder="Buscar por zona o elemento…" emptyText="No hay mediciones disponibles." /></div>
@@ -1586,7 +1711,8 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
                   </div>
                 )}
                 <div className="mt-3 flex items-start gap-2 border-t border-border/50 pt-3 text-xs text-muted-foreground"><Link2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" /><span><strong>Origen:</strong> “{line.texto_origen || 'Sin fragmento identificado'}”</span></div>
-                {!line.sistema_id && <div className="mt-2 text-xs font-medium text-amber-700">Sin coincidencia fiable: selecciona una partida o deja la línea pendiente.</div>}
+                {!line.sistema_id && <div className="mt-2 text-xs font-medium text-amber-700">Vinculación pendiente: confirma una sugerencia, busca otra partida o deja la línea pendiente.</div>}
+                {line.sistema_id && line.vinculacion_confirmada && <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />Partida de biblioteca confirmada.</div>}
               </article>
             ))}
             <Button type="button" variant="outline" onClick={() => setResult((current) => ({ ...current, partidas: [...current.partidas, { sistema_id: null, codigo: null, capitulo: null, descripcion: '', zona: '', unidad: '', cantidad: '', medicion_id: null, texto_origen: 'Añadida manualmente', confianza: 1, estado_revision: 'sin_coincidencia', fase_ejecucion: 'pendiente' }] }))}><Plus className="mr-2 h-4 w-4" />Añadir línea manual</Button>
@@ -1768,32 +1894,17 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
             })}
             <div className="overflow-hidden rounded-lg border border-violet-200 bg-violet-50/40">
               <div className="border-b border-violet-200 bg-violet-50/80 px-4 py-3">
-                <p className="text-sm font-semibold text-violet-950">Valoración comercial del borrador</p>
-                <p className="text-xs text-violet-800">El margen se calcula sobre el coste de partidas más los gastos generales. Nada se envía todavía a ContaSimple.</p>
+                <p className="text-sm font-semibold text-violet-950">Resumen económico del presupuesto</p>
+                <p className="text-xs text-violet-800">Los importes de las partidas son precios de venta al cliente antes de IVA. Nada se envía todavía a ContaSimple.</p>
               </div>
-              <div className="grid gap-5 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="space-y-2">
-                    <Label htmlFor="gastos-generales-pct">Gastos generales (%)</Label>
-                    <Input id="gastos-generales-pct" type="number" min="0" step="0.1" value={commercialSettings.gastos_generales_pct} onChange={(event) => setCommercialSettings((current) => ({ ...current, gastos_generales_pct: event.target.value }))} className="bg-white font-mono" disabled={!canEdit} />
-                    <p className="text-xs text-muted-foreground">Estructura, desplazamientos y costes indirectos.</p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="margen-comercial-pct">Margen sobre coste (%)</Label>
-                    <Input id="margen-comercial-pct" type="number" min="0" step="0.1" value={commercialSettings.margen_pct} onChange={(event) => setCommercialSettings((current) => ({ ...current, margen_pct: event.target.value }))} className="bg-white font-mono" disabled={!canEdit} />
-                    <p className="text-xs text-muted-foreground">Se aplica después de los gastos generales.</p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="iva-presupuesto-pct">IVA (%)</Label>
-                    <Input id="iva-presupuesto-pct" type="number" min="0" step="0.1" value={commercialSettings.iva_pct} onChange={(event) => setCommercialSettings((current) => ({ ...current, iva_pct: event.target.value }))} className="bg-white font-mono" disabled={!canEdit} />
-                    <p className="text-xs text-muted-foreground">Por defecto 21%; puede ajustarse según la operación.</p>
-                  </div>
+              <div className="grid gap-5 p-4 lg:grid-cols-[minmax(220px,0.65fr)_minmax(320px,1fr)]">
+                <div className="space-y-2">
+                  <Label htmlFor="iva-presupuesto-pct">IVA aplicable (%)</Label>
+                  <Input id="iva-presupuesto-pct" type="number" min="0" step="0.1" value={commercialSettings.iva_pct} onChange={(event) => setCommercialSettings((current) => ({ ...current, iva_pct: event.target.value }))} className="max-w-[180px] bg-white font-mono" disabled={!canEdit} />
+                  <p className="max-w-sm text-xs leading-5 text-muted-foreground">Por defecto se aplica el 21 %. Los costes internos y la rentabilidad se calcularán en la obra cuando existan mediciones reales.</p>
                 </div>
                 <div className="space-y-2 rounded-md border border-violet-200 bg-white p-4 text-sm">
-                  <div className="flex justify-between gap-4"><span className="text-muted-foreground">Coste de partidas</span><span className="font-mono font-medium">{formatMoney(budgetSummary.base)}</span></div>
-                  <div className="flex justify-between gap-4"><span className="text-muted-foreground">Gastos generales ({commercialSummary.gastos_generales_pct} %)</span><span className="font-mono font-medium">{formatMoney(commercialSummary.generalExpenses)}</span></div>
-                  <div className="flex justify-between gap-4"><span className="text-muted-foreground">Margen ({commercialSummary.margen_pct} %)</span><span className="font-mono font-medium">{formatMoney(commercialSummary.margin)}</span></div>
-                  <div className="flex justify-between gap-4 border-t border-violet-100 pt-2"><span className="font-semibold text-violet-950">Base imponible</span><span className="font-mono font-semibold text-violet-950">{formatMoney(commercialSummary.taxableBase)}</span></div>
+                  <div className="flex justify-between gap-4"><span className="font-semibold text-violet-950">Base imponible</span><span className="font-mono font-semibold text-violet-950">{formatMoney(commercialSummary.taxableBase)}</span></div>
                   <div className="flex justify-between gap-4"><span className="text-muted-foreground">IVA ({commercialSummary.iva_pct} %)</span><span className="font-mono font-medium">{formatMoney(commercialSummary.vat)}</span></div>
                   <div className="flex justify-between gap-4 border-t border-violet-200 pt-3"><span className="text-base font-bold text-violet-950">Total presupuesto</span><span className="font-mono text-xl font-bold text-violet-950">{formatMoney(commercialSummary.total)}</span></div>
                 </div>
@@ -2020,10 +2131,7 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
 
                 <div className="pdf-avoid-break mt-8 ml-auto max-w-md border-t-2 border-slate-900 pt-3">
                   <div className="space-y-2 text-sm">
-                    <div className="flex justify-between gap-5"><span className="text-slate-500">Coste de partidas</span><span className="font-mono">{formatMoney(budgetSummary.base)}</span></div>
-                    <div className="flex justify-between gap-5"><span className="text-slate-500">Gastos generales ({commercialSummary.gastos_generales_pct} %)</span><span className="font-mono">{formatMoney(commercialSummary.generalExpenses)}</span></div>
-                    <div className="flex justify-between gap-5"><span className="text-slate-500">Margen comercial ({commercialSummary.margen_pct} %)</span><span className="font-mono">{formatMoney(commercialSummary.margin)}</span></div>
-                    <div className="flex justify-between gap-5 border-t border-slate-200 pt-2"><span className="font-semibold">Base imponible</span><span className="font-mono font-semibold">{formatMoney(commercialSummary.taxableBase)}</span></div>
+                    <div className="flex justify-between gap-5"><span className="font-semibold">Base imponible</span><span className="font-mono font-semibold">{formatMoney(commercialSummary.taxableBase)}</span></div>
                     <div className="flex justify-between gap-5"><span className="text-slate-500">IVA ({commercialSummary.iva_pct} %)</span><span className="font-mono">{formatMoney(commercialSummary.vat)}</span></div>
                     <div className="flex justify-between gap-5 border-t border-slate-900 pt-3 text-lg"><span className="font-bold">TOTAL</span><span className="font-mono font-bold">{formatMoney(commercialSummary.total)}</span></div>
                   </div>
