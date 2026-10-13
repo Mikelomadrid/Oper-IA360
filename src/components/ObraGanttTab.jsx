@@ -317,7 +317,7 @@ const ObraGanttTab = ({ obraId }) => {
     // ─── Estado alertas de retraso ─────────────────────────────────────────────
     const [alertasRetraso, setAlertasRetraso] = useState([]);
     const [toastRetrasoMostrado, setToastRetrasoMostrado] = useState(false);
-    const [showPanelAlertas, setShowPanelAlertas] = useState(true);
+    const [showPanelAlertas, setShowPanelAlertas] = useState(false);
     const [confirmLimpiar, setConfirmLimpiar] = useState(false);
     const [limpiando, setLimpiando] = useState(false);
 

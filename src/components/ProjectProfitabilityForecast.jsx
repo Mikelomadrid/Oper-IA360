@@ -195,7 +195,7 @@ const ProjectProfitabilityForecast = ({ projectId, project, kpis }) => {
                     plannedOther += quantity * asNumber(unitCost.coste_otros);
                 });
 
-                const budget = asNumber(kpis?.presupuesto_aceptado);
+                const budget = asNumber(kpis?.importe_contrato_actualizado || kpis?.presupuesto_aceptado);
                 const targetMarginPct = asNumber(project?.objetivo_margen_pct ?? kpis?.objetivo_margen_pct ?? 15);
                 const targetDirect = budget * (1 - targetMarginPct / 100);
                 const plannedDirect = plannedLabor + plannedMaterials + plannedOther;

@@ -41,6 +41,7 @@ import ProjectPedidosView from '@/components/ProjectPedidosView';
 import ProjectProductionView from '@/components/ProjectProductionView';
 import ProjectTeamView from '@/components/ProjectTeamView';
 import ProjectDailyWorkView from '@/components/ProjectDailyWorkView';
+import ProjectExtrasView from '@/components/ProjectExtrasView';
 
 const ProjectDetail = ({ projectId: propProjectId }) => {
     const navigate = useNavigate();
@@ -59,7 +60,7 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
     const canManage = React.useMemo(() => sessionRole?.rol === 'admin' || sessionRole?.rol === 'encargado', [sessionRole]);
 
     useEffect(() => {
-        if (!canManage && ['cronograma', 'jornada', 'equipo'].includes(activeTab)) {
+        if (!canManage && ['cronograma', 'jornada', 'equipo', 'extras'].includes(activeTab)) {
             setActiveTab('dashboard');
             const params = new URLSearchParams(location.search);
             params.set('tab', 'dashboard');
@@ -235,6 +236,10 @@ const ProjectDetail = ({ projectId: propProjectId }) => {
                             <ProjectLaborView projectId={projectId} />
                         </TabsContent>
 
+                        <TabsContent value="extras" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
+                            {canManage && <ProjectExtrasView projectId={projectId} />}
+                        </TabsContent>
+
                         <TabsContent value="produccion" className="m-0 focus-visible:ring-0 focus-visible:outline-none animate-in slide-in-from-bottom-2 duration-300">
                             <ProjectProductionView projectId={projectId} canManage={canManage} />
                         </TabsContent>
@@ -396,6 +401,7 @@ const NAV_GROUPS = (esCompartida, tieneLeadId) => [
             { value: 'pagos',      label: 'Pagos',         icon: <Banknote className="w-3.5 h-3.5" /> },
             { value: 'materiales', label: 'Materiales',    icon: <Package className="w-3.5 h-3.5" /> },
             { value: 'mano_obra',  label: 'Mano de Obra',  icon: <HardHat className="w-3.5 h-3.5" /> },
+            { value: 'extras',      label: 'Extras y desviaciones', icon: <ShieldAlert className="w-3.5 h-3.5" /> },
         ],
     },
     {
@@ -421,7 +427,7 @@ const GroupedNav = ({ activeTab, onTabChange, esCompartida, tieneLeadId, canMana
             ...group,
             children: canManage
                 ? group.children
-                : group.children.filter((item) => !['cronograma', 'jornada', 'equipo'].includes(item.value)),
+                : group.children.filter((item) => !['cronograma', 'jornada', 'equipo', 'extras'].includes(item.value)),
         }));
     const activeGroup = groups.find(g => g.children.some(c => c.value === activeTab))?.id;
     const openGroupData = groups.find(g => g.id === openGroup);

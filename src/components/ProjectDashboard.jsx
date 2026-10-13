@@ -42,6 +42,40 @@ const StatCard = ({ title, value, icon, description, trend, trendValue, colorCla
     );
 };
 
+const BudgetReconciliation = ({ baseBudget, approvedExtras, updatedContract, estimatedExtraCost, actualExtraLabor, pendingCount, pendingAmount, formatCurrency }) => (
+    <Card className="mb-3 overflow-hidden shadow-sm md:mb-4">
+        <CardContent className="p-4 md:p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+                <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-muted-foreground">Presupuesto original</p>
+                    <p className="mt-1 font-mono text-xl font-semibold tabular-nums">{formatCurrency(baseBudget)}</p>
+                </div>
+                <div className="hidden text-xl text-muted-foreground/50 lg:block">+</div>
+                <div className="min-w-0 flex-1 border-t pt-3 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-xs font-medium text-emerald-700">Extras aprobados</p>
+                        {pendingCount > 0 && (
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                                {pendingCount} pendiente{pendingCount === 1 ? '' : 's'} · {formatCurrency(pendingAmount)}
+                            </span>
+                        )}
+                    </div>
+                    <p className="mt-1 font-mono text-xl font-semibold tabular-nums text-emerald-700">{formatCurrency(approvedExtras)}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                        Coste previsto {formatCurrency(estimatedExtraCost)} · Mano de obra real {formatCurrency(actualExtraLabor)}
+                    </p>
+                </div>
+                <div className="hidden text-xl text-muted-foreground/50 lg:block">=</div>
+                <div className="min-w-0 flex-1 rounded-lg border border-violet-200 bg-violet-50 px-4 py-3 dark:border-violet-900 dark:bg-violet-950/30">
+                    <p className="text-xs font-medium text-violet-700 dark:text-violet-300">Contrato actualizado</p>
+                    <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-violet-950 dark:text-violet-100">{formatCurrency(updatedContract)}</p>
+                    <p className="mt-1 text-[11px] text-violet-700 dark:text-violet-300">Solo incluye extras aprobados por el cliente</p>
+                </div>
+            </div>
+        </CardContent>
+    </Card>
+);
+
 const ProjectDashboard = ({ projectId, project }) => {
     const [kpis, setKpis] = useState(null);
     const [clientData, setClientData] = useState(null);
@@ -74,6 +108,11 @@ const ProjectDashboard = ({ projectId, project }) => {
 
                 const materialBasePromise = fetchProjectMaterialBaseTotal(projectId);
 
+                const extrasPromise = supabase
+                    .from('proyecto_trabajos_extra')
+                    .select('id, estado, importe_venta, coste_estimado, tarea_id')
+                    .eq('proyecto_id', projectId);
+
                 let currentClientId = project?.cliente_id;
                 let currentStartDate = project?.fecha_inicio;
                 let clientPromise = Promise.resolve({ data: null, error: null });
@@ -101,11 +140,12 @@ const ProjectDashboard = ({ projectId, project }) => {
                         .maybeSingle();
                 }
 
-                const [kpiRes, laborRes, clientRes, materialBase] = await Promise.all([
+                const [kpiRes, laborRes, clientRes, materialBase, extrasRes] = await Promise.all([
                     kpiPromise,
                     laborPromise,
                     clientPromise,
                     materialBasePromise,
+                    extrasPromise,
                 ]);
 
                 if (kpiRes.error) {
@@ -119,12 +159,30 @@ const ProjectDashboard = ({ projectId, project }) => {
                 } else if (kpiRes.data) {
                     const baseData = kpiRes.data;
                     const laborCost = laborRes.data?.coste_total_mano_obra || 0;
+                    if (extrasRes.error) throw extrasRes.error;
+                    const extras = extrasRes.data || [];
+                    const approvedExtrasRows = extras.filter((extra) => extra.estado === 'aprobado');
+                    const pendingExtrasRows = extras.filter((extra) => extra.estado === 'pendiente_cliente');
+                    const approvedExtras = approvedExtrasRows.reduce((sum, extra) => sum + Number(extra.importe_venta || 0), 0);
+                    const estimatedExtraCost = approvedExtrasRows.reduce((sum, extra) => sum + Number(extra.coste_estimado || 0), 0);
+                    const pendingExtraAmount = pendingExtrasRows.reduce((sum, extra) => sum + Number(extra.importe_venta || 0), 0);
+                    const extraTaskIds = approvedExtrasRows.map((extra) => extra.tarea_id).filter(Boolean);
+                    let actualExtraLabor = 0;
+                    if (extraTaskIds.length > 0) {
+                        const { data: executions, error: executionsError } = await supabase
+                            .from('tarea_ejecuciones_reales')
+                            .select('coste_mano_obra')
+                            .in('tarea_id', extraTaskIds);
+                        if (executionsError) throw executionsError;
+                        actualExtraLabor = (executions || []).reduce((sum, execution) => sum + Number(execution.coste_mano_obra || 0), 0);
+                    }
                     // Presupuesto y margen trabajan sin IVA: materiales = base imponible.
                     const materialCost = Number(materialBase || 0);
                     const totalCost = materialCost + laborCost;
-                    const margin = (baseData.presupuesto_aceptado || 0) - totalCost;
-                    const profitability = (baseData.presupuesto_aceptado || 0) > 0
-                        ? (margin / (baseData.presupuesto_aceptado || 0)) * 100
+                    const updatedContract = Number(baseData.presupuesto_aceptado || 0) + approvedExtras;
+                    const margin = updatedContract - totalCost;
+                    const profitability = updatedContract > 0
+                        ? (margin / updatedContract) * 100
                         : 0;
 
                     const combinedData = {
@@ -134,6 +192,12 @@ const ProjectDashboard = ({ projectId, project }) => {
                         costo_total: totalCost,
                         margen: margin,
                         rentabilidad_real_pct: profitability,
+                        extras_aprobados: approvedExtras,
+                        extras_coste_estimado: estimatedExtraCost,
+                        extras_mano_obra_real: actualExtraLabor,
+                        extras_pendientes_count: pendingExtrasRows.length,
+                        extras_pendientes_importe: pendingExtraAmount,
+                        importe_contrato_actualizado: updatedContract,
                         estado: project?.estado,
                         fecha_fin_estimada: project?.fecha_fin_estimada,
                     };
@@ -324,7 +388,7 @@ Responde SOLO con este JSON sin texto adicional ni markdown:
         const borderColor = `hsl(${style.getPropertyValue('--border').trim()})`;
         const itemBorderColor = theme === 'dark' ? 'rgba(14, 27, 36, 0.6)' : '#fff';
 
-        const presupuesto = kpis.presupuesto_aceptado || 0;
+        const presupuesto = kpis.importe_contrato_actualizado || kpis.presupuesto_aceptado || 0;
         const materiales = kpis.coste_total_materiales || 0;
         const manoObra = kpis.coste_total_mano_obra || 0;
         const margenGrafico = Math.max(0, presupuesto - (materiales + manoObra));
@@ -406,7 +470,7 @@ Responde SOLO con este JSON sin texto adicional ni markdown:
     const isRentable = rentabilidadPct >= 0;
 
     const cards = [
-        { title: "Presupuesto", value: formatCurrency(kpis.presupuesto_aceptado), icon: <Euro />, description: `Cliente: ${project?.cliente?.nombre || clientData?.nombre || 'N/A'}`, colorClass: 'bg-blue-500' },
+        { title: "Contrato actualizado", value: formatCurrency(kpis.importe_contrato_actualizado), icon: <Euro />, description: `Base + extras aprobados`, colorClass: 'bg-violet-600' },
         { title: "Coste acumulado", value: formatCurrency(kpis.costo_total), icon: <Users />, description: "Real hasta hoy", colorClass: 'bg-orange-500' },
         { title: "Margen acumulado", value: formatCurrency(kpis.margen), icon: isProfit ? <CheckCircle2 /> : <AlertTriangle />, description: isProfit ? 'Todavía no es el margen final' : 'Pérdida acumulada', colorClass: isProfit ? 'bg-green-500' : 'bg-red-500' },
         { title: "Rentabilidad actual", value: `${rentabilidadPct.toFixed(2)}%`, icon: <BarChart3 />, description: `Acumulada hasta hoy`, colorClass: isRentable ? 'bg-purple-500' : 'bg-yellow-500' },
@@ -529,6 +593,17 @@ Responde SOLO con este JSON sin texto adicional ni markdown:
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <BudgetReconciliation
+                baseBudget={kpis.presupuesto_aceptado || 0}
+                approvedExtras={kpis.extras_aprobados || 0}
+                updatedContract={kpis.importe_contrato_actualizado || kpis.presupuesto_aceptado || 0}
+                estimatedExtraCost={kpis.extras_coste_estimado || 0}
+                actualExtraLabor={kpis.extras_mano_obra_real || 0}
+                pendingCount={kpis.extras_pendientes_count || 0}
+                pendingAmount={kpis.extras_pendientes_importe || 0}
+                formatCurrency={formatCurrency}
+            />
 
             {/* ===================== LAYOUT PRINCIPAL ===================== */}
             {/* Izquierda: Distribución (arriba) + Información del Cliente (abajo) */}
