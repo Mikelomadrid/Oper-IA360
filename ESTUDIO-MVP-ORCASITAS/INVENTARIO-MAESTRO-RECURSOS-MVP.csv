@@ -1,0 +1,18 @@
+ID;Recurso;Categoría;Subcategoría;Dirección o zona;Subzona;Clasificación geográfica;Prioridad;Estado;Fuente principal;Fecha comprobación;URL;Notas
+EDU-001;IES Pío Baroja;Educación;Instituto;C/ Tolosa 2;Poblado Dirigido;Dentro;P1;Verificado;Comunidad de Madrid;;https://gestiona.comunidad.madrid/wpad_pub/run/j/MostrarFichaCentro.icm?cdCentro=28020715;
+EDU-002;Escuela Infantil Municipal La Oliva;Educación;Escuela infantil;C/ Gainza 46;Poblado Dirigido;Dentro;P1;Verificado;Ayuntamiento de Madrid;;https://www.madrid.es/;
+EDU-003;CEIP Puerto Rico;Educación;Colegio;C/ Segura 74;Poblado Dirigido;Dentro;P1;Identificado;Asociación Vecinal Guetaria;;https://avguetaria.es/informacion-del-barrio/;Contrastar en fuente educativa oficial
+EDU-006;Escuela Municipal de Música Maestro Barbieri;Cultura y educación;Música;C/ Cestona 3;Poblado Dirigido;Dentro;P1;Verificado;Ayuntamiento de Madrid;;https://www.madrid.es/;
+SAL-001;Centro de Salud Orcasitas;Salud;Atención primaria;C/ Cestona 3;Poblado Dirigido;Dentro;P1;Verificado;Comunidad de Madrid;;https://www.comunidad.madrid/centros/centro-salud-orcasitas;
+SAL-002;Centro de Especialidades Periférico Orcasitas;Salud;Especialidades;C/ Cestona 3;Poblado Dirigido;Dentro;P1;Verificado;Comunidad de Madrid;;https://www.comunidad.madrid/centros/centro-especialidades-periferico-orcasitas;
+TRA-001;Línea 6;Transporte;Autobús;Entorno de Orcasitas;Orcasitas;Cercano;P2;Verificado;CRTM;;https://www.crtm.es/;Revisar horarios
+TRA-002;Línea 60;Transporte;Autobús;Guetaria, Alzola y avenida de los Poblados;Poblado Dirigido;Dentro;P1;Verificado;CRTM;;https://www.crtm.es/datos_lineas/horarios/6060H2.pdf;Revisar horarios
+TRA-004;Cercanías Orcasitas;Transporte;Cercanías;Orcasitas;Orcasitas;Cercano;P1;Verificado;CRTM;;https://www.crtm.es/;Completar accesos
+DEP-001;Centro Deportivo Municipal Orcasitas;Deporte;Polideportivo;Av. Rafaela Ybarra 52;Orcasitas;Límite;P1;Verificado;Ayuntamiento de Madrid;;https://www.madrid.es/;Confirmar límite geográfico
+PAR-002;Plaza de Oyarzun;Espacio público;Plaza;Poblado Dirigido;Poblado Dirigido;Dentro;P2;Verificado;Ayuntamiento de Madrid;;https://www.madrid.es/;Revisar obras
+PAR-004;Plaza de Ermua;Espacio público;Plaza;Poblado Dirigido;Poblado Dirigido;Dentro;P2;Verificado;Ayuntamiento de Madrid;;https://www.madrid.es/;Revisar obras
+MAY-001;Centro Municipal de Mayores Arturo Pajuelo;Mayores;Centro municipal;C/ Segura 3;Poblado Dirigido;Dentro;P1;Verificado;Ayuntamiento de Madrid;;https://www.madrid.es/;
+CUL-001;Biblioteca Popular del Poblado;Cultura;Biblioteca;Entorno del monumento a Arturo Pajuelo;Poblado Dirigido;Dentro;P2;Pendiente;Ayuntamiento de Madrid;;https://decide.madrid.es/;Confirmar horario actual
+COM-001;Mercado Municipal de Orcasitas;Comercio;Mercado;C/ Villabona 2;Poblado Dirigido;Dentro;P1;Identificado;Asociación Vecinal Guetaria;;https://avguetaria.es/informacion-del-barrio/;Actualizar puestos y negocios
+ASC-001;Asociación Vecinal Guetaria;Asociación;Asociación vecinal;Poblado Dirigido;Poblado Dirigido;Dentro;P1;Verificado;Asociación Vecinal Guetaria;;https://avguetaria.es/contacto/;
+HIS-001;Historia del Poblado Dirigido;Historia;Memoria vecinal;Poblado Dirigido;Poblado Dirigido;Dentro;P2;Verificado;Asociación Vecinal Guetaria;;https://avguetaria.es/historia-del-poblado-dirigido-de-orcasitas/;
