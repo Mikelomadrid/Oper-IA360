@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { format, startOfMonth, endOfMonth, subMonths, parseISO, isWithinInterval, isSameMonth } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
+import { fetchProjectMaterialNetTotals } from '@/lib/projectMaterialCosts';
 const Dashboard = () => {
   const {
     sessionRole
@@ -48,6 +49,11 @@ const Dashboard = () => {
         error: errProj
       } = await supabase.from('v_dashboard_proyectos').select('*');
       if (errProj) throw errProj;
+      const materialTotals = await fetchProjectMaterialNetTotals((allProjects || []).map((project) => project.proyecto_id));
+      const dashboardProjects = (allProjects || []).map((project) => ({
+        ...project,
+        coste_materiales: materialTotals[String(project.proyecto_id)] || 0,
+      }));
       const {
         data: allGeneralExpenses
       } = await supabase.from('gastos_generales').select('importe, fecha').gte('fecha', oneYearAgo);
@@ -64,7 +70,7 @@ const Dashboard = () => {
 
       // --- CÁLCULO DE KPIS (MES ACTUAL - SIEMPRE REAL) ---
 
-      const activeProjects = allProjects?.filter(p => {
+      const activeProjects = dashboardProjects.filter(p => {
         const estado = (p.estado || '').toLowerCase();
         return estado !== 'facturado' && estado !== 'rechazado';
       }) || [];
@@ -123,7 +129,7 @@ const Dashboard = () => {
           // -> USAR CÁLCULO REAL (ERP) PARA MESES RECIENTES
 
           // 1. Proyectos Facturados
-          const projectsInMonth = allProjects?.filter(p => {
+          const projectsInMonth = dashboardProjects.filter(p => {
             const esFacturado = (p.estado || '').toLowerCase() === 'facturado';
             const fechaFin = p.fecha_fin ? parseISO(p.fecha_fin) : null;
             return esFacturado && fechaFin && isWithinInterval(fechaFin, {

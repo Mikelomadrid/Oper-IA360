@@ -123,19 +123,52 @@ export const canManageOrOwn = (user, resourceOwnerId) => {
   return user.id === resourceOwnerId || user.auth_user_id === resourceOwnerId;
 };
 
-export const getGreetingByHour = () => {
-  const hour = new Date().getHours();
+export const getGreetingByHour = (date = new Date()) => {
+  const hour = Number(new Intl.DateTimeFormat('es-ES', {
+    timeZone: 'Europe/Madrid',
+    hour: '2-digit',
+    hour12: false,
+  }).format(date));
+  if (hour < 6) return 'Buenas noches';
   if (hour < 12) return 'Buenos días';
   if (hour < 20) return 'Buenas tardes';
   return 'Buenas noches';
 };
 
-export const parseMadridToUTC = (dateStr) => {
-    // Basic implementation - relies on browser parsing for now
-    return new Date(dateStr);
+export const parseMadridToUTC = (dateStr, timeStr = '00:00') => {
+    if (!dateStr || !timeStr) return null;
+    const [year, month, day] = String(dateStr).split('-').map(Number);
+    const [hour, minute] = String(timeStr).split(':').map(Number);
+    if (![year, month, day, hour, minute].every(Number.isFinite)) return null;
+
+    // Resolve the Madrid offset by round-tripping candidate UTC values through
+    // Intl. This handles both CET and CEST without relying on the machine TZ.
+    const naiveUtc = Date.UTC(year, month - 1, day, hour, minute);
+    for (const offsetMinutes of [60, 120]) {
+      const candidate = new Date(naiveUtc - offsetMinutes * 60 * 1000);
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Madrid',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      }).formatToParts(candidate).reduce((result, part) => {
+        if (part.type !== 'literal') result[part.type] = part.value;
+        return result;
+      }, {});
+      if (Number(parts.year) === year && Number(parts.month) === month && Number(parts.day) === day && Number(parts.hour) === hour && Number(parts.minute) === minute) {
+        return candidate;
+      }
+    }
+    return null;
 };
 
 export const calculateFichajeDuration = (entry, exit) => {
+    if (entry && typeof entry === 'object' && !exit) {
+        const record = entry;
+        entry = record.hora_entrada;
+        exit = record.hora_salida;
+        const elapsed = calculateFichajeDuration(entry, exit);
+        return Math.max(0, elapsed - (Number(record.pausa_segundos) || 0));
+    }
     if (!entry || !exit) return 0;
     const start = new Date(entry).getTime();
     const end = new Date(exit).getTime();

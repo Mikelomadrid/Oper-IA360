@@ -57,6 +57,7 @@ const MaterialDetailView = ({ materialId, navigate }) => {
         .from('v_solicitudes_material_detalle_v2')
         .select(`
           solicitud_id,
+          detalle_id,
           fecha_solicitud,
           cantidad,
           unidad,
@@ -75,14 +76,36 @@ const MaterialDetailView = ({ materialId, navigate }) => {
 
       if (requestsError) throw requestsError;
 
-      // 3. Build Timeline (Chronological first)
+      const { data: movementsData, error: movementsError } = await supabase
+        .from('almacen_material_movimientos')
+        .select(`
+          id,
+          tipo,
+          cantidad,
+          valor_total,
+          solicitud_detalle_id,
+          obra_destino_id,
+          obra_origen_id,
+          observaciones,
+          created_at
+        `)
+        .eq('material_id', materialId)
+        .order('created_at', { ascending: true });
+
+      if (movementsError) throw movementsError;
+
+      const requestByDetailId = new Map(
+        requestsData.map(req => [req.detalle_id, req])
+      );
+
+      // 3. Build Timeline from the warehouse movement ledger (the source of truth).
       let timelineEvents = [];
 
       // A. Initial Creation (Entrada Inicial)
       const initialStock = materialData.stock_inicial || 0; // Default to 0 if null, assuming stock_actual captures it if distinct logic used
       
       // If we have a creation date, that's our first event
-      if (materialData.fecha_creacion) {
+      if (materialData.fecha_creacion && initialStock !== 0) {
         timelineEvents.push({
           id: 'creation',
           type: 'entrada',
@@ -97,42 +120,56 @@ const MaterialDetailView = ({ materialId, navigate }) => {
         });
       }
 
-      // B. Add Requests (Salidas)
-      // Only include items that actually affect stock (prepared/delivered) OR pending ones if we want to show intent.
-      // Ideally, only 'preparada' = true items reduce stock in the current logic.
-      requestsData.forEach(req => {
+      // B. Add actual warehouse movements. Requests without a movement are
+      // reservations and must not alter the running stock balance.
+      movementsData.forEach(movement => {
+        const req = requestByDetailId.get(movement.solicitud_detalle_id);
         let dest = 'Desconocido';
         let icon = Warehouse; 
 
-        if (req.parte_custom_id) {
+        if (['entrada_albaran', 'ajuste'].includes(movement.tipo)) {
+          dest = 'Almacén';
+          icon = Package;
+        } else if (req?.parte_custom_id) {
            dest = `Parte ${req.parte_custom_id}`;
            if (req.parte_cliente_nombre) dest += ` - ${req.parte_cliente_nombre}`;
            icon = Wrench;
-        } else if (req.proyecto_nombre) {
-           dest = `Obra: ${req.proyecto_nombre}`;
+        } else if (req?.proyecto_nombre) {
+           dest = movement.tipo === 'devolucion_obra'
+             ? `Almacén (desde obra: ${req.proyecto_nombre})`
+             : `Obra: ${req.proyecto_nombre}`;
            icon = Building;
         } else {
-           dest = 'Nave / Taller';
+           dest = movement.tipo === 'devolucion_obra' ? 'Almacén' : 'Nave / Taller';
            icon = Warehouse;
         }
 
-        // Determining if this event actually reduced stock based on 'preparada' flag or status
-        // Usually, the app deducts stock when 'preparada' becomes true.
-        const isStockDeducted = req.preparada === true || ['gestionada', 'entregada', 'recibido'].includes(req.estado_solicitud);
+        const movementValue = Number(movement.valor_total);
+        const isEntry = ['entrada_albaran', 'entrada_manual', 'devolucion_obra'].includes(movement.tipo)
+          || (movement.tipo === 'ajuste' && movementValue >= 0);
+        const quantity = Math.abs(Number(movement.cantidad || 0));
         
         timelineEvents.push({
-          id: req.solicitud_id,
-          type: 'salida',
-          subtype: 'request',
-          date: req.preparada_at || req.fecha_solicitud, // Use preparation date if available, else request date
-          quantity: req.cantidad,
-          user: req.empleado_nombre || 'Usuario desconocido',
-          description: 'Salida de Stock',
+          id: movement.id,
+          type: isEntry ? 'entrada' : 'salida',
+          subtype: movement.tipo,
+          date: movement.created_at,
+          quantity,
+          user: req?.empleado_nombre || 'Sistema',
+          description: movement.tipo === 'ajuste' && movementValue < 0
+            ? 'Anulación de entrada'
+            : movement.tipo === 'ajuste'
+              ? 'Ajuste de stock'
+              : movement.tipo === 'devolucion_obra'
+            ? 'Devolución a almacén'
+            : movement.tipo === 'entrada_albaran'
+              ? 'Entrada de albarán'
+              : 'Salida de stock',
           destination: dest,
-          status: req.estado_solicitud,
+          status: req?.estado_solicitud || null,
           icon: icon,
-          isStockDeducted: isStockDeducted,
-          rawQuantity: -Math.abs(req.cantidad) // Negative for exits
+          isStockDeducted: true,
+          rawQuantity: isEntry ? quantity : -quantity
         });
       });
 

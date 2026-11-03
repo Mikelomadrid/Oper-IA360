@@ -42,3 +42,34 @@ export const fetchProjectMaterialBaseTotal = async (projectId) => {
   const totals = await fetchProjectMaterialBaseTotals([projectId]);
   return totals[String(projectId)] || 0;
 };
+
+/**
+ * Devuelve el coste neto real imputado a cada obra.
+ * Incluye compras y salidas de almacén y descuenta devoluciones.
+ */
+export const fetchProjectMaterialNetTotals = async (projectIds = []) => {
+  const ids = [...new Set(projectIds.filter(Boolean).map(String))];
+  const totals = Object.fromEntries(ids.map((id) => [id, 0]));
+
+  if (ids.length === 0) return totals;
+
+  const { data, error } = await supabase
+    .from('v_obra_materiales_balance')
+    .select('obra_id, coste_neto')
+    .in('obra_id', ids);
+
+  if (error) throw error;
+
+  for (const row of data || []) {
+    const projectId = String(row.obra_id);
+    totals[projectId] = (totals[projectId] || 0) + Number(row.coste_neto || 0);
+  }
+
+  return totals;
+};
+
+export const fetchProjectMaterialNetTotal = async (projectId) => {
+  if (!projectId) return 0;
+  const totals = await fetchProjectMaterialNetTotals([projectId]);
+  return totals[String(projectId)] || 0;
+};

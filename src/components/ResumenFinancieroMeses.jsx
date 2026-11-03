@@ -6,7 +6,7 @@ import { TrendingUp, TrendingDown, Euro, Loader2 } from 'lucide-react';
 import { format, subMonths, startOfMonth, endOfMonth, parseISO, startOfYear, endOfYear, eachMonthOfInterval } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
-import { fetchProjectMaterialBaseTotals } from '@/lib/projectMaterialCosts';
+import { fetchProjectMaterialNetTotals } from '@/lib/projectMaterialCosts';
 
 const PERIODOS = [
     { label: 'Mes actual', value: 1, tipo: 'meses' },
@@ -82,17 +82,17 @@ const ResumenFinancieroMeses = () => {
             // Traer mano de obra
             const proyectoIds = (obras || []).map(o => o.proyecto_id).filter(Boolean);
             let laborMap = {};
-            let materialBaseTotals = {};
+            let materialNetTotals = {};
             if (proyectoIds.length > 0) {
                 const [laborResult, fetchedMaterialBaseTotals] = await Promise.all([
                     supabase
                         .from('ui_v_proyecto_mano_obra_totales_v2')
                         .select('proyecto_id, coste_total_mano_obra')
                         .in('proyecto_id', proyectoIds),
-                    fetchProjectMaterialBaseTotals(proyectoIds),
+                    fetchProjectMaterialNetTotals(proyectoIds),
                 ]);
                 const laborData = laborResult.data;
-                materialBaseTotals = fetchedMaterialBaseTotals;
+                materialNetTotals = fetchedMaterialBaseTotals;
                 if (laborData) {
                     laborData.forEach(l => { laborMap[l.proyecto_id] = parseFloat(l.coste_total_mano_obra || 0); });
                 }
@@ -117,7 +117,7 @@ const ResumenFinancieroMeses = () => {
                 })();
                 if (!mesLabel) return;
 
-                const materiales = materialBaseTotals[String(obra.proyecto_id)] || 0;
+                const materiales = materialNetTotals[String(obra.proyecto_id)] || 0;
                 const manoObra = laborMap[obra.proyecto_id] || 0;
                 const facturado = parseFloat(obra.presupuesto_aceptado || 0);
                 const gastos = materiales + manoObra;

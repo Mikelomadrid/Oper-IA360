@@ -1,18 +1,33 @@
-const corsHeaders = {
-  'Access-Control-Allow-Origin': 'http://127.0.0.1:3000',
-  'Access-Control-Allow-Credentials': 'true',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
+const ALLOWED_ORIGINS = new Set([
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+  'http://localhost:3000',
+  'http://localhost:3001',
+]);
+
+function corsHeaders(req: Request) {
+  const requestOrigin = req.headers.get('Origin');
+  const origin = requestOrigin && ALLOWED_ORIGINS.has(requestOrigin)
+    ? requestOrigin
+    : 'http://127.0.0.1:3000';
+
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Vary': 'Origin',
+  };
+}
 
 const MAX_TEXT_LENGTH = 120_000;
 const MAX_FILE_LENGTH = 20_000_000;
 
-function json(body: Record<string, unknown>, status = 200) {
+function json(req: Request, body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
-      ...corsHeaders,
+      ...corsHeaders(req),
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
     },
@@ -37,14 +52,14 @@ async function authenticateRequest(req: Request) {
   const authorization = req.headers.get('Authorization');
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY');
-  if (!authorization) return { ok: false, response: json({ error: 'unauthorized' }, 401) };
+  if (!authorization) return { ok: false, response: json(req, { error: 'unauthorized' }, 401) };
   if (!supabaseUrl || !supabaseAnonKey) {
-    return { ok: false, response: json({ error: 'Configuración de autenticación incompleta.' }, 500) };
+    return { ok: false, response: json(req, { error: 'Configuración de autenticación incompleta.' }, 500) };
   }
   const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
     headers: { Authorization: authorization, apikey: supabaseAnonKey },
   });
-  if (!response.ok) return { ok: false, response: json({ error: 'unauthorized' }, 401) };
+  if (!response.ok) return { ok: false, response: json(req, { error: 'unauthorized' }, 401) };
   return { ok: true as const };
 }
 
@@ -68,33 +83,34 @@ async function loadLibrary() {
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
+    const headers = corsHeaders(req);
     return new Response('ok', {
       headers: {
-        ...corsHeaders,
+        ...headers,
         'Access-Control-Allow-Headers': req.headers.get('Access-Control-Request-Headers')
-          || corsHeaders['Access-Control-Allow-Headers'],
+          || headers['Access-Control-Allow-Headers'],
       },
     });
   }
-  if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+  if (req.method !== 'POST') return json(req, { error: 'method_not_allowed' }, 405);
 
   try {
     const authentication = await authenticateRequest(req);
     if (!authentication.ok) return authentication.response;
 
     const openaiApiKey = Deno.env.get('OPENAI_API_KEY');
-    if (!openaiApiKey) return json({ error: 'OPENAI_API_KEY no configurada en Supabase.' }, 503);
+    if (!openaiApiKey) return json(req, { error: 'OPENAI_API_KEY no configurada en Supabase.' }, 503);
 
     const body = await req.json();
     const notes = typeof body?.notes === 'string' ? body.notes.trim() : '';
     const file = typeof body?.file === 'string' ? body.file : '';
     const filename = typeof body?.filename === 'string' ? body.filename : 'visita-plaud.pdf';
-    if (!notes && !file) return json({ error: 'Añade notas o un archivo exportado desde PLAUD.' }, 400);
-    if (notes.length > MAX_TEXT_LENGTH) return json({ error: 'La transcripción es demasiado larga.' }, 413);
+    if (!notes && !file) return json(req, { error: 'Añade notas o un archivo exportado desde PLAUD.' }, 400);
+    if (notes.length > MAX_TEXT_LENGTH) return json(req, { error: 'La transcripción es demasiado larga.' }, 413);
     if (file && (!file.startsWith('data:') || !file.includes(';base64,'))) {
-      return json({ error: 'El archivo debe enviarse como data URL base64.' }, 400);
+      return json(req, { error: 'El archivo debe enviarse como data URL base64.' }, 400);
     }
-    if (file.length > MAX_FILE_LENGTH) return json({ error: 'El archivo supera el tamaño máximo permitido.' }, 413);
+    if (file.length > MAX_FILE_LENGTH) return json(req, { error: 'El archivo supera el tamaño máximo permitido.' }, 413);
 
     const library = await loadLibrary();
     const content: Array<Record<string, unknown>> = [
@@ -221,13 +237,13 @@ Deno.serve(async (req) => {
     if (!response.ok) {
       const message = payload?.error?.message || `OpenAI respondió con estado ${response.status}.`;
       console.error('analyze-visit-notes OpenAI:', message);
-      return json({ error: message }, 502);
+      return json(req, { error: message }, 502);
     }
     const outputText = getOutputText(payload);
-    if (!outputText) return json({ error: 'OpenAI no devolvió datos estructurados.' }, 502);
-    return json(JSON.parse(outputText));
+    if (!outputText) return json(req, { error: 'OpenAI no devolvió datos estructurados.' }, 502);
+    return json(req, JSON.parse(outputText));
   } catch (error) {
     console.error('analyze-visit-notes:', error instanceof Error ? error.message : error);
-    return json({ error: error instanceof Error ? error.message : 'Error analizando la visita.' }, 500);
+    return json(req, { error: error instanceof Error ? error.message : 'Error analizando la visita.' }, 500);
   }
 });

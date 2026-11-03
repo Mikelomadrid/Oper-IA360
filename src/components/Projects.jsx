@@ -17,7 +17,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
-import { fetchProjectMaterialBaseTotals } from '@/lib/projectMaterialCosts';
+import { fetchProjectMaterialNetTotals } from '@/lib/projectMaterialCosts';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -339,7 +339,7 @@ const Projects = ({ navigate }) => {
                         .from('ui_v_proyecto_mano_obra_totales_v2')
                         .select('proyecto_id, coste_total_mano_obra')
                         .in('proyecto_id', projectIds),
-                    fetchProjectMaterialBaseTotals(projectIds),
+                    fetchProjectMaterialNetTotals(projectIds),
                 ]);
 
                 const { data: laborData, error: laborError } = laborResult;

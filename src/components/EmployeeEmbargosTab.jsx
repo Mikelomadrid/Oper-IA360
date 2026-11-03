@@ -24,7 +24,7 @@ import { Plus, Loader2, Eye, Gavel, AlertCircle } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 import { toast } from '@/components/ui/use-toast';
 
-const EmployeeEmbargosTab = ({ employee, sessionRole, navigate }) => {
+const EmployeeEmbargosTab = ({ employee, sessionRole, currentUser, navigate }) => {
   const [embargos, setEmbargos] = useState([]);
   const [loading, setLoading] = useState(true);
   
@@ -38,9 +38,14 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, navigate }) => {
   });
 
   const isAdmin = sessionRole?.rol === 'admin';
+  const canView = isAdmin || currentUser?.id === employee?.auth_user_id;
 
   const fetchEmbargos = async () => {
-    if (!employee?.auth_user_id) return;
+    if (!employee?.auth_user_id) {
+      setEmbargos([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const { data, error } = await supabase
@@ -50,6 +55,7 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, navigate }) => {
     embargos_retenciones (*),
     embargos_pagos (*)
   `)
+        // embargos.empleado_id referencia empleados.auth_user_id, no empleados.id.
         .eq('empleado_id', employee.auth_user_id)
         .order('created_at', { ascending: false });
 
@@ -69,7 +75,10 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, navigate }) => {
 
   const handleCreate = async (e) => {
     e.preventDefault();
-    if (!newEmbargo.organismo || !newEmbargo.importe_total) {
+    const organismo = newEmbargo.organismo.trim();
+    const importeTotal = Number.parseFloat(String(newEmbargo.importe_total).replace(',', '.'));
+
+    if (!organismo || !Number.isFinite(importeTotal) || importeTotal <= 0) {
       toast({ variant: 'destructive', title: 'Error', description: 'Campos obligatorios faltantes' });
       return;
     }
@@ -83,9 +92,9 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, navigate }) => {
     try {
       const { error } = await supabase.rpc('api_crear_embargo_v1', {
         empleado: employee.auth_user_id,
-        organismo: newEmbargo.organismo,
+        organismo,
         motivo: newEmbargo.motivo || '',
-        importe_total: parseFloat(newEmbargo.importe_total)
+        importe_total: importeTotal
       });
 
       if (error) throw error;
@@ -107,7 +116,7 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, navigate }) => {
     return <Badge className="bg-yellow-100 text-yellow-800 border-yellow-200">Activo</Badge>;
   };
 
-  if (!isAdmin) return <div className="p-4">No autorizado</div>;
+  if (!canView) return <div className="p-4">No autorizado</div>;
 
   return (
     <div className="pt-4 space-y-4">
@@ -116,10 +125,10 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, navigate }) => {
           <Gavel className="h-5 w-5" />
           Embargos y Retenciones
         </h3>
-        <Button onClick={() => setIsCreateOpen(true)} size="sm">
+        {isAdmin && <Button onClick={() => setIsCreateOpen(true)} size="sm">
           <Plus className="mr-2 h-4 w-4" />
           Nuevo Embargo
-        </Button>
+        </Button>}
       </div>
 
       {loading ? (

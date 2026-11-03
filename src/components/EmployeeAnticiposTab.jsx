@@ -95,15 +95,24 @@ const EmployeeAnticiposTab = ({ employee, sessionRole }) => {
   const handleSave = async (e) => {
     e.preventDefault();
     if (!employee.auth_user_id) return toast({ variant: 'destructive', title: 'Error', description: 'Sin usuario vinculado.' });
+
+    const cantidad = Number(String(formData.cantidad).replace(',', '.'));
+    const motivo = String(formData.motivo || '').trim();
+    if (!Number.isFinite(cantidad) || cantidad <= 0) {
+      return toast({ variant: 'destructive', title: 'Cantidad no válida', description: 'Introduce una cantidad mayor que 0.' });
+    }
+    if (!motivo) {
+      return toast({ variant: 'destructive', title: 'Motivo obligatorio', description: 'Indica el motivo del anticipo.' });
+    }
     
     setSaving(true);
     try {
       if (editingId) {
-        const { error } = await supabase.from('anticipos_nomina').update({ cantidad: parseFloat(formData.cantidad), motivo: formData.motivo }).eq('id', editingId);
+        const { error } = await supabase.from('anticipos_nomina').update({ cantidad, motivo }).eq('id', editingId);
         if (error) throw error;
         toast({ title: 'Actualizado', description: 'Anticipo modificado.' });
       } else {
-        const { error } = await supabase.rpc('api_crear_anticipo_v1', { empleado: employee.auth_user_id, cantidad: parseFloat(formData.cantidad), motivo: formData.motivo });
+        const { error } = await supabase.rpc('api_crear_anticipo_v1', { empleado: employee.auth_user_id, cantidad, motivo });
         if (error) throw error;
         toast({ title: 'Creado', description: 'Anticipo registrado.' });
       }

@@ -30,6 +30,7 @@ const EmployeeForm = ({ employee, onSave, onCancel }) => {
         telefono: '',
         telefono_empresa: '',
         dni_nie: '',
+        categoria: '',
         rol: 'tecnico',
         costo_por_hora: '',
         activo: true,
@@ -46,6 +47,7 @@ const EmployeeForm = ({ employee, onSave, onCancel }) => {
                 telefono: employee.telefono || '',
                 telefono_empresa: employee.telefono_empresa || '',
                 dni_nie: employee.dni_nie || '',
+                categoria: employee.categoria || '',
                 rol: employee.rol || 'tecnico',
                 costo_por_hora: employee.costo_por_hora || '',
                 activo: employee.activo,
@@ -58,6 +60,7 @@ const EmployeeForm = ({ employee, onSave, onCancel }) => {
                 telefono: '',
                 telefono_empresa: '',
                 dni_nie: '',
+                categoria: '',
                 rol: 'tecnico',
                 costo_por_hora: '',
                 activo: true,
@@ -101,7 +104,8 @@ const EmployeeForm = ({ employee, onSave, onCancel }) => {
                 .update({
                     telefono: formData.telefono,
                     telefono_empresa: formData.telefono_empresa,
-                    dni_nie: formData.dni_nie
+                    dni_nie: formData.dni_nie,
+                    categoria: formData.categoria || null
                 })
                 .eq('id', data.empleado_id);
 
@@ -153,6 +157,11 @@ const EmployeeForm = ({ employee, onSave, onCancel }) => {
                     <Label htmlFor="telefono_empresa" className="flex items-center gap-2"><Building2 className="w-3 h-3" /> Teléfono Empresa</Label>
                     <Input id="telefono_empresa" name="telefono_empresa" value={formData.telefono_empresa} onChange={handleChange} placeholder="+34 600 000 000" />
                 </div>
+            </div>
+
+            <div>
+                <Label htmlFor="categoria">Categoría laboral</Label>
+                <Input id="categoria" name="categoria" value={formData.categoria} onChange={handleChange} placeholder="Ej: Oficial de 1ª, Técnico especialista" />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { ArrowLeft, Loader2, User, Mail, Phone, MapPin, Briefcase, Euro, TrendingUp, ChevronRight, Pencil, Trash2, Building2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { ClientForm } from './Clients';
-import { fetchProjectMaterialBaseTotals } from '@/lib/projectMaterialCosts';
+import { fetchProjectMaterialNetTotals } from '@/lib/projectMaterialCosts';
 
 const formatCurrency = (value) => {
     if (value === undefined || value === null) return '0,00 €';
@@ -97,7 +97,7 @@ const ClientDetail = ({ clientId, navigate }) => {
                     .from('ui_v_proyecto_mano_obra_totales_v2')
                     .select('proyecto_id, coste_total_mano_obra')
                     .in('proyecto_id', projectIds),
-                fetchProjectMaterialBaseTotals(projectIds),
+                fetchProjectMaterialNetTotals(projectIds),
             ]);
 
             const laborData = laborResult.data || [];

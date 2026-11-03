@@ -34,7 +34,6 @@ import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import EmployeeRendimientoTab from '@/components/EmployeeRendimientoTab';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import FileManager from '@/components/FileManager';
 import EmployeeFolders from '@/components/EmployeeFolders';
 import EmployeeAnticiposTab from '@/components/EmployeeAnticiposTab';
 import EmployeeEmbargosTab from '@/components/EmployeeEmbargosTab';
@@ -186,6 +185,7 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
     const isAdminOrEncargado = sessionRole?.rol === 'admin' || sessionRole?.rol === 'encargado';
+    const isAdmin = sessionRole?.rol === 'admin';
 
     const fetchEmployeeData = useCallback(async () => {
         setLoading(true);
@@ -481,17 +481,16 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                 <div className="flex items-center justify-start overflow-x-auto pb-1 md:pb-0">
                                     <TabsTrigger value="datos">Datos</TabsTrigger>
                                     <TabsTrigger value="herramientas">Herramientas</TabsTrigger>
-                                    <TabsTrigger value="documentacion">Documentación</TabsTrigger>
-                                    <TabsTrigger value="documentos_v2">📁 Documentos NUEVO</TabsTrigger>
+                                    <TabsTrigger value="documentos_v2">Documentación</TabsTrigger>
                                     <TabsTrigger value="historial">Ausencias</TabsTrigger>
                                     <TabsTrigger value="extras">Horas Extras</TabsTrigger>
-                                    {isAdminOrEncargado && (
+                                    {(isAdminOrEncargado || user?.id === employee.auth_user_id) && (
                                         <>
-                                            <TabsTrigger value="habilidades">Rendimiento</TabsTrigger>
-                                            <TabsTrigger value="anticipos">
+                                            {isAdmin && <TabsTrigger value="habilidades">Rendimiento</TabsTrigger>}
+                                            {isAdminOrEncargado && <TabsTrigger value="anticipos">
                                                 <CreditCard className="w-4 h-4 mr-2 text-green-600" />
                                                 Anticipos
-                                            </TabsTrigger>
+                                            </TabsTrigger>}
                                             <TabsTrigger value="embargos">
                                                 <Gavel className="w-4 h-4 mr-2 text-amber-600" />
                                                 Embargos
@@ -509,7 +508,13 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                                 <Label className="text-xs text-muted-foreground uppercase tracking-wider">Contacto</Label>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     <Mail className="w-4 h-4 text-primary/70" />
-                                                    <a href={`mailto:${employee.email}`} className="text-sm hover:underline font-medium text-foreground">{employee.email}</a>
+                                                    <span className="text-xs text-muted-foreground w-28">Nombre de usuario:</span>
+                                                    <span className="text-sm font-medium text-foreground">{employee.nombre || '—'}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <Mail className="w-4 h-4 text-primary/70" />
+                                                    <span className="text-xs text-muted-foreground w-28">Email:</span>
+                                                    <a href={`mailto:${employee.email}`} className="text-sm hover:underline font-medium text-foreground">{employee.email || '—'}</a>
                                                 </div>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     <Smartphone className="w-4 h-4 text-primary/70" />
@@ -521,29 +526,41 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                                     <span className="text-xs text-muted-foreground w-16">Empresa:</span>
                                                     <a href={`tel:${employee.telefono_empresa}`} className="text-sm hover:underline font-medium text-foreground">{employee.telefono_empresa || '—'}</a>
                                                 </div>
+                                                <div className="flex items-start gap-2 mt-1">
+                                                    <Building2 className="w-4 h-4 text-primary/70 mt-0.5" />
+                                                    <span className="text-xs text-muted-foreground w-16">Dirección:</span>
+                                                    <span className="text-sm font-medium text-foreground">
+                                                        {[employee.direccion, [employee.codigo_postal, employee.ciudad].filter(Boolean).join(' '), employee.provincia].filter(Boolean).join(', ') || '—'}
+                                                    </span>
+                                                </div>
                                             </div>
                                             <div className="space-y-1">
                                                 <Label className="text-xs text-muted-foreground uppercase tracking-wider">Datos Personales</Label>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     <IdCard className="w-4 h-4 text-primary/70" />
-                                                    <span className="text-xs text-muted-foreground w-16">Nombre:</span>
+                                                    <span className="text-xs text-muted-foreground w-28">Nombre real:</span>
                                                     <span className="text-sm font-medium text-foreground">{employee.nombre_completo || '—'}</span>
                                                 </div>
                                                 <div className="flex items-center gap-2 mt-1">
+                                                    <IdCard className="w-4 h-4 text-primary/70" />
+                                                    <span className="text-xs text-muted-foreground w-28">Apellidos:</span>
+                                                    <span className="text-sm font-medium text-foreground">{employee.apellidos || '—'}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2 mt-1">
                                                     <CreditCard className="w-4 h-4 text-primary/70" />
-                                                    <span className="text-xs text-muted-foreground w-16">DNI/NIE:</span>
+                                                    <span className="text-xs text-muted-foreground w-28">DNI:</span>
                                                     <span className="text-sm font-medium text-foreground">{employee.dni_nie || '—'}</span>
                                                 </div>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     <Calendar className="w-4 h-4 text-primary/70" />
-                                                    <span className="text-xs text-muted-foreground w-16">Nacimiento:</span>
+                                                    <span className="text-xs text-muted-foreground w-28">Fecha nac.:</span>
                                                     <span className="text-sm font-medium text-foreground">
                                                         {employee.fecha_nacimiento ? new Date(employee.fecha_nacimiento).toLocaleDateString('es-ES') : '—'}
                                                     </span>
                                                 </div>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     <FileText className="w-4 h-4 text-primary/70" />
-                                                    <span className="text-xs text-muted-foreground w-16">Nº S.S.:</span>
+                                                    <span className="text-xs text-muted-foreground w-28">Nº S.S.:</span>
                                                     <span className="text-sm font-medium text-foreground">{employee.numero_seguridad_social || '—'}</span>
                                                 </div>
                                             </div>
@@ -551,20 +568,33 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                                 <Label className="text-xs text-muted-foreground uppercase tracking-wider">Información Laboral</Label>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     <Briefcase className="w-4 h-4 text-primary/70" />
-                                                    <span className="text-sm font-medium capitalize text-foreground">{employee.rol}</span>
+                                                    <span className="text-xs text-muted-foreground w-28">Rol:</span>
+                                                    <span className="text-sm font-medium capitalize text-foreground">{employee.rol || '—'}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <Briefcase className="w-4 h-4 text-primary/70" />
+                                                    <span className="text-xs text-muted-foreground w-28">Categoría:</span>
+                                                    <span className="text-sm font-medium text-foreground">{employee.categoria || '—'}</span>
                                                 </div>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     <Euro className="w-4 h-4 text-primary/70" />
+                                                    <span className="text-xs text-muted-foreground w-28">Coste/hora:</span>
                                                     <span className="text-sm font-medium text-foreground">{employee.costo_por_hora != null ? `${employee.costo_por_hora} € / hora` : '—'}</span>
                                                 </div>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     <Clock className="w-4 h-4 text-primary/70" />
+                                                    <span className="text-xs text-muted-foreground w-28">Antigüedad:</span>
                                                     <span className="text-sm font-medium text-foreground">{getSeniorityText(employee.fecha_incorporacion) || '—'}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <CreditCard className="w-4 h-4 text-primary/70" />
+                                                    <span className="text-xs text-muted-foreground w-28">Cuenta bancaria:</span>
+                                                    <span className="text-sm font-medium text-foreground break-all">{employee.numero_cuenta || '—'}</span>
                                                 </div>
                                             </div>
                                             {isAdminOrEncargado && (
                                                 <div className="space-y-1">
-                                                    <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Gestión de Estado</Label>
+                                                    <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Estado</Label>
                                                     <Select
                                                         id="estado-empleado"
                                                         value={getCurrentStateValue(employee)}
@@ -630,10 +660,6 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                 )}
                             </TabsContent>
 
-                            <TabsContent value="documentacion" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                                <FileManager bucketName="empleados_docs" prefix={employee.id} canEdit={isAdminOrEncargado} />
-                            </TabsContent>
-
                             <TabsContent value="documentos_v2" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                 <EmployeeFolders empleadoId={employee.id} />
                             </TabsContent>
@@ -669,16 +695,18 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                 {/* Only HorasExtras2View embedded here, replacing previous duplicate logic */}
                                 <HorasExtras2View employeeId={employee.id} isEmbedded={true} />
                             </TabsContent>
-                            {isAdminOrEncargado && (
+                            {(isAdminOrEncargado || user?.id === employee.auth_user_id) && (
                                 <>
-                                    <TabsContent value="habilidades" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                                        <EmployeeRendimientoTab employeeId={employee.id} isAdminOrEncargado={isAdminOrEncargado} />
-                                    </TabsContent>
-                                    <TabsContent value="anticipos" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                    {isAdmin && (
+                                        <TabsContent value="habilidades" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                            <EmployeeRendimientoTab employeeId={employee.id} isAdminOrEncargado={isAdminOrEncargado} />
+                                        </TabsContent>
+                                    )}
+                                    {isAdminOrEncargado && <TabsContent value="anticipos" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                         <EmployeeAnticiposTab employee={employee} sessionRole={sessionRole} currentUser={user} />
-                                    </TabsContent>
+                                    </TabsContent>}
                                     <TabsContent value="embargos" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                                        <EmployeeEmbargosTab employee={employee} sessionRole={sessionRole} navigate={navigate} />
+                                        <EmployeeEmbargosTab employee={employee} sessionRole={sessionRole} currentUser={user} navigate={navigate} />
                                     </TabsContent>
                                 </>
                             )}

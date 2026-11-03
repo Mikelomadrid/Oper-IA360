@@ -18,6 +18,7 @@ const EmployeeEditModal = ({ employee, isOpen, onClose, onSuccess }) => {
         nombre: '',
         apellidos: '',
         nombre_completo: '',
+        categoria: '',
         dni_nie: '',
         fecha_nacimiento: '',
         numero_seguridad_social: '',
@@ -39,6 +40,7 @@ const EmployeeEditModal = ({ employee, isOpen, onClose, onSuccess }) => {
                 nombre: employee.nombre || '',
                 apellidos: employee.apellidos || '',
                 nombre_completo: employee.nombre_completo || '',
+                categoria: employee.categoria || '',
                 dni_nie: employee.dni_nie || '',
                 fecha_nacimiento: employee.fecha_nacimiento || '',
                 numero_seguridad_social: employee.numero_seguridad_social || '',
@@ -84,6 +86,7 @@ const EmployeeEditModal = ({ employee, isOpen, onClose, onSuccess }) => {
                 nombre: formData.nombre,
                 apellidos: formData.apellidos,
                 nombre_completo: formData.nombre_completo || null,
+                categoria: formData.categoria || null,
                 dni_nie: formData.dni_nie || null,
                 fecha_nacimiento: formData.fecha_nacimiento || null,
                 numero_seguridad_social: formData.numero_seguridad_social || null,
@@ -178,6 +181,16 @@ const EmployeeEditModal = ({ employee, isOpen, onClose, onSuccess }) => {
                                     value={formData.nombre_completo}
                                     onChange={handleInputChange}
                                     placeholder="Ej: Francisco Javier García López"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="categoria">Categoría</Label>
+                                <Input
+                                    id="categoria"
+                                    name="categoria"
+                                    value={formData.categoria}
+                                    onChange={handleInputChange}
+                                    placeholder="Ej: Oficial de 1ª, Técnico especialista"
                                 />
                             </div>
                             <div className="grid grid-cols-2 gap-4">

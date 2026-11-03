@@ -21,8 +21,6 @@ import FontaneriaModal from '@/components/FontaneriaModal';
 
 const TARIFA_FONTANERIA = 15;
 
-const FRAN_EMAIL = 'fran@orkaled.com';
-
 const months = [
   { value: '1', label: 'Enero' }, { value: '2', label: 'Febrero' },
   { value: '3', label: 'Marzo' }, { value: '4', label: 'Abril' },
@@ -38,15 +36,17 @@ const formatCurrency = (val) =>
 /**
  * FontaneriaSeccion
  * Bloque de horas de fontanería para añadir al final de HorasExtras2View.
- * Visible solo para fran@orkaled.com y admins.
+ * Visible solo para administradores y encargados.
  */
 export default function FontaneriaSeccion() {
-  const { user, sessionRole } = useAuth();
-  const isAdmin = sessionRole?.rol === 'admin';
-  const isFran = user?.email?.toLowerCase() === FRAN_EMAIL;
+  const { sessionRole } = useAuth();
+  const canView = ['admin', 'encargado'].includes(sessionRole?.rol);
+  if (!canView) return null;
+  return <FontaneriaSeccionContent canManage={sessionRole?.rol === 'admin'} />;
+}
 
-  // Solo visible para Fran o admins
-  if (!isFran && !isAdmin) return null;
+function FontaneriaSeccionContent({ canManage }) {
+  const isAdmin = canManage;
 
   const currentYear = new Date().getFullYear();
   const years = Array.from({ length: 5 }, (_, i) => String(currentYear - 2 + i));

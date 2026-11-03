@@ -81,7 +81,11 @@ const GastosGenerales = ({ navigate }) => {
     iva_percentage: '21',
     estado_pago: 'pendiente_pago',
     numero_referencia: '',
-    archivo: null
+    archivo: null,
+    material_referencia: '',
+    material_descripcion: '',
+    material_cantidad: '',
+    material_precio_unitario: ''
   });
 
   const [gastoForm, setGastoForm] = useState({
@@ -274,7 +278,11 @@ const GastosGenerales = ({ navigate }) => {
       iva_percentage: '21',
       estado_pago: 'pendiente_pago',
       numero_referencia: '',
-      archivo: null
+      archivo: null,
+      material_referencia: '',
+      material_descripcion: '',
+      material_cantidad: '',
+      material_precio_unitario: ''
     });
     setGastoForm({
       fecha: format(new Date(), 'yyyy-MM-dd'),
@@ -352,7 +360,11 @@ const GastosGenerales = ({ navigate }) => {
         iva_percentage: (data.iva * 100).toString(),
         estado_pago: data.estado_pago,
         numero_referencia: data.numero_referencia || '',
-        archivo: fileUrl
+        archivo: fileUrl,
+        material_referencia: '',
+        material_descripcion: '',
+        material_cantidad: '',
+        material_precio_unitario: ''
       });
     } else {
       let fileUrl = null;
@@ -402,6 +414,83 @@ const GastosGenerales = ({ navigate }) => {
       const bruto = parseFloat(facturaForm.monto_bruto);
       const percentage = parseFloat(facturaForm.iva_percentage) || 0;
       const ivaRate = percentage / 100;
+
+      const materialFields = [
+        facturaForm.material_referencia,
+        facturaForm.material_descripcion,
+        facturaForm.material_cantidad,
+        facturaForm.material_precio_unitario,
+      ];
+      const hasMaterialData = materialFields.some((value) => String(value || '').trim() !== '');
+      if (hasMaterialData && !facturaForm.proyecto_id) {
+        throw new Error('Selecciona una obra para asignar el material.');
+      }
+      if (hasMaterialData && materialFields.some((value) => String(value || '').trim() === '')) {
+        throw new Error('Completa referencia, descripción, cantidad y precio unitario del material.');
+      }
+
+      const materialCantidad = Number(facturaForm.material_cantidad);
+      const materialPrecio = Number(facturaForm.material_precio_unitario);
+      const materialBase = Math.round(materialCantidad * materialPrecio * 100) / 100;
+      if (hasMaterialData && (!Number.isFinite(materialCantidad) || materialCantidad <= 0 || !Number.isFinite(materialPrecio) || materialPrecio < 0)) {
+        throw new Error('La cantidad debe ser mayor que cero y el precio unitario no puede ser negativo.');
+      }
+      if (hasMaterialData && Math.abs(materialBase - bruto) > 0.02) {
+        throw new Error(`La línea de material (${materialBase.toFixed(2)} €) debe coincidir con la base imponible (${bruto.toFixed(2)} €).`);
+      }
+
+      if (hasMaterialData && !editingId) {
+        const [{ data: empleado, error: empleadoError }, { data: proveedor, error: proveedorError }] = await Promise.all([
+          supabase.from('empleados').select('id').eq('auth_user_id', user?.id).maybeSingle(),
+          supabase.from('proveedores').select('nombre, cif').eq('id', facturaForm.proveedor_id).single(),
+        ]);
+        if (empleadoError) throw empleadoError;
+        if (proveedorError) throw proveedorError;
+        if (!empleado?.id) throw new Error('No se ha podido relacionar tu sesión con un empleado.');
+
+        const { data: distributionResult, error: distributionError } = await supabase.rpc('ia360_registrar_factura_distribuida_desde_ocr', {
+          p_subido_por: empleado.id,
+          p_proveedor_id: facturaForm.proveedor_id,
+          // Sentinel accepted by the existing intake path for a manual, non-OCR entry.
+          p_imagen_url: `manual://facturas/${facturaForm.numero_factura || Date.now()}`,
+          p_proveedor_nombre: proveedor.nombre,
+          p_proveedor_nif: proveedor.cif,
+          p_numero_factura: facturaForm.numero_factura,
+          p_fecha_factura: facturaForm.fecha_emision,
+          p_base_imponible: bruto,
+          p_iva_importe: Math.round(bruto * ivaRate * 100) / 100,
+          p_total: Math.round((bruto + bruto * ivaRate) * 100) / 100,
+          p_json_ocr: { origen: 'registro_manual', concepto: facturaForm.concepto || null },
+          p_lineas: [{
+            numero_linea: 1,
+            referencia: facturaForm.material_referencia.trim(),
+            descripcion: facturaForm.material_descripcion.trim(),
+            categoria: 'materiales',
+            cantidad: materialCantidad,
+            unidad: 'ud',
+            precio_unitario: materialPrecio,
+            base_linea: materialBase,
+            total_linea: materialBase,
+            es_material: true,
+            asignaciones: [{ destino_tipo: 'obra', obra_id: facturaForm.proyecto_id, cantidad: materialCantidad }],
+          }],
+          p_confianza_ocr: null,
+          p_motor_ocr: 'manual',
+        });
+        if (distributionError) throw distributionError;
+        if (distributionResult?.gasto_id && facturaForm.estado_pago !== 'pendiente_pago') {
+          const { error: statusError } = await supabase
+            .from('gastos')
+            .update({ estado_pago: facturaForm.estado_pago })
+            .eq('id', distributionResult.gasto_id);
+          if (statusError) throw statusError;
+        }
+
+        toast({ title: 'Éxito', description: 'Factura y material asignados correctamente a la obra.' });
+        setIsModalOpen(false);
+        fetchGastos();
+        return;
+      }
 
       const payload = {
         fecha_emision: facturaForm.fecha_emision,
@@ -544,18 +633,9 @@ const GastosGenerales = ({ navigate }) => {
     if (!gastoToDelete) return;
     try {
       if (gastoToDelete._type === 'factura') {
-        const { error: unlinkError } = await supabase
-          .from('detalles_solicitud')
-          .update({ gasto_id: null })
-          .eq('gasto_id', gastoToDelete.id);
-
-        if (unlinkError) throw unlinkError;
-
-        const { error: deleteError } = await supabase
-          .from('gastos')
-          .delete()
-          .eq('id', gastoToDelete.id);
-
+        const { error: deleteError } = await supabase.rpc('admin_eliminar_gasto', {
+          p_gasto_id: gastoToDelete.id,
+        });
         if (deleteError) throw deleteError;
       } else {
         const { error } = await supabase.from('gastos_generales').delete().eq('id', gastoToDelete.id);
@@ -880,6 +960,35 @@ const GastosGenerales = ({ navigate }) => {
                     initialLabel={initialProjectLabel}
                   />
                 </div>
+
+                {facturaForm.proyecto_id && !editingId && (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900 dark:bg-blue-950/20">
+                    <div className="mb-3">
+                      <Label className="text-sm font-semibold">Material de la factura (opcional)</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Si lo completas, la compra quedará trazada por unidades y aparecerá en el balance de materiales de la obra.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-2">
+                        <Label>Referencia</Label>
+                        <Input name="material_referencia" value={facturaForm.material_referencia} onChange={handleFacturaChange} placeholder="Código del material" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Descripción</Label>
+                        <Input name="material_descripcion" value={facturaForm.material_descripcion} onChange={handleFacturaChange} placeholder="Ej. YESO BLANCO" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Cantidad</Label>
+                        <Input name="material_cantidad" type="number" min="0.001" step="0.001" value={facturaForm.material_cantidad} onChange={handleFacturaChange} placeholder="0" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Precio unitario</Label>
+                        <Input name="material_precio_unitario" type="number" min="0" step="0.0001" value={facturaForm.material_precio_unitario} onChange={handleFacturaChange} placeholder="0,00 €" />
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">

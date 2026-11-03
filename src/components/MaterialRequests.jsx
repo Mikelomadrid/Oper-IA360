@@ -231,6 +231,7 @@ const UpdateRequestStatus = ({ request, onUpdated }) => {
                                 <SelectItem value="pendiente">Pendiente</SelectItem>
                                 <SelectItem value="gestionada">Gestionada</SelectItem>
                                 <SelectItem value="entregada">Entregada</SelectItem>
+                                <SelectItem value="recibido">Recibido</SelectItem>
                                 <SelectItem value="cancelada">Cancelada</SelectItem>
                             </SelectContent>
                         </Select>

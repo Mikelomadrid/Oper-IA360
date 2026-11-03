@@ -1,6 +1,6 @@
 import path from 'node:path';
 import react from '@vitejs/plugin-react';
-import { createLogger, defineConfig } from 'vite';
+import { createLogger, defineConfig, loadEnv } from 'vite';
 import inlineEditPlugin from './plugins/visual-editor/vite-plugin-react-inline-editor.js';
 import editModeDevPlugin from './plugins/visual-editor/vite-plugin-edit-mode.js';
 import iframeRouteRestorationPlugin from './plugins/vite-plugin-iframe-route-restoration.js';
@@ -235,7 +235,8 @@ logger.error = (msg, options) => {
 
 export default defineConfig(({ mode }) => {
 	const isDev = mode !== 'production';
-	const supabaseProxyTarget = process.env.SUPABASE_PROXY_TARGET;
+	const env = loadEnv(mode, process.cwd(), '');
+	const supabaseProxyTarget = env.SUPABASE_PROXY_TARGET || env.VITE_SUPABASE_URL;
 	const supabaseProxy = supabaseProxyTarget
 		? {
 			'/backend-dev': {

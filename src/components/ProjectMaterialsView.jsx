@@ -35,6 +35,8 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
     const [expenseToDelete, setExpenseToDelete] = useState(null);
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
     const [providerReturnExpense, setProviderReturnExpense] = useState(null);
+    const [providerReturnToCancel, setProviderReturnToCancel] = useState(null);
+    const [cancelReturnDialogOpen, setCancelReturnDialogOpen] = useState(false);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
 
@@ -270,6 +272,31 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
         navigate(`/administracion/gastos/scanner?devolucionProveedorId=${encodeURIComponent(returnId)}&returnTo=${encodeURIComponent(returnTo)}`);
     };
 
+    const handleCancelProviderReturn = (gasto) => {
+        setProviderReturnToCancel(gasto);
+        setCancelReturnDialogOpen(true);
+    };
+
+    const confirmCancelProviderReturn = async () => {
+        const returnId = providerReturnToCancel?.devolucion_pendiente?.id;
+        if (!returnId) return;
+
+        try {
+            const { error } = await supabase.rpc('ia360_cancelar_devolucion_proveedor', {
+                p_devolucion_id: returnId,
+                p_observaciones: 'Devolución anulada desde la obra.',
+            });
+            if (error) throw error;
+            toast({ title: 'Devolución anulada', description: 'Las unidades y el coste vuelven a quedar disponibles en la obra.' });
+            await handleProviderReturnSuccess();
+        } catch (err) {
+            toast({ variant: 'destructive', title: 'No se pudo anular la devolución', description: err.message });
+        } finally {
+            setCancelReturnDialogOpen(false);
+            setProviderReturnToCancel(null);
+        }
+    };
+
     if (isLoading) {
         return <div className="flex justify-center p-12"><Loader2 className="h-8 w-8 animate-spin text-primary/50" /></div>;
     }
@@ -346,6 +373,7 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                         onDelete={handleDeleteClick} 
                         onReturnToProvider={setProviderReturnExpense}
                         onUploadCreditNote={handleUploadCreditNote}
+                        onCancelProviderReturn={handleCancelProviderReturn}
                         canManage={canManage}
                     />
                 </CardContent>
@@ -382,6 +410,23 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                         <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">
                             Eliminar
                         </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
+            <AlertDialog open={cancelReturnDialogOpen} onOpenChange={setCancelReturnDialogOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>¿Anular esta devolución?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            La devolución pendiente de abono
+                            {providerReturnToCancel && <span className="font-bold"> {providerReturnToCancel.numero_factura}</span>}
+                            {' '}dejará de descontar material de la obra y volverá a estar disponible para devolverlo correctamente.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmCancelProviderReturn}>Anular devolución</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

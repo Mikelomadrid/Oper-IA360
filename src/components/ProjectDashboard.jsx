@@ -13,7 +13,7 @@ import ChartPlaceholder from '@/components/ChartPlaceholder';
 import { formatDate } from '@/lib/utils';
 import { useInformeObraPDF } from '@/components/useInformeObraPDF';
 import LeadInheritedInfo from '@/components/LeadInheritedInfo';
-import { fetchProjectMaterialBaseTotal } from '@/lib/projectMaterialCosts';
+import { fetchProjectMaterialNetTotal } from '@/lib/projectMaterialCosts';
 import ProjectProfitabilityForecast from '@/components/ProjectProfitabilityForecast';
 
 const StatCard = ({ title, value, icon, description, trend, trendValue, colorClass }) => {
@@ -106,7 +106,7 @@ const ProjectDashboard = ({ projectId, project }) => {
                     .eq('proyecto_id', projectId)
                     .maybeSingle();
 
-                const materialBasePromise = fetchProjectMaterialBaseTotal(projectId);
+                const materialBasePromise = fetchProjectMaterialNetTotal(projectId);
 
                 const extrasPromise = supabase
                     .from('proyecto_trabajos_extra')

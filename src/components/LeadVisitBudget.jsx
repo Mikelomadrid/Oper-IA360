@@ -1188,7 +1188,10 @@ export default function LeadVisitBudget({ leadId, canEdit, lead, navigate }) {
       if (sessionError || !sessionData?.session?.access_token) {
         throw new Error('La sesión no está disponible. Vuelve a iniciar sesión e inténtalo de nuevo.');
       }
-      const response = await fetch(`${supabase.supabaseUrl}/functions/v1/analyze-visit-notes`, {
+      const analyzerUrl = import.meta.env.DEV
+        ? '/backend-dev/functions/v1/analyze-visit-notes'
+        : `${supabase.supabaseUrl}/functions/v1/analyze-visit-notes`;
+      const response = await fetch(analyzerUrl, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${sessionData.session.access_token}`,

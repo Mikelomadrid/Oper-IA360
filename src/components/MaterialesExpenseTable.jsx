@@ -30,7 +30,7 @@ const formatDate = (dateString) => {
     });
 };
 
-const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onReturnToProvider, onUploadCreditNote, canManage = false }) => {
+const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onReturnToProvider, onUploadCreditNote, onCancelProviderReturn, canManage = false }) => {
   const { visorFactura, abrirFacturaEscaneada, cerrarVisor, paginaSiguiente, paginaAnterior, irAPagina } = useFacturaViewer();
 
   if (!gastos || gastos.length === 0) {
@@ -128,16 +128,28 @@ const MaterialesExpenseTable = ({ gastos = [], onEdit, onDelete, onReturnToProvi
                     </Button>
                   )}
                   {canManage && gasto.devolucion_pendiente?.id && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1 border-amber-300 bg-amber-50 px-2 text-[11px] text-amber-900 hover:bg-amber-100 hover:text-amber-950"
-                      onClick={() => onUploadCreditNote?.(gasto)}
-                      title="Subir la factura de abono de esta devolución"
-                    >
-                      <FileUp className="h-3.5 w-3.5" />
-                      <span className="hidden xl:inline">Subir abono</span>
-                    </Button>
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 border-amber-300 bg-amber-50 px-2 text-[11px] text-amber-900 hover:bg-amber-100 hover:text-amber-950"
+                        onClick={() => onUploadCreditNote?.(gasto)}
+                        title="Subir la factura de abono de esta devolución"
+                      >
+                        <FileUp className="h-3.5 w-3.5" />
+                        <span className="hidden xl:inline">Subir abono</span>
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 border-slate-300 px-2 text-[11px] text-slate-700 hover:bg-slate-100"
+                        onClick={() => onCancelProviderReturn?.(gasto)}
+                        title="Anular esta devolución pendiente"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        <span className="hidden xl:inline">Anular devolución</span>
+                      </Button>
+                    </>
                   )}
                   {!gasto.solo_lectura_distribuida && (
                     <>
