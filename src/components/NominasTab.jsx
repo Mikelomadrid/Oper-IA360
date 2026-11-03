@@ -148,7 +148,32 @@ export default function NominasTab() {
       const anticMap = {};
       (anticRaw || []).forEach(r => { anticMap[r.empleado_id] = (anticMap[r.empleado_id] || 0) + Number(r.cantidad || 0); });
 
-      // 5. Bajas propias (tabla nóminas)
+      // 5. Embargos: plan notificado y retenciones del periodo.
+      // empleado_id en embargos es empleados.auth_user_id.
+      const { data: embargosRaw } = await supabase
+        .from("embargos")
+        .select("empleado_id, numero_cuotas, importe_cuota, importe_pendiente, estado, embargos_retenciones(fecha, importe)");
+      const embargoMap = {};
+      (embargosRaw || []).forEach(e => {
+        const empleado = empleados.find(emp => emp.auth_user_id === e.empleado_id);
+        if (!empleado) return;
+        const retenciones = e.embargos_retenciones || [];
+        const retenidoMes = retenciones
+          .filter(r => r.fecha >= fechaInicio && r.fecha <= fechaFin)
+          .reduce((s, r) => s + Number(r.importe || 0), 0);
+        const cuotasPagadas = retenciones.length;
+        if (!embargoMap[empleado.id]) embargoMap[empleado.id] = [];
+        embargoMap[empleado.id].push({
+          numeroCuotas: Number(e.numero_cuotas || 0),
+          importeCuota: Number(e.importe_cuota || 0),
+          cuotasPagadas,
+          cuotasPendientes: Math.max(Number(e.numero_cuotas || 0) - cuotasPagadas, 0),
+          importeMes: retenidoMes || (e.estado === "activo" ? Number(e.importe_cuota || 0) : 0),
+          importePendiente: Number(e.importe_pendiente || 0),
+        });
+      });
+
+      // 6. Bajas propias (tabla nóminas)
       const { data: bajasRaw } = await supabase
         .from("bajas_empleados").select("empleado_id, fecha_inicio, fecha_fin, dias_naturales, tipo_baja");
       const bajasMap = {};
@@ -160,7 +185,7 @@ export default function NominasTab() {
         }
       });
 
-      // 6. Ausencias del mes (vacaciones, baja, ausencia injustificada)
+      // 7. Ausencias del mes (vacaciones, baja, ausencia injustificada)
       const { data: ausenciasRaw } = await supabase
         .from("ausencias_empleados")
         .select("empleado_id, fecha_inicio, fecha_fin, tipo")
@@ -175,7 +200,7 @@ export default function NominasTab() {
         }
       });
 
-      // 7. Vacaciones aprobadas (vacaciones_solicitudes)
+      // 8. Vacaciones aprobadas (vacaciones_solicitudes)
       const { data: vacRaw } = await supabase
         .from("vacaciones_solicitudes")
         .select("empleado_id, fecha_inicio, fecha_fin, dias_solicitados, estado")
@@ -191,12 +216,14 @@ export default function NominasTab() {
         }
       });
 
-      // 8. Construir resumen por empleado
+      // 9. Construir resumen por empleado
       const filas = empleados.map(emp => {
         const sueldo    = sueldoMap[emp.id] || null;
         const horas     = horasMap[emp.id]  || { normales: 0, extras: 0, festivo: 0 };
         const fontHoras = fontMap[emp.id]   || 0;
         const anticipo  = anticMap[emp.id]  || 0;
+        const embargos  = embargoMap[emp.id] || [];
+        const importeEmbargo = embargos.reduce((s, e) => s + e.importeMes, 0);
         const bajasEmp  = bajasMap[emp.id]  || [];
         const diasBaja  = bajasEmp.reduce((s, b) => s + b.dias, 0);
 
@@ -218,13 +245,14 @@ export default function NominasTab() {
         const importeFontaneria = fontHoras * TARIFA_FONTANERIA;
         const plusVol    = sueldo ? Number(sueldo.plus_voluntario || 0) : 0;
         const sueldoBase = sueldo ? Number(sueldo.sueldo_neto     || 0) : 0;
-        const totalBruto = sueldoBase + plusVol + importeExtraLab + importeExtraFest + importeFontaneria - anticipo;
+        const totalBruto = sueldoBase + plusVol + importeExtraLab + importeExtraFest + importeFontaneria - anticipo - importeEmbargo;
 
         return {
           ...emp,
           horas, fontHoras,
           importeExtraLab, importeExtraFest, importeFontaneria,
           plusVol, sueldoBase, anticipo,
+          embargos, importeEmbargo,
           bajasEmp, diasBaja,
           diasVacaciones,
           diasBajaAus,
@@ -356,6 +384,7 @@ export default function NominasTab() {
                 <div class="linea"><span class="label">Sueldo neto base</span><span class="valor">${formatEur(emp.sueldoBase)}</span></div>
                 <div class="linea"><span class="label">Plus voluntario</span><span class="valor ${emp.plusVol > 0 ? "verde" : ""}">${formatEur(emp.plusVol)}</span></div>
                 <div class="linea"><span class="label">Anticipos</span><span class="valor ${emp.anticipo > 0 ? "rojo" : ""}">${emp.anticipo > 0 ? "− " : ""}${formatEur(emp.anticipo)}</span></div>
+                ${emp.importeEmbargo > 0 ? `<div class="linea"><span class="label">Embargos (${emp.embargos.reduce((s, e) => s + e.cuotasPendientes, 0)} cuotas pendientes)</span><span class="valor rojo">− ${formatEur(emp.importeEmbargo)}</span></div>` : ""}
               </div>
               <div>
                 <div class="linea"><span class="label">H. extras laborables (${formatHoras(emp.horas.extras)})</span><span class="valor naranja">${formatEur(emp.importeExtraLab)}</span></div>
@@ -363,6 +392,13 @@ export default function NominasTab() {
                 ${emp.fontHoras > 0 ? `<div class="linea"><span class="label">Plus fontanería (${formatHoras(emp.fontHoras)})</span><span class="valor verde">${formatEur(emp.importeFontaneria)}</span></div>` : ""}
               </div>
             </div>
+
+            ${emp.embargos.length ? `
+            <div class="seccion-label">Plan de embargos</div>
+            <div class="grid-2">
+              ${emp.embargos.map((e, i) => `<div class="linea"><span class="label">Expediente ${i + 1} · ${e.numeroCuotas > 0 ? `${e.cuotasPendientes} cuotas pendientes` : "plan sin cuotas"}</span><span class="valor rojo">${e.importeCuota > 0 ? `${formatEur(e.importeCuota)}/cuota` : "—"}</span></div>`).join("")}
+            </div>
+            ` : ""}
 
             ${tieneAusencias ? `
             <div class="seccion-label">Ausencias del mes</div>
@@ -466,6 +502,7 @@ export default function NominasTab() {
                       <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 600 }}>H. extras</th>
                       <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 600 }}>Plus font.</th>
                       <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 600 }}>Anticipos</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 600 }}>Embargos</th>
                       <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#93c5fd" }}>🏖 Vac.</th>
                       <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#fca5a5" }}>⚕ Baja</th>
                       <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#fcd34d" }}>⚠ Aus.</th>
@@ -492,6 +529,10 @@ export default function NominasTab() {
                         <td style={{ padding: "10px 12px", textAlign: "right", color: emp.anticipo > 0 ? "#e63946" : "#ccc" }}>
                           {emp.anticipo > 0 ? `− ${formatEur(emp.anticipo)}` : "—"}
                         </td>
+                        <td style={{ padding: "10px 12px", textAlign: "right", color: emp.importeEmbargo > 0 ? "#e63946" : "#ccc" }}>
+                          {emp.importeEmbargo > 0 ? `− ${formatEur(emp.importeEmbargo)}` : "—"}
+                          {emp.embargos.length > 0 && <div style={{ fontSize: "10px", color: "#888" }}>{emp.embargos.reduce((s, e) => s + e.cuotasPendientes, 0)} cuotas</div>}
+                        </td>
                         {/* Vacaciones */}
                         <td style={{ padding: "10px 12px", textAlign: "center" }}>
                           {emp.diasVacaciones > 0
@@ -516,7 +557,7 @@ export default function NominasTab() {
                       </tr>
                     ))}
                     <tr style={{ background: "#1a1a2e", color: "white" }}>
-                      <td style={{ padding: "12px", fontWeight: 700 }} colSpan={9}>TOTAL MASA SALARIAL</td>
+                      <td style={{ padding: "12px", fontWeight: 700 }} colSpan={10}>TOTAL MASA SALARIAL</td>
                       <td style={{ padding: "12px", textAlign: "right", fontWeight: 700, fontSize: "15px" }}>
                         {formatEur(resumen.reduce((s, e) => s + e.totalBruto, 0))}
                       </td>

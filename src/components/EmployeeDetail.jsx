@@ -487,7 +487,7 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                     {(isAdminOrEncargado || user?.id === employee.auth_user_id) && (
                                         <>
                                             {isAdmin && <TabsTrigger value="habilidades">Rendimiento</TabsTrigger>}
-                                            {isAdminOrEncargado && <TabsTrigger value="anticipos">
+                                            {(isAdminOrEncargado || user?.id === employee.auth_user_id) && <TabsTrigger value="anticipos">
                                                 <CreditCard className="w-4 h-4 mr-2 text-green-600" />
                                                 Anticipos
                                             </TabsTrigger>}
@@ -702,7 +702,7 @@ const EmployeeDetail = ({ employeeId, navigate }) => {
                                             <EmployeeRendimientoTab employeeId={employee.id} isAdminOrEncargado={isAdminOrEncargado} />
                                         </TabsContent>
                                     )}
-                                    {isAdminOrEncargado && <TabsContent value="anticipos" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                    {(isAdminOrEncargado || user?.id === employee.auth_user_id) && <TabsContent value="anticipos" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                         <EmployeeAnticiposTab employee={employee} sessionRole={sessionRole} currentUser={user} />
                                     </TabsContent>}
                                     <TabsContent value="embargos" className="pt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">

@@ -35,7 +35,7 @@ import { formatCurrency, fmtMadrid } from '@/lib/utils';
 import { toast } from '@/components/ui/use-toast';
 import { Textarea } from '@/components/ui/textarea';
 
-const EmployeeAnticiposTab = ({ employee, sessionRole }) => {
+const EmployeeAnticiposTab = ({ employee, sessionRole, currentUser }) => {
   const [anticipos, setAnticipos] = useState([]);
   const [loading, setLoading] = useState(true);
   
@@ -55,6 +55,7 @@ const EmployeeAnticiposTab = ({ employee, sessionRole }) => {
   const [formData, setFormData] = useState({ cantidad: '', motivo: '' });
 
   const isAdminOrEncargado = ['admin', 'encargado'].includes(sessionRole?.rol);
+  const canView = isAdminOrEncargado || currentUser?.id === employee?.auth_user_id;
 
   const fetchData = async () => {
     if (!employee?.auth_user_id) return;
@@ -216,13 +217,13 @@ const EmployeeAnticiposTab = ({ employee, sessionRole }) => {
     return <Badge className={colors[status]} variant="secondary">{status}</Badge>;
   };
 
-  if (!isAdminOrEncargado) return <div className="p-4 text-muted-foreground">No autorizado.</div>;
+  if (!canView) return <div className="p-4 text-muted-foreground">No autorizado.</div>;
 
   return (
     <div className="space-y-6 pt-4">
       <div className="flex justify-between items-center">
         <h3 className="text-lg font-medium">Anticipos de Nómina</h3>
-        <Button onClick={openCreate} size="sm"><Plus className="mr-2 h-4 w-4" /> Registrar</Button>
+        {isAdminOrEncargado && <Button onClick={openCreate} size="sm"><Plus className="mr-2 h-4 w-4" /> Registrar</Button>}
       </div>
 
       {loading ? <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div> : (
@@ -249,13 +250,13 @@ const EmployeeAnticiposTab = ({ employee, sessionRole }) => {
                       {item.justificante_url ? (
                         <a href={item.justificante_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline flex items-center text-xs"><Eye className="w-3 h-3 mr-1"/>Ver</a>
                       ) : <span className="text-xs text-muted-foreground">No hay</span>}
-                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { setSelectedAnticipo(item); setIsUploadOpen(true); }}><Upload className="w-3 h-3" /></Button>
+                      {isAdminOrEncargado && <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { setSelectedAnticipo(item); setIsUploadOpen(true); }}><Upload className="w-3 h-3" /></Button>}
                     </div>
                   </TableCell>
                   <TableCell>{getBadge(item.estado)}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(item)}><Pencil className="w-3.5 h-3.5" /></Button>
+                      {isAdminOrEncargado && <><Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(item)}><Pencil className="w-3.5 h-3.5" /></Button>
                       <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => { setSelectedAnticipo(item); setIsDeleteOpen(true); }}><Trash2 className="w-3.5 h-3.5" /></Button>
                       <div className="w-px h-4 bg-border mx-1" />
                       {item.estado === 'pendiente' && (
@@ -266,7 +267,7 @@ const EmployeeAnticiposTab = ({ employee, sessionRole }) => {
                       )}
                       {item.estado === 'confirmado' && (
                         <Button size="sm" variant="ghost" className="h-7 px-2 text-green-600" onClick={() => handleMarkDescontado(item.id)}><Check className="w-3.5 h-3.5" /></Button>
-                      )}
+                      )}</>}
                     </div>
                   </TableCell>
                 </TableRow>

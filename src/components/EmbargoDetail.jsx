@@ -571,6 +571,12 @@ const EmbargoDetail = ({ embargoId, navigate }) => {
               <div className="font-medium text-base">{formatCurrency(embargo.importe_total)}</div>
             </div>
             <div>
+              <Label className="text-xs text-muted-foreground uppercase">Plan de cuotas</Label>
+              <div className="font-medium text-base">
+                {embargo.numero_cuotas ? `${embargo.numero_cuotas} cuotas · ${formatCurrency(embargo.importe_cuota)} cada una` : 'No informado'}
+              </div>
+            </div>
+            <div>
               <Label className="text-xs text-muted-foreground uppercase">Pendiente</Label>
               <div
                 className={`font-bold text-xl flex items-center gap-1 ${

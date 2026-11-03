@@ -35,6 +35,8 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, currentUser, navigate }) =
     organismo: '',
     motivo: '',
     importe_total: '',
+    numero_cuotas: '',
+    importe_cuota: '',
   });
 
   const isAdmin = sessionRole?.rol === 'admin';
@@ -77,8 +79,10 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, currentUser, navigate }) =
     e.preventDefault();
     const organismo = newEmbargo.organismo.trim();
     const importeTotal = Number.parseFloat(String(newEmbargo.importe_total).replace(',', '.'));
+    const numeroCuotas = Number.parseInt(newEmbargo.numero_cuotas, 10);
+    const importeCuota = Number.parseFloat(String(newEmbargo.importe_cuota).replace(',', '.'));
 
-    if (!organismo || !Number.isFinite(importeTotal) || importeTotal <= 0) {
+    if (!organismo || !Number.isFinite(importeTotal) || importeTotal <= 0 || !Number.isInteger(numeroCuotas) || numeroCuotas <= 0 || !Number.isFinite(importeCuota) || importeCuota <= 0) {
       toast({ variant: 'destructive', title: 'Error', description: 'Campos obligatorios faltantes' });
       return;
     }
@@ -90,18 +94,20 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, currentUser, navigate }) =
 
     setCreating(true);
     try {
-      const { error } = await supabase.rpc('api_crear_embargo_v1', {
+      const { error } = await supabase.rpc('api_crear_embargo_v2', {
         empleado: employee.auth_user_id,
         organismo,
         motivo: newEmbargo.motivo || '',
-        importe_total: importeTotal
+        importe_total: importeTotal,
+        numero_cuotas: numeroCuotas,
+        importe_cuota: importeCuota
       });
 
       if (error) throw error;
 
       toast({ title: 'Éxito', description: 'Embargo registrado correctamente.' });
       setIsCreateOpen(false);
-      setNewEmbargo({ organismo: '', motivo: '', importe_total: '' });
+      setNewEmbargo({ organismo: '', motivo: '', importe_total: '', numero_cuotas: '', importe_cuota: '' });
       fetchEmbargos();
     } catch (error) {
       console.error('Error creating embargo:', error);
@@ -202,6 +208,10 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, currentUser, navigate }) =
                 onChange={e => setNewEmbargo({...newEmbargo, importe_total: e.target.value})}
                 required
               />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label htmlFor="numero-cuotas">Número de cuotas</Label><Input id="numero-cuotas" type="number" min="1" step="1" placeholder="Ej: 8" value={newEmbargo.numero_cuotas} onChange={e => setNewEmbargo({...newEmbargo, numero_cuotas: e.target.value})} required /></div>
+              <div className="space-y-2"><Label htmlFor="importe-cuota">Importe por cuota (€)</Label><Input id="importe-cuota" type="number" min="0.01" step="0.01" placeholder="Ej: 250.00" value={newEmbargo.importe_cuota} onChange={e => setNewEmbargo({...newEmbargo, importe_cuota: e.target.value})} required /></div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="motivo">Motivo / Referencia</Label>
