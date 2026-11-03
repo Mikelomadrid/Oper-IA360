@@ -82,8 +82,8 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, currentUser, navigate }) =
     const numeroCuotas = Number.parseInt(newEmbargo.numero_cuotas, 10);
     const importeCuota = Number.parseFloat(String(newEmbargo.importe_cuota).replace(',', '.'));
 
-    if (!organismo || !Number.isFinite(importeTotal) || importeTotal <= 0 || !Number.isInteger(numeroCuotas) || numeroCuotas <= 0 || !Number.isFinite(importeCuota) || importeCuota <= 0) {
-      toast({ variant: 'destructive', title: 'Error', description: 'Campos obligatorios faltantes' });
+    if (!organismo || !Number.isFinite(importeTotal) || importeTotal <= 0 || !Number.isInteger(numeroCuotas) || numeroCuotas <= 0 || !Number.isFinite(importeCuota) || importeCuota <= 0 || Math.abs((numeroCuotas * importeCuota) - importeTotal) > 0.01) {
+      toast({ variant: 'destructive', title: 'Plan no válido', description: 'El total debe coincidir con el número de cuotas multiplicado por el importe de cada cuota.' });
       return;
     }
 
@@ -94,7 +94,7 @@ const EmployeeEmbargosTab = ({ employee, sessionRole, currentUser, navigate }) =
 
     setCreating(true);
     try {
-      const { error } = await supabase.rpc('api_crear_embargo_v2', {
+      const { error } = await supabase.rpc('api_crear_embargo_v3', {
         empleado: employee.auth_user_id,
         organismo,
         motivo: newEmbargo.motivo || '',

@@ -104,14 +104,14 @@ const Embargos = ({ navigate }) => {
     const importeTotal = Number.parseFloat(String(newEmbargo.importe_total).replace(',', '.'));
     const numeroCuotas = Number.parseInt(newEmbargo.numero_cuotas, 10);
     const importeCuota = Number.parseFloat(String(newEmbargo.importe_cuota).replace(',', '.'));
-    if (!newEmbargo.empleado_id || !newEmbargo.organismo.trim() || !Number.isFinite(importeTotal) || importeTotal <= 0 || !Number.isInteger(numeroCuotas) || numeroCuotas <= 0 || !Number.isFinite(importeCuota) || importeCuota <= 0) {
-      toast({ variant: 'destructive', title: 'Faltan datos', description: 'Rellena todos los campos obligatorios.' });
+    if (!newEmbargo.empleado_id || !newEmbargo.organismo.trim() || !Number.isFinite(importeTotal) || importeTotal <= 0 || !Number.isInteger(numeroCuotas) || numeroCuotas <= 0 || !Number.isFinite(importeCuota) || importeCuota <= 0 || Math.abs((numeroCuotas * importeCuota) - importeTotal) > 0.01) {
+      toast({ variant: 'destructive', title: 'Plan no válido', description: 'El total debe coincidir con el número de cuotas multiplicado por el importe de cada cuota.' });
       return;
     }
 
     setCreating(true);
     try {
-      const { error } = await supabase.rpc('api_crear_embargo_v2', {
+      const { error } = await supabase.rpc('api_crear_embargo_v3', {
         empleado: newEmbargo.empleado_id,
         organismo: newEmbargo.organismo.trim(),
         motivo: newEmbargo.motivo || '',

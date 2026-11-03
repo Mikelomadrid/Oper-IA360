@@ -58,6 +58,7 @@ const EmbargoDetail = ({ embargoId, navigate }) => {
   const [embargo, setEmbargo] = useState(null);
   const [pagos, setPagos] = useState([]);
   const [retenciones, setRetenciones] = useState([]);
+  const [cuotas, setCuotas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -118,7 +119,7 @@ const EmbargoDetail = ({ embargoId, navigate }) => {
       setEmbargo(embData);
 
       if (includeDetails) {
-        const [pagosResult, retencionesResult] = await Promise.all([
+        const [pagosResult, retencionesResult, cuotasResult] = await Promise.all([
           supabase
             .from('embargos_pagos')
             .select('*')
@@ -129,11 +130,18 @@ const EmbargoDetail = ({ embargoId, navigate }) => {
             .from('embargos_retenciones')
             .select('*')
             .eq('embargo_id', embargoId)
-            .order('fecha', { ascending: false })
+            .order('fecha', { ascending: false }),
+
+          supabase
+            .from('embargos_cuotas')
+            .select('*')
+            .eq('embargo_id', embargoId)
+            .order('numero_cuota', { ascending: true })
         ]);
 
         if (pagosResult.error) throw pagosResult.error;
         if (retencionesResult.error) throw retencionesResult.error;
+        if (cuotasResult.error && cuotasResult.error.code !== '42P01') throw cuotasResult.error;
 
         const uniquePagosMap = new Map();
         (pagosResult.data || []).forEach(item => uniquePagosMap.set(item.id, item));
@@ -144,6 +152,11 @@ const EmbargoDetail = ({ embargoId, navigate }) => {
         const uniqueRetenciones = Array.from(uniqueRetencionesMap.values());
 
         setPagos(uniquePagos);
+        setCuotas((cuotasResult.data || []).map(c => ({
+          ...c,
+          importe: Number(c.importe),
+          fecha: c.fecha ? c.fecha.split('T')[0] : ''
+        })));
         setRetenciones(
           uniqueRetenciones.map(r => ({
             ...r,
@@ -267,6 +280,24 @@ const EmbargoDetail = ({ embargoId, navigate }) => {
     } finally {
       setProcessing(false);
       isSubmittingRef.current = false;
+    }
+  };
+
+  const handleUpdateCuotaFecha = async (cuotaId, fecha) => {
+    if (!isAdmin) return;
+    setProcessing(true);
+    try {
+      const { error: updateError } = await supabase
+        .from('embargos_cuotas')
+        .update({ fecha: fecha || null })
+        .eq('id', cuotaId);
+      if (updateError) throw updateError;
+      setCuotas(prev => prev.map(c => c.id === cuotaId ? { ...c, fecha: fecha || '' } : c));
+      toast({ title: 'Fecha guardada', description: 'La fecha de la cuota se ha actualizado.' });
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'Error', description: err.message });
+    } finally {
+      setProcessing(false);
     }
   };
 
@@ -709,6 +740,46 @@ const EmbargoDetail = ({ embargoId, navigate }) => {
           </CardHeader>
 
           <CardContent className="flex-1">
+            {cuotas.length > 0 && (
+              <div className="mb-6 space-y-2">
+                <div className="text-sm font-semibold text-muted-foreground">Calendario de cuotas</div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Cuota</TableHead>
+                      <TableHead className="text-right">Importe</TableHead>
+                      <TableHead>Fecha prevista</TableHead>
+                      <TableHead>Estado</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {cuotas.map((cuota) => (
+                      <TableRow key={cuota.id}>
+                        <TableCell>#{cuota.numero_cuota}</TableCell>
+                        <TableCell className="text-right font-medium">{formatCurrency(cuota.importe)}</TableCell>
+                        <TableCell>
+                          {isAdmin ? (
+                            <Input
+                              type="date"
+                              value={cuota.fecha || ''}
+                              disabled={processing}
+                              onChange={(e) => setCuotas(prev => prev.map(c => c.id === cuota.id ? { ...c, fecha: e.target.value } : c))}
+                              onBlur={(e) => handleUpdateCuotaFecha(cuota.id, e.target.value)}
+                              className="h-8 w-[150px]"
+                            />
+                          ) : (
+                            cuota.fecha ? fmtMadrid(cuota.fecha) : <span className="text-muted-foreground italic">Pendiente</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={cuota.fecha ? 'default' : 'secondary'}>{cuota.fecha ? cuota.estado : 'Fecha pendiente'}</Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
             <Table>
               <TableHeader>
                 <TableRow>
