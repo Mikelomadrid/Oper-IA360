@@ -133,19 +133,28 @@ const MobileClockWidget = ({ empleadoId, navigate }) => {
   const destination = clock.data?.proyectos?.nombre_proyecto || (clock.data?.tipo === 'nave_taller' ? 'Nave / Taller' : 'Sin ubicación');
 
   return (
-    <div className={`mt-2 -mx-6 w-[calc(100%+3rem)] rounded-xl border px-3 py-2 ${clock.active ? (clock.paused ? 'border-amber-200 bg-amber-50/60' : 'border-emerald-200 bg-emerald-50/60') : 'border-border bg-muted/20'}`}>
+    <div className={`mt-2 -mx-6 w-[calc(100%+3rem)] rounded-xl border px-3 py-3 ${clock.active ? (clock.paused ? 'border-amber-200 bg-amber-50/60' : 'border-emerald-200 bg-emerald-50/60') : 'border-blue-300 bg-blue-50/80 shadow-sm'}`}>
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <p className={`text-xs font-semibold ${clock.active ? (clock.paused ? 'text-amber-700' : 'text-emerald-700') : 'text-muted-foreground'}`}>
-            {clock.active ? (clock.paused ? 'En pausa' : 'Jornada activa') : 'Sin fichaje activo'}
-          </p>
-          <p className="truncate text-[11px] text-muted-foreground">{clock.active ? destination : 'Selecciona destino para comenzar'}</p>
+          {clock.active ? (
+            <>
+              <p className={`text-xs font-semibold ${clock.paused ? 'text-amber-700' : 'text-emerald-700'}`}>
+                {clock.paused ? 'En pausa' : 'Jornada activa'}
+              </p>
+              <p className="truncate text-[11px] text-muted-foreground">{destination}</p>
+            </>
+          ) : (
+            <>
+              <p className="text-base font-extrabold text-blue-900">¿Dónde vas a trabajar?</p>
+              <p className="text-xs font-medium text-blue-700">Selecciona una obra o Nave / Taller para fichar</p>
+            </>
+          )}
         </div>
-        {clock.active ? (clock.paused ? <Utensils className="h-5 w-5 text-amber-600" /> : <CheckCircle2 className="h-5 w-5 text-emerald-600" />) : <Clock className="h-5 w-5 text-muted-foreground" />}
+        {clock.active ? (clock.paused ? <Utensils className="h-5 w-5 text-amber-600" /> : <CheckCircle2 className="h-5 w-5 text-emerald-600" />) : <Briefcase className="h-6 w-6 text-blue-600" />}
       </div>
       {!clock.active && (
-        <select value={selectedProject} onChange={(event) => setSelectedProject(event.target.value)} className="mt-2 h-9 w-full rounded-lg border bg-background px-2 text-xs">
-          <option value="">Selecciona obra o nave/taller</option>
+        <select value={selectedProject} onChange={(event) => setSelectedProject(event.target.value)} className="mt-3 h-12 w-full rounded-xl border-2 border-blue-300 bg-white px-3 text-sm font-semibold text-foreground shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200">
+          <option value="">Selecciona obra o Nave / Taller</option>
           <option value="nave_taller">Nave / Taller</option>
           {projects.map((project) => <option key={project.id} value={project.id}>{project.nombre_proyecto}</option>)}
         </select>
