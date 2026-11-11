@@ -540,25 +540,35 @@ const ObraGanttTab = ({ obraId }) => {
         try {
             const { data: projectRow, error: projectError } = await supabase
                 .from('proyectos')
-                .select('fecha_inicio, estado_planificacion, planificacion_confirmada_at')
+                .select('fecha_inicio')
                 .eq('id', obraId)
                 .single();
             if (projectError) throw projectError;
             setProjectPlanning({
                 fecha_inicio: projectRow?.fecha_inicio || null,
-                estado_planificacion: projectRow?.estado_planificacion || 'sin_planificar',
-                planificacion_confirmada_at: projectRow?.planificacion_confirmada_at || null,
+                estado_planificacion: 'sin_planificar',
+                planificacion_confirmada_at: null,
             });
 
-            const { data: tasksData, error: tasksError } = await supabase
-                .from('v_tareas_ui')
-                .select('id, titulo, empleado_asignado_id, estado, fecha_creacion, tecnico_nombre, fecha_limite, proyecto_id')
+            let { data: tasksData, error: tasksError } = await supabase
+                .from('tareas')
+                .select('id, titulo, descripcion, empleado_asignado_id, estado, fecha_creacion, fecha_inicio, fecha_limite, proyecto_id')
                 .eq('proyecto_id', obraId);
 
-            const { data: tareasBaseData, error: tareasBaseError } = await supabase
-                .from('tareas')
-                .select('id, orden, fecha_inicio')
-                .eq('proyecto_id', obraId);
+            // Compatibilidad con bases antiguas sin la vista de tareas enriquecida.
+            if (tasksError) {
+                console.warn('[ObraGanttTab] No se pudieron cargar las tareas:', tasksError.message || tasksError);
+                const fallbackTasks = await supabase
+                    .from('tareas')
+                    .select('id, titulo, descripcion, empleado_asignado_id, estado, fecha_creacion, fecha_inicio, fecha_limite, proyecto_id')
+                    .eq('proyecto_id', obraId);
+                if (fallbackTasks.error) throw tasksError;
+                tasksData = (fallbackTasks.data || []).map(task => ({
+                    ...task,
+                    titulo: task.titulo || task.descripcion || 'Tarea',
+                }));
+                tasksError = null;
+            }
 
             const taskIds = tasksData?.map(t => t.id) || [];
             let tareasRawData = [];
@@ -612,10 +622,12 @@ const ObraGanttTab = ({ obraId }) => {
                     .select('tarea_id, completada')
                     .in('tarea_id', taskIds);
 
-                if (subtasksError) throw subtasksError;
+                if (subtasksError) {
+                    console.warn('[ObraGanttTab] Subtareas no disponibles:', subtasksError.message || subtasksError);
+                }
 
                 const progressByTask = {};
-                subtasksRes.forEach(st => {
+                (subtasksRes || []).forEach(st => {
                     if (!progressByTask[st.tarea_id]) progressByTask[st.tarea_id] = { total: 0, completed: 0 };
                     progressByTask[st.tarea_id].total += 1;
                     if (st.completada) progressByTask[st.tarea_id].completed += 1;
@@ -707,9 +719,63 @@ const ObraGanttTab = ({ obraId }) => {
         }
     }, [obraId, toast]);
 
+    // Carga mínima compatible con instalaciones antiguas. El cronograma debe
+    // poder abrirse aunque falten vistas auxiliares de planificación.
+    const fetchDataStable = useCallback(async () => {
+        if (!obraId) return;
+        setLoading(true);
+        setError(null);
+        try {
+            let { data, error: tasksError } = await supabase
+                .from('v_tareas_ui')
+                .select('id, titulo, empleado_asignado_id, estado, fecha_creacion, tecnico_nombre, fecha_limite, proyecto_id')
+                .eq('proyecto_id', obraId);
+
+            if (tasksError) {
+                const fallback = await supabase
+                    .from('tareas')
+                    .select('id, titulo, descripcion, estado, fecha_creacion, fecha_inicio, fecha_limite, proyecto_id, empleado_asignado_id')
+                    .eq('proyecto_id', obraId);
+                if (fallback.error) throw tasksError;
+                data = fallback.data;
+            }
+
+            // La vista antigua no expone fecha_inicio ni descripcion; se
+            // completan desde la tabla base sin cambiar el formato del Gantt.
+            const taskIds = (data || []).map(task => task.id).filter(Boolean);
+            if (taskIds.length > 0) {
+                const { data: baseTasks } = await supabase
+                    .from('tareas')
+                    .select('id, descripcion, fecha_inicio, fecha_limite, orden')
+                    .in('id', taskIds);
+                const baseById = Object.fromEntries((baseTasks || []).map(task => [task.id, task]));
+                data = (data || []).map(task => ({ ...task, ...baseById[task.id] }));
+            }
+
+            setProjectPlanning({
+                fecha_inicio: null,
+                estado_planificacion: 'sin_planificar',
+                planificacion_confirmada_at: null,
+            });
+            setFestivos([]);
+            setTasks((data || []).map(task => ({
+                ...task,
+                titulo: task.titulo || task.descripcion || 'Tarea',
+                tecnico_nombre: task.tecnico_nombre || null,
+                tecnicos: [],
+                progressPercent: task.estado === 'completada' || task.estado === 'completada_validada' ? 100 : 0,
+            })));
+        } catch (e) {
+            console.error('[ObraGanttTab] Error en carga básica:', e);
+            setError(e);
+        } finally {
+            setLoading(false);
+        }
+    }, [obraId]);
+
     useEffect(() => {
-        fetchData();
-    }, [fetchData]);
+        fetchDataStable();
+    }, [fetchDataStable]);
 
     useEffect(() => {
         if (ganttScale === ViewMode.Day) setZoomLevel(65);
@@ -742,9 +808,13 @@ const ObraGanttTab = ({ obraId }) => {
             globalMinDate = new Date(currentYear, 0, 1);
         }
 
-        const scheduledTasks = tasks.filter((task) => task.inicio_planificado_at && task.fin_planificado_at);
+        // Las instalaciones antiguas no tienen las fechas de planificación
+        // horaria; usamos las fechas operativas de la tarea como respaldo.
+        const scheduledTasks = tasks.filter((task) =>
+            (task.inicio_planificado_at && task.fin_planificado_at) || task.fecha_inicio || task.fecha_limite
+        );
         const formatted = scheduledTasks.map((task, index) => {
-            const startStr = task.inicio_planificado_at;
+            const startStr = task.inicio_planificado_at || task.fecha_inicio || task.fecha_limite;
             let startRaw = new Date(startStr);
 
             if (startRaw < globalMinDate) {
@@ -753,13 +823,11 @@ const ObraGanttTab = ({ obraId }) => {
 
             // Las franjas horarias ya vienen normalizadas por el planificador.
             // Las tareas antiguas conservan el ajuste laboral por fecha.
-            const start = task.inicio_planificado_at
-                ? startRaw
-                : ajustarInicioLaborable(startRaw, festivosSet);
+            const start = ajustarInicioLaborable(startRaw, festivosSet);
 
-            let end = new Date(task.fin_planificado_at);
+            let end = new Date(task.fin_planificado_at || task.fecha_limite || task.fecha_inicio);
 
-            if (end < start) {
+            if (end <= start) {
                 end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
             }
 

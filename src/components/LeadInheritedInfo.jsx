@@ -200,38 +200,38 @@ export default function LeadInheritedInfo({ leadId }) {
       {/* ===================================================================== */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <Megaphone className="w-5 h-5" /> Información General y Ubicación
+          <CardTitle className="text-base md:text-lg flex items-center gap-2">
+            <Megaphone className="hidden md:inline w-5 h-5" /> Información General y Ubicación
           </CardTitle>
         </CardHeader>
-        <CardContent className="grid grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3">
-          <div><Label className="text-xs text-muted-foreground">Nombre de Contacto</Label><p className="font-medium">{lead.nombre_contacto || 'N/A'}</p></div>
-          <div><Label className="text-xs text-muted-foreground">Nombre de Empresa</Label><p className="font-medium">{lead.nombre_empresa || 'N/A'}</p></div>
-          <div><Label className="text-xs text-muted-foreground">Teléfono</Label><a href={`tel:${lead.telefono}`} className="flex items-center gap-2 text-primary hover:underline"><Phone className="w-4 h-4" /> {lead.telefono || 'N/A'}</a></div>
-          <div><Label className="text-xs text-muted-foreground">Email</Label><a href={`mailto:${lead.email}`} className="flex items-center gap-2 text-primary hover:underline"><Mail className="w-4 h-4" /> {lead.email || 'N/A'}</a></div>
-          <div><Label className="text-xs text-muted-foreground">CIF</Label><p>{lead.cif || 'N/A'}</p></div>
+        <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-x-6 md:gap-y-3 text-sm md:text-base">
+          <div className={!lead.nombre_contacto ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Nombre de Contacto</Label><p className="font-medium break-words">{lead.nombre_contacto || 'N/A'}</p></div>
+          <div className={!lead.nombre_empresa ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Nombre de Empresa</Label><p className="font-medium break-words">{lead.nombre_empresa || 'N/A'}</p></div>
+          <div className={!lead.telefono ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Teléfono</Label><a href={`tel:${lead.telefono}`} className="flex items-center gap-2 text-primary hover:underline"><Phone className="hidden md:inline w-4 h-4" /> {lead.telefono || 'N/A'}</a></div>
+          <div className={!lead.email ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Email</Label><a href={`mailto:${lead.email}`} className="flex items-center gap-2 text-primary hover:underline break-all"><Mail className="hidden md:inline w-4 h-4" /> {lead.email || 'N/A'}</a></div>
+          <div className={!lead.cif ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">CIF</Label><p>{lead.cif || 'N/A'}</p></div>
           {lead.base_imponible !== null && lead.base_imponible !== undefined && (
             <div>
-              <Label className="text-xs text-muted-foreground">Presupuesto</Label>
+              <Label className="text-[10px] md:text-xs text-muted-foreground">Presupuesto</Label>
               <p className="font-semibold text-lg text-emerald-600">
                 {new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(lead.base_imponible)}
               </p>
             </div>
           )}
-          {lead.origen && <div><Label className="text-xs text-muted-foreground">Origen</Label><p className="font-medium">{lead.origen}</p></div>}
+          {lead.origen && <div><Label className="text-[10px] md:text-xs text-muted-foreground">Origen</Label><p className="font-medium">{lead.origen}</p></div>}
 
           {/* Ubicación y Asignación (mismo grid) */}
-          <div><Label className="text-xs text-muted-foreground">Dirección</Label><p className="flex items-center gap-2"><MapPin className="w-4 h-4 text-primary shrink-0" /> {lead.direccion || 'N/A'}</p></div>
-          <div><Label className="text-xs text-muted-foreground">Código Postal</Label><p>{lead.codigo_postal || 'N/A'}</p></div>
-          <div><Label className="text-xs text-muted-foreground">Municipio</Label><p>{lead.municipio || 'N/A'}</p></div>
-          <div><Label className="text-xs text-muted-foreground">Partida de Trabajo</Label><p className="capitalize">{lead.partida || 'N/A'}</p></div>
-          <div><Label className="text-xs text-muted-foreground">Responsable Principal</Label><p className="flex items-center gap-2"><HardHat className="w-4 h-4 text-primary shrink-0" />{lead.empleado_asignado ? `${lead.empleado_asignado.nombre} ${lead.empleado_asignado.apellidos || ''}` : 'Sin asignar'}</p></div>
-          <div><Label className="text-xs text-muted-foreground">Colaborador</Label><p className="flex items-center gap-2"><User className="w-4 h-4 text-primary shrink-0" />{lead.colaborador ? `${lead.colaborador.nombre} ${lead.colaborador.apellidos || ''}` : 'N/A'}</p></div>
-          <div><Label className="text-xs text-muted-foreground">Fecha de Visita</Label><p className="flex items-center gap-2"><CalendarDays className="w-4 h-4 text-primary shrink-0" />{lead.fecha_visita ? formatDate(lead.fecha_visita) : 'N/A'}</p></div>
+          <div className={!lead.direccion ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Dirección</Label><p className="flex items-center gap-2 break-words"><MapPin className="hidden md:inline w-4 h-4 text-primary shrink-0" /> {lead.direccion || 'N/A'}</p></div>
+          <div className={!lead.codigo_postal ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Código Postal</Label><p>{lead.codigo_postal || 'N/A'}</p></div>
+          <div className={!lead.municipio ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Municipio</Label><p>{lead.municipio || 'N/A'}</p></div>
+          <div className={!lead.partida ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Partida de Trabajo</Label><p className="capitalize">{lead.partida || 'N/A'}</p></div>
+          <div className="hidden md:block"><Label className="text-xs text-muted-foreground">Responsable Principal</Label><p className="flex items-center gap-2"><HardHat className="w-4 h-4 text-primary shrink-0" />{lead.empleado_asignado ? `${lead.empleado_asignado.nombre} ${lead.empleado_asignado.apellidos || ''}` : 'Sin asignar'}</p></div>
+          <div className="hidden md:block"><Label className="text-xs text-muted-foreground">Colaborador</Label><p className="flex items-center gap-2"><User className="w-4 h-4 text-primary shrink-0" />{lead.colaborador ? `${lead.colaborador.nombre} ${lead.colaborador.apellidos || ''}` : 'N/A'}</p></div>
+          <div className="hidden md:block"><Label className="text-xs text-muted-foreground">Fecha de Visita</Label><p className="flex items-center gap-2"><CalendarDays className="w-4 h-4 text-primary shrink-0" />{lead.fecha_visita ? formatDate(lead.fecha_visita) : 'N/A'}</p></div>
 
           {/* Descripción ocupa fila completa al final */}
-          <div className="col-span-full"><Label className="text-xs text-muted-foreground">Descripción/Comentario</Label><p className="whitespace-pre-wrap">{lead.comentario || 'Sin comentario'}</p></div>
-          {lead.created_by_name && <div><Label className="text-xs text-muted-foreground">Creador</Label><p className="font-medium">{lead.created_by_name}</p></div>}
+          <div className={`col-span-full ${!lead.comentario ? 'hidden md:block' : ''}`}><Label className="text-[10px] md:text-xs text-muted-foreground">Descripción/Comentario</Label><p className="whitespace-pre-wrap break-words">{lead.comentario || 'Sin comentario'}</p></div>
+          {lead.created_by_name && <div className="hidden md:block"><Label className="text-xs text-muted-foreground">Creador</Label><p className="font-medium">{lead.created_by_name}</p></div>}
         </CardContent>
       </Card>
 
@@ -245,7 +245,7 @@ export default function LeadInheritedInfo({ leadId }) {
           </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col">
-          <div className="space-y-6">
+          <div className="order-2 space-y-6 md:order-1">
             {comments.length === 0 ? (
               <div className="text-center text-muted-foreground italic">No hay comentarios aún.</div>
             ) : (
@@ -259,7 +259,7 @@ export default function LeadInheritedInfo({ leadId }) {
             )}
           </div>
 
-          <div className="flex flex-col gap-3 shrink-0 mt-6 pt-4 border-t">
+          <div className="order-1 flex flex-col gap-3 shrink-0 mb-6 border-b pb-4 md:order-2 md:mt-6 md:mb-0 md:border-b-0 md:border-t md:pt-4 md:pb-0">
             <Textarea
               placeholder="Escribe un nuevo comentario..."
               value={newComment}

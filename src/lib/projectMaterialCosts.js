@@ -58,7 +58,13 @@ export const fetchProjectMaterialNetTotals = async (projectIds = []) => {
     .select('obra_id, coste_neto')
     .in('obra_id', ids);
 
-  if (error) throw error;
+  // Algunas instalaciones antiguas todavía no tienen creada esta vista.
+  // Usamos los gastos imputados como respaldo para no bloquear la carga
+  // completa de proyectos por el cálculo opcional de materiales.
+  if (error) {
+    console.warn('[projectMaterialCosts] Vista de balance no disponible; usando gastos:', error.message || error);
+    return fetchProjectMaterialBaseTotals(ids);
+  }
 
   for (const row of data || []) {
     const projectId = String(row.obra_id);

@@ -159,10 +159,10 @@ const LeadPhotoGallery = ({ leadId: propLeadId }) => {
   if (!leadId) return null;
 
   return (
-    <div className="space-y-6 pb-20">
-      <div className="flex justify-between items-center gap-4 bg-card p-4 rounded-xl border shadow-sm sticky top-0 z-10">
+    <div className="min-w-0 space-y-4 pb-20 sm:space-y-6">
+      <div className="sticky top-0 z-10 flex flex-col items-stretch justify-between gap-3 rounded-xl border bg-card p-3 shadow-sm sm:flex-row sm:items-center sm:gap-4 sm:p-4">
         <h2 className="text-lg font-bold flex items-center gap-2"><ImageIcon className="w-5 h-5 text-primary" /> Galería ({photos.length})</h2>
-        {canUpload && <Button onClick={() => setIsUploadModalOpen(true)}><Plus className="w-4 h-4 mr-2" /> Subir</Button>}
+        {canUpload && <Button onClick={() => setIsUploadModalOpen(true)} className="w-full sm:w-auto"><Plus className="w-4 h-4 mr-2" /> Subir</Button>}
       </div>
 
       {loading ? (

@@ -14,7 +14,8 @@ import {
   Briefcase,
   ClipboardList,
   Warehouse,
-  LogOut
+  LogOut,
+  CalendarDays
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
@@ -71,7 +72,7 @@ const useGeolocation = () => {
 
 const TechnicianDashboard = ({ navigate, view = 'fichaje', isIncidentModalOpenFromSidebar = false }) => {
   // Use 'empleadoId' exported directly from context
-  const { user, empleadoId } = useAuth();
+  const { user, empleadoId, displayName, userPhoto, sessionRole } = useAuth();
   
   const [activeTab, setActiveTab] = useState(view === 'fichaje' ? 'clock' : view === 'tareas' ? 'tasks' : 'notices');
   
@@ -288,29 +289,29 @@ const TechnicianDashboard = ({ navigate, view = 'fichaje', isIncidentModalOpenFr
     const currentData = fichajeState.data;
 
     return (
-      <div className="space-y-6 max-w-md mx-auto mt-4">
+      <div className="space-y-3 md:space-y-6 max-w-md mx-auto mt-2 md:mt-4">
         {/* Status Card */}
         <Card className={cn("border-l-4 shadow-md overflow-hidden relative", 
             isActive ? (isPaused ? "border-l-amber-500" : "border-l-green-500") : "border-l-slate-300"
         )}>
-            <div className={cn("absolute top-0 right-0 p-4 opacity-10 pointer-events-none", 
+            <div className={cn("hidden md:block absolute top-0 right-0 p-4 opacity-10 pointer-events-none", 
                 isActive ? (isPaused ? "text-amber-500" : "text-green-500") : "text-slate-400"
             )}>
                 <Clock className="w-32 h-32" />
             </div>
 
-            <CardHeader className="pb-2 relative z-10">
-                <CardTitle className="flex items-center gap-2 text-xl">
+            <CardHeader className="p-3 pb-2 md:p-6 md:pb-2 relative z-10">
+                <CardTitle className="flex items-center gap-2 text-base md:text-xl">
                     {isActive ? (
                         isPaused ? <><Utensils className="w-6 h-6 text-amber-500"/> En Pausa</> 
-                                 : <><CheckCircle2 className="w-6 h-6 text-green-500"/> Jornada Activa</>
+                                 : <><CheckCircle2 className="w-5 h-5 md:w-6 md:h-6 text-green-500"/> Jornada Activa</>
                     ) : (
                         <><Clock className="w-6 h-6 text-slate-400"/> Sin Actividad</>
                     )}
                 </CardTitle>
                 <CardDescription>
                     {isActive ? (
-                        <span className="font-medium text-foreground block mt-1 text-lg">
+                    <span className="font-medium text-foreground block mt-1 text-sm md:text-lg truncate">
                             {currentData?.proyectos?.nombre_proyecto || 
                              (currentData?.tipo === 'nave_taller' ? 'Nave / Taller' : 
                              (currentData?.centros_coste_internos?.nombre_centro || 'Ubicación desconocida'))}
@@ -319,11 +320,11 @@ const TechnicianDashboard = ({ navigate, view = 'fichaje', isIncidentModalOpenFr
                 </CardDescription>
             </CardHeader>
 
-            <CardContent className="pb-6 relative z-10">
+            <CardContent className="px-3 pb-3 md:px-6 md:pb-6 relative z-10">
                 {!isActive && (
-                    <div className="mt-4 space-y-4">
+                    <div className="mt-2 md:mt-4 space-y-4">
                         <Select value={selectedProject} onValueChange={setSelectedProject}>
-                            <SelectTrigger className="h-12 text-lg bg-background/50 backdrop-blur-sm border-primary/20 focus:ring-primary">
+                            <SelectTrigger className="h-10 md:h-12 text-sm md:text-lg bg-background/50 backdrop-blur-sm border-primary/20 focus:ring-primary">
                                 <SelectValue placeholder="¿Dónde vas a trabajar?" />
                             </SelectTrigger>
                             <SelectContent>
@@ -348,10 +349,10 @@ const TechnicianDashboard = ({ navigate, view = 'fichaje', isIncidentModalOpenFr
                 )}
             </CardContent>
 
-            <CardFooter className="pt-0 pb-6 px-6 relative z-10 flex flex-col gap-3">
+            <CardFooter className="pt-0 pb-3 px-3 md:pb-6 md:px-6 relative z-10 flex flex-col gap-2 md:gap-3">
                 {!isActive ? (
                     <Button 
-                        className="w-full h-14 text-lg font-bold shadow-lg shadow-green-900/20 bg-green-600 hover:bg-green-700" 
+                        className="w-full h-11 md:h-14 text-sm md:text-lg font-bold shadow-lg shadow-green-900/20 bg-green-600 hover:bg-green-700" 
                         onClick={() => handleClockAction('entrada')}
                         disabled={actionLoading || !selectedProject}
                     >
@@ -362,7 +363,7 @@ const TechnicianDashboard = ({ navigate, view = 'fichaje', isIncidentModalOpenFr
                         {isPaused ? (
                             <Button 
                                 variant="outline" 
-                                className="h-12 border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
+                                className="h-10 md:h-12 text-xs md:text-sm border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
                                 onClick={() => handleClockAction('reanudar')}
                                 disabled={actionLoading}
                             >
@@ -371,7 +372,7 @@ const TechnicianDashboard = ({ navigate, view = 'fichaje', isIncidentModalOpenFr
                         ) : (
                             <Button 
                                 variant="outline" 
-                                className="h-12 border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
+                                className="h-10 md:h-12 text-xs md:text-sm border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
                                 onClick={() => handleClockAction('pausa')}
                                 disabled={actionLoading}
                             >
@@ -381,7 +382,7 @@ const TechnicianDashboard = ({ navigate, view = 'fichaje', isIncidentModalOpenFr
                         
                         <Button 
                             variant="destructive" 
-                            className="h-12 shadow-md shadow-red-900/10"
+                            className="h-10 md:h-12 text-xs md:text-sm shadow-md shadow-red-900/10"
                             onClick={() => handleClockAction('salida')}
                             disabled={actionLoading}
                         >
@@ -394,7 +395,7 @@ const TechnicianDashboard = ({ navigate, view = 'fichaje', isIncidentModalOpenFr
 
         {/* Map Preview (Optional) */}
         {isActive && currentData && currentData.id && (
-            <div className="rounded-lg overflow-hidden border shadow-sm h-48 bg-muted/20 relative">
+            <div className="hidden md:block rounded-lg overflow-hidden border shadow-sm h-48 bg-muted/20 relative">
                 <TimeClockMap fichajeId={currentData.id} height="h-full" />
                 <div className="absolute bottom-2 right-2 bg-white/80 backdrop-blur px-2 py-1 rounded text-xs text-muted-foreground border shadow-sm">
                     Ubicación de entrada
@@ -412,7 +413,7 @@ const TechnicianDashboard = ({ navigate, view = 'fichaje', isIncidentModalOpenFr
             animate={{ opacity: 1, y: 0 }} 
             className="container max-w-2xl mx-auto p-4"
         >
-            <div className="flex items-center justify-between mb-6">
+            <div className="hidden md:flex items-center justify-between mb-6">
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">Hola, {user?.user_metadata?.nombre || 'Compañero'}</h1>
                     <p className="text-muted-foreground text-sm">Panel de Técnico</p>
@@ -420,6 +421,31 @@ const TechnicianDashboard = ({ navigate, view = 'fichaje', isIncidentModalOpenFr
                 <Button variant="ghost" size="icon" className="md:hidden" onClick={() => navigate('/login')}>
                     <LogOut className="w-5 h-5" />
                 </Button>
+            </div>
+
+            <div className="md:hidden mb-3 rounded-2xl border border-primary/10 bg-card p-3 shadow-sm">
+                <div className="flex items-center gap-3">
+                    <div className="h-14 w-14 shrink-0 overflow-hidden rounded-full border-2 border-primary/20 bg-primary/10">
+                        {userPhoto ? (
+                            <img src={userPhoto} alt={displayName || 'Usuario'} className="h-full w-full object-cover" />
+                        ) : (
+                            <div className="flex h-full w-full items-center justify-center text-lg font-bold text-primary">
+                                {(displayName || 'U').charAt(0).toUpperCase()}
+                            </div>
+                        )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <h1 className="truncate text-lg font-bold tracking-tight">Hola, {displayName || user?.user_metadata?.nombre || 'Compañero'}</h1>
+                        <p className="truncate text-xs font-medium text-primary">{sessionRole?.categoria || (sessionRole?.rol === 'encargado' ? 'Encargado' : 'Técnico')}</p>
+                        <p className="mt-0.5 flex items-center gap-1 text-[11px] capitalize text-muted-foreground">
+                            <CalendarDays className="h-3 w-3" />
+                            {new Intl.DateTimeFormat('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date())}
+                        </p>
+                    </div>
+                    <Button variant="ghost" size="icon" className="shrink-0" onClick={() => navigate('/login')}>
+                        <LogOut className="h-4 w-4" />
+                    </Button>
+                </div>
             </div>
 
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">

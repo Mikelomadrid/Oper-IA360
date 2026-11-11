@@ -15,7 +15,6 @@ const LeadCard = ({ lead, index, onUpdateStatus, onDelete }) => {
   const getGradient = (status) => {
     switch (status) {
       case 'nuevo': return 'from-blue-500 to-blue-600';           // #3b82f6
-      case 'contactado': return 'from-sky-500 to-sky-600';        // #0ea5e9
       case 'visita_agendada': return 'from-violet-500 to-purple-600'; // #8b5cf6
       case 'visitado': return 'from-fuchsia-500 to-pink-600';     // #d946ef
       case 'presupuestado': return 'from-amber-500 to-orange-500';// #f59e0b

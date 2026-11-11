@@ -20,6 +20,22 @@ import { DateRangePicker } from '@/components/DateRangePicker';
 import FichajeDetailModal from './FichajeDetailModal';
 import * as XLSX from 'xlsx';
 
+const getNormalizedDurationSeconds = (durationSeconds, entry) => {
+  const rawSeconds = Math.max(0, Number(durationSeconds) || 0);
+  if (!entry || rawSeconds === 0) return rawSeconds;
+
+  const day = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Madrid',
+    weekday: 'short'
+  }).format(new Date(entry));
+  const targetHours = day === 'Fri' ? 6 : ['Mon', 'Tue', 'Wed', 'Thu'].includes(day) ? 8.5 : 0;
+  if (!targetHours) return rawSeconds;
+
+  const workedHours = rawSeconds / 3600;
+  const extraHours = workedHours - targetHours;
+  return extraHours > 0 && extraHours < 1 ? targetHours * 3600 : rawSeconds;
+};
+
 /**
  * AdminFichajes
  * - Listado de fichajes utilizando 'v_fichajes_admin_ui' para obtener nombres de proyecto y detalles.
@@ -274,7 +290,8 @@ const AdminFichajes = () => {
             employees: {}
           };
         }
-        const hours = (row.duracion_neta_segundos || 0) / 3600;
+        const normalizedSeconds = getNormalizedDurationSeconds(row.duracion_neta_segundos, row.hora_entrada);
+        const hours = normalizedSeconds / 3600;
         const rate = costMap.get(row.empleado_id) || 0;
         const cost = hours * rate;
         grouped[locId].totalHours += hours;
@@ -323,7 +340,7 @@ const AdminFichajes = () => {
         'Hora Salida': f.hora_salida ? format(new Date(f.hora_salida), 'HH:mm') : '-',
         'Ubicación': f.location_name || '',
         'Tipo Ubicación': f.location_type || '',
-        'Duración (h:m)': f.duracion_neta_segundos ? formatSecondsToHoursMinutes(f.duracion_neta_segundos) : '0h 0m',
+        'Duración (h:m)': f.duracion_neta_segundos ? formatSecondsToHoursMinutes(getNormalizedDurationSeconds(f.duracion_neta_segundos, f.hora_entrada)) : '0h 0m',
         'Estado': f.is_active_pause ? 'En Pausa' : (f.is_shift_open ? 'Activo' : 'Cerrado'),
         'Notas': f.has_notes ? 'Sí' : 'No'
       }));
@@ -688,7 +705,7 @@ const AdminFichajes = () => {
                     </TableCell>
                     <TableCell className="text-right">
                       <span className="font-mono text-sm font-semibold text-gray-700 dark:text-gray-300">
-                        {f.duracion_neta_segundos ? formatSecondsToHoursMinutes(f.duracion_neta_segundos) : '0h 0m'}
+                        {f.duracion_neta_segundos ? formatSecondsToHoursMinutes(getNormalizedDurationSeconds(f.duracion_neta_segundos, f.hora_entrada)) : '0h 0m'}
                       </span>
                     </TableCell>
                     <TableCell className="text-center">

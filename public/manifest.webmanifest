@@ -1,0 +1,19 @@
+{
+  "name": "Oper-IA360",
+  "short_name": "Oper-IA360",
+  "id": "/",
+  "description": "Gestión operativa de leads y obras.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "./pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

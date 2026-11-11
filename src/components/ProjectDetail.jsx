@@ -429,6 +429,30 @@ const GroupedNav = ({ activeTab, onTabChange, esCompartida, tieneLeadId, canMana
                 ? group.children
                 : group.children.filter((item) => !['cronograma', 'jornada', 'equipo', 'extras'].includes(item.value)),
         }));
+    const mobileGroups = groups
+        .filter((group) => group.id !== 'informacion')
+        .map((group) => ({
+            ...group,
+            children: group.id === 'dashboard'
+                ? group.children.filter((item) => item.value === 'dashboard')
+                : group.id === 'costes'
+                    ? group.children.filter((item) => ['pagos', 'materiales', 'mano_obra', 'extras'].includes(item.value))
+                    : group.id === 'documentacion'
+                        ? group.children.filter((item) => item.value !== 'fotos')
+                        : group.children,
+        }))
+        .flatMap((group) => group.id === 'documentacion'
+            ? [
+                group,
+                {
+                    id: 'fotos',
+                    label: 'Fotos',
+                    icon: <ImageIcon className="w-4 h-4" />,
+                    children: [{ value: 'fotos', label: 'Fotos', icon: <ImageIcon className="w-3.5 h-3.5" /> }],
+                },
+            ]
+            : [group]
+        );
     const activeGroup = groups.find(g => g.children.some(c => c.value === activeTab))?.id;
     const openGroupData = groups.find(g => g.id === openGroup);
 
@@ -461,7 +485,7 @@ const GroupedNav = ({ activeTab, onTabChange, esCompartida, tieneLeadId, canMana
 
     return (
         <div ref={navRef} style={{ borderBottom: '1px solid var(--border)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+            <div className="hidden md:flex" style={{ alignItems: 'center', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
                 {groups.map((group) => {
                     const isActive = activeGroup === group.id;
                     const isOpen = openGroup === group.id;
@@ -484,6 +508,45 @@ const GroupedNav = ({ activeTab, onTabChange, esCompartida, tieneLeadId, canMana
                                 <span>{group.label}</span>
                                 <ChevronDown style={{ width: 12, height: 12, transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
                             </button>
+                        </div>
+                    );
+                })}
+            </div>
+
+            <div className="space-y-2 p-2 md:hidden">
+                {mobileGroups.map((group) => {
+                    const isActive = activeGroup === group.id;
+                    const isOpen = openGroup === group.id;
+
+                    return (
+                        <div key={group.id} className="overflow-hidden rounded-xl border border-border/60 bg-card">
+                            <button
+                                type="button"
+                                onClick={() => setOpenGroup(isOpen ? null : group.id)}
+                                className={`flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition-colors ${isActive ? 'bg-primary/5 text-primary' : 'text-foreground'}`}
+                            >
+                                <span className="flex items-center gap-2 text-sm font-semibold">
+                                    {group.icon} {group.label}
+                                </span>
+                                <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                            </button>
+                            {isOpen && (
+                                <div className="space-y-1 border-t border-border/60 bg-muted/20 p-2">
+                                    {group.children.map((item) => {
+                                        const isItemActive = activeTab === item.value;
+                                        return (
+                                            <button
+                                                key={item.value}
+                                                type="button"
+                                                onClick={() => onTabChange(item.value)}
+                                                className={`flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${isItemActive ? 'bg-primary/10 font-semibold text-primary' : 'text-muted-foreground hover:bg-muted'}`}
+                                            >
+                                                {item.icon} {item.label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
                         </div>
                     );
                 })}

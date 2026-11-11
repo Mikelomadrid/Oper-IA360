@@ -15,7 +15,6 @@ const normalize = (str) => (str || '').toString().toLowerCase().normalize('NFD')
 
 const STATUS_STYLES = {
   nuevo: 'bg-blue-100 text-blue-800 border-blue-200',
-  contactado: 'bg-yellow-100 text-yellow-800 border-yellow-200',
   visita_agendada: 'bg-indigo-100 text-indigo-800 border-indigo-200',
   visitado: 'bg-purple-100 text-purple-800 border-purple-200',
   presupuestado: 'bg-orange-100 text-orange-800 border-orange-200',

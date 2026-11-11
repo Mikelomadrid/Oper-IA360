@@ -1051,7 +1051,60 @@ const PartesAdminView = ({ navigate }) => {
             </Accordion>
           )}
         </div>
-      ) : viewMode === 'kanban' ? (
+      ) : (
+        <>
+        {/* Vista móvil: partes recogidos por estado, igual que Leads y Obras */}
+        <div className="md:hidden">
+          <Accordion type="multiple" className="w-full space-y-2">
+            {statusOrder
+              .map((status) => ({ status, items: filteredPartes.filter((parte) => parte.estado_ui === status) }))
+              .filter(({ items }) => items.length > 0)
+              .map(({ status, items }) => (
+                <AccordionItem key={status} value={status} className="overflow-hidden rounded-xl border bg-card shadow-sm">
+                  <AccordionTrigger className="px-3 py-3 text-left hover:no-underline">
+                    <div className="flex w-full items-center justify-between gap-3 pr-2">
+                      <span className="flex items-center gap-2 text-sm font-semibold">
+                        <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: getStatusColor(status) }} />
+                        {getStatusLabel(status)}
+                      </span>
+                      <Badge variant="secondary" className="text-xs">{items.length}</Badge>
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-2 border-t bg-muted/20 p-2">
+                    {items.map((parte) => (
+                      <button
+                        key={parte.id}
+                        type="button"
+                        className={cn('w-full rounded-lg border bg-card p-3 text-left shadow-sm transition-colors hover:border-primary/50', pendingPartes.has(parte.id) && AVISO_ROW_CLASS)}
+                        onClick={() => navigate(`/gestion/partes/detail/${parte.id}`)}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="flex items-center gap-1.5 truncate text-sm font-semibold">
+                              <AvisoBolita show={pendingPartes.has(parte.id)} />
+                              {parte.cliente_nombre || 'Sin cliente'}
+                            </p>
+                            <p className="mt-1 truncate text-xs text-muted-foreground">{parte.direccion_servicio || 'Sin dirección'}</p>
+                          </div>
+                          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{parte.custom_id || `#${parte.id.slice(0, 8)}`}</span>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          {getStatusBadge(parte)}
+                          <span className="text-[10px] text-muted-foreground">{parte.created_at ? format(new Date(parte.created_at), 'dd/MM/yyyy', { locale: es }) : ''}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </AccordionContent>
+                </AccordionItem>
+              ))}
+          </Accordion>
+          {filteredPartes.length === 0 && (
+            <div className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">No hay partes activos encontrados.</div>
+          )}
+        </div>
+
+        <div className="hidden md:block">
+        {viewMode === 'kanban' ? (
         <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
           <PartesKanban
             partes={filteredPartes}
@@ -1227,6 +1280,9 @@ const PartesAdminView = ({ navigate }) => {
             );
           })}
         </div>
+        )}
+        </div>
+        </>
       )}
 
       {/* Dialogs: Assign, Transition, Delete... */}

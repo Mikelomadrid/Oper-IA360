@@ -2,6 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
+/* El resumen de presupuesto solo se muestra en escritorio dentro del detalle de obra. */
+@media (max-width: 767px) {
+  .budget-reconciliation-desktop-only {
+    display: none !important;
+  }
+}
+
 @layer base {
   :root {
     /* Default fallback (matches claro-1) */

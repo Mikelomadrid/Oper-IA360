@@ -61,12 +61,53 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
         const fetchLeadsCount = async () => {
             if (sessionRole?.rol === 'tecnico') {
                 try {
-                    const { count, error } = await supabase
-                        .from('leads')
-                        .select('*', { count: 'exact', head: true })
-                        .eq('estado', 'nuevo')
-                        .eq('archivado', false);
-                    if (!error) setActiveLeadsCount(count || 0);
+                    const { data: assignments, error: assignmentsError } = await supabase
+                        .from('leads_asignaciones')
+                        .select('lead_id')
+                        .eq('usuario_id', user.id);
+
+                    if (assignmentsError) throw assignmentsError;
+
+                    let leadIds = (assignments || []).map(item => item.lead_id).filter(Boolean);
+
+                    // Compatibilidad con leads antiguos que solo tienen el técnico principal.
+                    if (leadIds.length === 0 && sessionRole?.empleadoId) {
+                        const { data: legacyLeads, error: legacyError } = await supabase
+                            .from('leads')
+                            .select('id')
+                            .eq('empleado_asignado_id', sessionRole.empleadoId);
+                        if (legacyError) throw legacyError;
+                        leadIds = (legacyLeads || []).map(lead => lead.id);
+                    }
+
+                    if (leadIds.length === 0) {
+                        setActiveLeadsCount(0);
+                        return;
+                    }
+
+                    const [{ data: leads, error: leadsError }, { data: reads, error: readsError }] = await Promise.all([
+                        supabase
+                            .from('leads')
+                            .select('id, updated_at')
+                            .in('id', leadIds)
+                            .or('archivado.eq.false,archivado.is.null'),
+                        supabase
+                            .from('lead_lecturas')
+                            .select('lead_id, visto_at')
+                            .eq('usuario_id', user.id)
+                            .in('lead_id', leadIds)
+                    ]);
+
+                    if (leadsError) throw leadsError;
+                    if (readsError) throw readsError;
+
+                    const readMap = Object.fromEntries((reads || []).map(read => [read.lead_id, read.visto_at]));
+                    const pendingCount = (leads || []).filter(lead => {
+                        if (!readMap[lead.id]) return true;
+                        return lead.updated_at && new Date(lead.updated_at).getTime() > new Date(readMap[lead.id]).getTime();
+                    }).length;
+
+                    setActiveLeadsCount(pendingCount);
                 } catch (err) {}
             }
         };
@@ -267,7 +308,7 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                     if (!items.some(i => i.key === 'mis_leads')) {
                         items.push({
                             key: 'mis_leads',
-                            label: 'Mis Leads',
+                            label: 'MIS LEADS',
                             path: '/gestion/leads',
                             parent: null,
                             orden: 8,
@@ -379,7 +420,7 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
             badgeVariant = 'destructive';
         } else if (isLeads) {
             badgeCount = activeLeadsCount;
-            badgeVariant = 'secondary';
+            badgeVariant = 'success';
         } else if (isAusencias) {
             badgeCount = ausenciasPendientesCount;
             badgeVariant = 'destructive';
@@ -387,6 +428,14 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
 
         return { isActive, badgeCount, badgeVariant };
     };
+
+    const isTechnicianMobileHidden = (item) => (
+        sessionRole?.rol === 'tecnico' && [
+            'bandeja-entrada',
+            'calendario-privado',
+            'cronograma_global'
+        ].includes(item.key)
+    );
 
     return (
         <ScrollArea className="h-full py-4 px-3">
@@ -400,7 +449,10 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
 
                         const isAdminOrEncargado = sessionRole?.rol === 'admin' || sessionRole?.rol === 'encargado';
                         const isDesktopOnly = rootItem.key === 'administracion' && !isAdminOrEncargado;
-                        const containerClass = isDesktopOnly ? "hidden lg:block" : "";
+                        const containerClass = cn(
+                            isDesktopOnly ? "hidden lg:block" : "",
+                            isTechnicianMobileHidden(rootItem) ? "hidden md:block" : ""
+                        );
 
                         const children = childrenByParent.get(rootItem.key) || [];
                         const hasChildren = children.length > 0;
@@ -474,6 +526,7 @@ const Sidebar = ({ activeModule, setActiveModule, sessionRole }) => {
                                                             onClick={() => setActiveModule(childItem.path)}
                                                             className={cn(
                                                                 "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all hover:bg-muted/50 hover:text-primary ml-4",
+                                                                isTechnicianMobileHidden(childItem) && "hidden md:flex",
                                                                 childProps.isActive
                                                                     ? "bg-muted text-primary"
                                                                     : "text-muted-foreground"

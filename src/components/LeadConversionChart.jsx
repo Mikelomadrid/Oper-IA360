@@ -6,10 +6,9 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import ElegantDonutChart from '@/components/charts/ElegantDonutChart';
 
-// Definición estricta de los 8 estados solicitados con sus colores específicos
+// Estados de lead con sus colores específicos
 const STATUS_CONFIG = [
   { key: 'nuevo', label: 'Nuevo', color: '#9CA3AF' }, // Gray
-  { key: 'contactado', label: 'Contactado', color: '#FACC15' }, // Yellow
   { key: 'visita_agendada', label: 'Visita agendada', color: '#3B82F6' }, // Blue
   { key: 'visitado', label: 'Visitado', color: '#A78BFA' }, // Purple
   { key: 'presupuestado', label: 'Presupuestado', color: '#FB923C' }, // Orange

@@ -26,20 +26,180 @@ import {
   ShieldCheck,
   Briefcase,
   Search,
-  ChevronDown
+  ChevronDown,
+  Play,
+  Square,
+  Utensils,
+  CheckCircle2,
+  Warehouse
+  ,ImagePlus
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { toast } from '@/components/ui/use-toast';
 import DashboardCard from '@/components/DashboardCard';
 import AlertCard from '@/components/AlertCard';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { getGreetingByHour } from '@/lib/utils';
+import { getGreetingByHour, getMadridLocalTime } from '@/lib/utils';
 import { AnimatePresence } from 'framer-motion';
 import ResumenFinancieroMeses from '@/components/ResumenFinancieroMeses';
 
 // --- SUBCOMPONENTS ---
+
+const MobileClockWidget = ({ empleadoId, navigate }) => {
+  const [projects, setProjects] = useState([]);
+  const [selectedProject, setSelectedProject] = useState('');
+  const [clock, setClock] = useState({ loading: true, active: false, paused: false, data: null });
+  const [busy, setBusy] = useState(false);
+  const [photoReminderOpen, setPhotoReminderOpen] = useState(false);
+  const [photoReminderProjectId, setPhotoReminderProjectId] = useState(null);
+
+  const refresh = async () => {
+    if (!empleadoId) return;
+    const { data, error } = await supabase.rpc('get_estado_fichaje_empleado', { p_empleado_id: empleadoId });
+    if (error || !data?.length) {
+      setClock({ loading: false, active: false, paused: false, data: null });
+      return;
+    }
+    const current = data[0];
+    const { data: full } = await supabase
+      .from('control_horario')
+      .select('*, proyectos(nombre_proyecto), centros_coste_internos(nombre_centro)')
+      .eq('id', current.fichaje_id)
+      .single();
+    setClock({ loading: false, active: true, paused: current.en_pausa, data: full });
+    if (full?.proyecto_id) setSelectedProject(full.proyecto_id);
+    else if (full?.centro_coste_interno_id) setSelectedProject('nave_taller');
+  };
+
+  useEffect(() => {
+    if (!empleadoId) return;
+    supabase.from('proyectos').select('id, nombre_proyecto').eq('estado', 'activo').order('nombre_proyecto').then(({ data }) => setProjects(data || []));
+    refresh();
+  }, [empleadoId]);
+
+  const getLocation = () => new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve({ lat: null, lng: null });
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => resolve({ lat: coords.latitude, lng: coords.longitude }),
+      () => resolve({ lat: null, lng: null }),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
+  });
+
+  const action = async (type) => {
+    setBusy(true);
+    try {
+      const projectIdAtExit = type === 'salida' ? clock.data?.proyecto_id : null;
+      const location = await getLocation();
+      let rpcName = 'fichar_salida';
+      let params = { p_latitud: location.lat, p_longitud: location.lng, p_custom_time: getMadridLocalTime() };
+      if (type === 'entrada') {
+        if (!selectedProject) {
+          toast({ variant: 'destructive', title: 'Selecciona un destino', description: 'Debes elegir una obra o Nave / Taller.' });
+          return;
+        }
+        rpcName = 'fichar_entrada';
+        params = {
+          ...params,
+          p_tipo: selectedProject === 'nave_taller' ? 'nave_taller' : 'entrada_obra',
+          p_proyecto_id: selectedProject === 'nave_taller' ? null : selectedProject,
+          p_centro_coste_interno_id: selectedProject === 'nave_taller' ? 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' : null,
+        };
+      } else if (type === 'pausa') rpcName = 'fichar_pausa_inicio';
+      else if (type === 'reanudar') rpcName = 'fichar_pausa_fin';
+      const { data: result, error } = await supabase.rpc(rpcName, params);
+      if (error) throw error;
+      if (typeof result === 'string' && result.startsWith('ERROR')) throw new Error(result);
+      if (result?.ok === false) throw new Error(result.mensaje || result.message || 'La entrada no se pudo registrar.');
+      toast({ title: type === 'entrada' ? 'Entrada registrada' : type === 'salida' ? 'Salida registrada' : 'Estado actualizado', className: 'bg-green-600 text-white border-none' });
+      await refresh();
+      if (projectIdAtExit) {
+        setPhotoReminderProjectId(projectIdAtExit);
+        setPhotoReminderOpen(true);
+      }
+    } catch (error) {
+      toast({ variant: 'destructive', title: 'No se pudo registrar el fichaje', description: error.message || 'Revisa el destino seleccionado e inténtalo de nuevo.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (clock.loading) return <div className="mt-2 h-12 animate-pulse rounded-xl bg-muted/40" />;
+
+  const destination = clock.data?.proyectos?.nombre_proyecto || (clock.data?.tipo === 'nave_taller' ? 'Nave / Taller' : 'Sin ubicación');
+
+  return (
+    <div className={`mt-2 -mx-6 w-[calc(100%+3rem)] rounded-xl border px-3 py-2 ${clock.active ? (clock.paused ? 'border-amber-200 bg-amber-50/60' : 'border-emerald-200 bg-emerald-50/60') : 'border-border bg-muted/20'}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className={`text-xs font-semibold ${clock.active ? (clock.paused ? 'text-amber-700' : 'text-emerald-700') : 'text-muted-foreground'}`}>
+            {clock.active ? (clock.paused ? 'En pausa' : 'Jornada activa') : 'Sin fichaje activo'}
+          </p>
+          <p className="truncate text-[11px] text-muted-foreground">{clock.active ? destination : 'Selecciona destino para comenzar'}</p>
+        </div>
+        {clock.active ? (clock.paused ? <Utensils className="h-5 w-5 text-amber-600" /> : <CheckCircle2 className="h-5 w-5 text-emerald-600" />) : <Clock className="h-5 w-5 text-muted-foreground" />}
+      </div>
+      {!clock.active && (
+        <select value={selectedProject} onChange={(event) => setSelectedProject(event.target.value)} className="mt-2 h-9 w-full rounded-lg border bg-background px-2 text-xs">
+          <option value="">Selecciona obra o nave/taller</option>
+          <option value="nave_taller">Nave / Taller</option>
+          {projects.map((project) => <option key={project.id} value={project.id}>{project.nombre_proyecto}</option>)}
+        </select>
+      )}
+      <div className="mt-2 flex gap-2">
+        {!clock.active ? (
+          <Button size="sm" className="h-9 flex-1 bg-emerald-600 text-xs hover:bg-emerald-700" onClick={() => action('entrada')} disabled={busy || !selectedProject}>
+            <Play className="mr-1 h-3.5 w-3.5 fill-current" /> Entrar
+          </Button>
+        ) : (
+          <>
+            <Button size="sm" className={`h-11 flex-1 px-2 text-xs font-semibold text-white shadow-sm ${clock.paused ? '!bg-blue-600 hover:!bg-blue-700' : '!bg-orange-500 hover:!bg-orange-600'}`} onClick={() => action(clock.paused ? 'reanudar' : 'pausa')} disabled={busy}>
+              {clock.paused ? <RotateCcw className="mr-1 h-3.5 w-3.5" /> : <Utensils className="mr-1 h-3.5 w-3.5" />}
+              {clock.paused ? 'Reanudar' : 'Pausa'}
+            </Button>
+            <Button size="sm" variant="destructive" className="h-11 flex-1 px-2 text-xs" onClick={() => action('salida')} disabled={busy}>
+              <Square className="mr-1 h-3.5 w-3.5 fill-current" /> Salir
+            </Button>
+          </>
+        )}
+      </div>
+      <Dialog open={photoReminderOpen} onOpenChange={setPhotoReminderOpen}>
+        <DialogContent className="w-[calc(100%-2rem)] max-w-md rounded-2xl border-emerald-200 p-6 text-center">
+          <DialogHeader className="items-center">
+            <ImagePlus className="mb-2 h-14 w-14 text-emerald-600" />
+            <DialogTitle className="text-2xl font-extrabold leading-tight text-foreground">
+              Una última cosa,
+              <span className="mt-1 block text-emerald-600">SUBE LAS FOTOS</span>
+            </DialogTitle>
+            <DialogDescription className="text-base">
+              Guarda las fotos de la obra antes de terminar.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-2 flex-col gap-2 sm:flex-col">
+            <Button
+              className="h-12 w-full bg-emerald-600 text-base font-bold hover:bg-emerald-700"
+              onClick={() => {
+                setPhotoReminderOpen(false);
+                if (photoReminderProjectId) {
+                  navigate(`/gestion/obras/${photoReminderProjectId}?tab=fotos`);
+                }
+              }}
+            >
+              <ImagePlus className="mr-2 h-5 w-5" /> Ir a Fotos
+            </Button>
+            <Button variant="ghost" className="w-full" onClick={() => setPhotoReminderOpen(false)}>
+              Continuar sin subir ahora
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
 
 const KpiCard = ({ title, value, icon: Icon, color, bg }) => (
   <Card className="hover:shadow-md transition-all duration-200 border-slate-100 bg-white group">
@@ -312,8 +472,8 @@ const HomeView = () => {
       }
 
       // 1. LEADS
-      let leadsBaseQuery = supabase.from('leads').select('created_at', { count: 'exact' }).in('estado', ['nuevo', 'contactado', 'visitado', 'presupuestado']);
-      let leadsQuery = supabase.from('leads').select('created_at', { count: 'exact' }).in('estado', ['nuevo', 'contactado', 'visitado', 'presupuestado']);
+      let leadsBaseQuery = supabase.from('leads').select('created_at', { count: 'exact' }).in('estado', ['nuevo', 'visitado', 'presupuestado']);
+      let leadsQuery = supabase.from('leads').select('created_at', { count: 'exact' }).in('estado', ['nuevo', 'visitado', 'presupuestado']);
       if (!isAdminOrEncargado) {
         leadsBaseQuery = leadsBaseQuery.eq('empleado_asignado_id', empleadoId);
         leadsQuery = leadsQuery.eq('empleado_asignado_id', empleadoId);
@@ -507,6 +667,7 @@ const HomeView = () => {
 
   // Determine other cards to show (Admin/Encargado context mostly)
   const isAdminOrEncargado = ['admin', 'encargado'].includes(sessionRole?.rol);
+  const isTechnicianOrManager = ['tecnico', 'encargado'].includes(sessionRole?.rol);
   const otherCards = isAdminOrEncargado ? [
     { key: 'devoluciones', title: 'Devoluciones', count: stats.devoluciones, icon: RotateCcw, color: 'text-purple-600', bgColor: 'bg-purple-100', path: '/inventario/solicitudes-devoluciones' },
     { key: 'tareas', title: 'Revisiones', count: stats.tareas, icon: CheckSquare, color: 'text-green-600', bgColor: 'bg-green-100', path: '/gestion/tareas' },
@@ -545,7 +706,7 @@ const HomeView = () => {
             <AvatarFallback className="text-4xl bg-primary text-primary-foreground font-bold">{userInitials}</AvatarFallback>
           </Avatar>
 
-          <div className="flex-1 text-center md:text-left space-y-4 pt-2">
+          <div className="w-full flex-1 text-center md:text-left space-y-4 pt-2">
             <div>
               <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight text-foreground leading-tight">
                 {greetingText}, <br className="md:hidden" />
@@ -562,11 +723,11 @@ const HomeView = () => {
 
             <div className="flex flex-col sm:flex-row items-center gap-6 mt-6 pt-6 border-t border-border/50">
               <div className="text-center sm:text-left">
-                <p className="text-lg font-semibold text-foreground capitalize">{capitalizedDate}</p>
-                <p className="text-sm font-mono text-muted-foreground tracking-widest">{formattedTime}</p>
+                <p className="text-sm md:text-lg font-semibold text-foreground capitalize">{capitalizedDate}</p>
+                <p className="text-xs md:text-sm font-mono text-muted-foreground tracking-widest">{formattedTime}</p>
               </div>
               <div className="hidden sm:block h-10 w-px bg-border/50"></div>
-              <div className="flex items-center gap-3 bg-muted/30 px-4 py-2 rounded-lg border border-border/50">
+              <div className="hidden md:flex items-center gap-3 bg-muted/30 px-4 py-2 rounded-lg border border-border/50">
                 <div className={`p-2 rounded-full ${totalPending > 0 ? 'bg-orange-100 text-orange-600' : 'bg-green-100 text-green-600'}`}>
                   <Activity className="h-5 w-5" />
                 </div>
@@ -579,6 +740,11 @@ const HomeView = () => {
                   </p>
                 </div>
               </div>
+              {isTechnicianOrManager && (
+                <div className="w-full md:hidden">
+                  <MobileClockWidget empleadoId={empleadoId} navigate={navigate} />
+                </div>
+              )}
             </div>
           </div>
 

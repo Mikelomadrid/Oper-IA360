@@ -5,7 +5,7 @@ import { toast } from '@/components/ui/use-toast';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Euro, Users, BarChart3, Clock, AlertTriangle, CheckCircle2, TrendingUp, TrendingDown, Minus, Loader2, Phone, MapPin, Building, User, Calendar, CalendarClock, FileDown, UploadCloud, FileText, X, Mail } from 'lucide-react';
+import { Euro, Users, Wrench, HardHat, BarChart3, Clock, AlertTriangle, CheckCircle2, TrendingUp, TrendingDown, Minus, Loader2, Phone, MapPin, Building, User, Calendar, CalendarClock, FileDown, UploadCloud, FileText, X, Mail } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import ReactECharts from 'echarts-for-react';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -16,7 +16,7 @@ import LeadInheritedInfo from '@/components/LeadInheritedInfo';
 import { fetchProjectMaterialNetTotal } from '@/lib/projectMaterialCosts';
 import ProjectProfitabilityForecast from '@/components/ProjectProfitabilityForecast';
 
-const StatCard = ({ title, value, icon, description, trend, trendValue, colorClass }) => {
+const StatCard = ({ title, value, icon, description, details, trend, trendValue, colorClass }) => {
     const TrendIcon = trend === 'up' ? TrendingUp : trend === 'down' ? TrendingDown : Minus;
     return (
         <Card className="transition-transform duration-300 hover:scale-105 hover:shadow-lg overflow-hidden">
@@ -28,15 +28,27 @@ const StatCard = ({ title, value, icon, description, trend, trendValue, colorCla
             </CardHeader>
             <CardContent className="p-3 md:p-6 pt-0 md:pt-0">
                 <div className="text-lg md:text-2xl font-bold truncate">{value}</div>
-                <p className="text-[10px] md:text-xs text-muted-foreground flex items-center mt-1">
-                    <span className="truncate max-w-[80px] md:max-w-none">{description}</span>
-                    {trend && (
-                        <div className={`ml-2 flex items-center ${trend === 'up' ? 'text-green-500' : 'text-red-500'}`}>
-                            <TrendIcon className="h-3 w-3 md:h-4 md:w-4" />
-                            <span>{trendValue}</span>
-                        </div>
-                    )}
-                </p>
+                {(description || trend) && (
+                    <p className="text-[10px] md:text-xs text-muted-foreground flex items-center mt-1">
+                        {description && <span className="truncate max-w-[80px] md:max-w-none">{description}</span>}
+                        {trend && (
+                            <div className={`${description ? 'ml-2' : ''} flex items-center ${trend === 'up' ? 'text-green-500' : 'text-red-500'}`}>
+                                <TrendIcon className="h-3 w-3 md:h-4 md:w-4" />
+                                <span>{trendValue}</span>
+                            </div>
+                        )}
+                    </p>
+                )}
+                {details && (
+                    <div className="mt-2 grid grid-cols-2 gap-x-3 text-[10px] leading-4 text-muted-foreground md:text-xs">
+                        {details.map((detail) => (
+                            <div key={detail.label} className="flex min-w-0 items-center justify-center gap-1 text-center" title={detail.label} aria-label={`${detail.label}: ${detail.value}`}>
+                                {React.cloneElement(detail.icon, { className: "h-3.5 w-3.5 shrink-0" })}
+                                <span className="whitespace-nowrap font-medium tabular-nums text-foreground">{detail.value}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </CardContent>
         </Card>
     );
@@ -149,17 +161,17 @@ const ProjectDashboard = ({ projectId, project }) => {
                 ]);
 
                 if (kpiRes.error) {
-                    console.error("Error fetching project KPIs:", kpiRes.error);
-                    toast({
-                        variant: "destructive",
-                        title: "Error al cargar KPIs",
-                        description: kpiRes.error.message,
-                    });
-                    setKpis(null);
-                } else if (kpiRes.data) {
-                    const baseData = kpiRes.data;
+                    // La vista de KPIs no existe en algunas instalaciones antiguas.
+                    // El detalle debe seguir funcionando con los datos básicos de proyectos.
+                    console.warn("[ProjectDashboard] Vista de KPIs no disponible; usando datos básicos:", kpiRes.error.message || kpiRes.error);
+                }
+
+                const baseData = kpiRes.data || project || null;
+                if (baseData) {
                     const laborCost = laborRes.data?.coste_total_mano_obra || 0;
-                    if (extrasRes.error) throw extrasRes.error;
+                    if (extrasRes.error) {
+                        console.warn("[ProjectDashboard] Extras no disponibles:", extrasRes.error.message || extrasRes.error);
+                    }
                     const extras = extrasRes.data || [];
                     const approvedExtrasRows = extras.filter((extra) => extra.estado === 'aprobado');
                     const pendingExtrasRows = extras.filter((extra) => extra.estado === 'pendiente_cliente');
@@ -471,7 +483,16 @@ Responde SOLO con este JSON sin texto adicional ni markdown:
 
     const cards = [
         { title: "Contrato actualizado", value: formatCurrency(kpis.importe_contrato_actualizado), icon: <Euro />, description: `Base + extras aprobados`, colorClass: 'bg-violet-600' },
-        { title: "Coste acumulado", value: formatCurrency(kpis.costo_total), icon: <Users />, description: "Real hasta hoy", colorClass: 'bg-orange-500' },
+        {
+            title: "Coste acumulado",
+            value: formatCurrency(kpis.costo_total),
+            icon: <Users />,
+            details: [
+                { label: "Materiales", icon: <Wrench />, value: formatCurrency(kpis.coste_total_materiales) },
+                { label: "Mano de obra", icon: <HardHat />, value: formatCurrency(kpis.coste_total_mano_obra) },
+            ],
+            colorClass: 'bg-orange-500'
+        },
         { title: "Margen acumulado", value: formatCurrency(kpis.margen), icon: isProfit ? <CheckCircle2 /> : <AlertTriangle />, description: isProfit ? 'Todavía no es el margen final' : 'Pérdida acumulada', colorClass: isProfit ? 'bg-green-500' : 'bg-red-500' },
         { title: "Rentabilidad actual", value: `${rentabilidadPct.toFixed(2)}%`, icon: <BarChart3 />, description: `Acumulada hasta hoy`, colorClass: isRentable ? 'bg-purple-500' : 'bg-yellow-500' },
     ];
@@ -594,16 +615,18 @@ Responde SOLO con este JSON sin texto adicional ni markdown:
                 </DialogContent>
             </Dialog>
 
-            <BudgetReconciliation
-                baseBudget={kpis.presupuesto_aceptado || 0}
-                approvedExtras={kpis.extras_aprobados || 0}
-                updatedContract={kpis.importe_contrato_actualizado || kpis.presupuesto_aceptado || 0}
-                estimatedExtraCost={kpis.extras_coste_estimado || 0}
-                actualExtraLabor={kpis.extras_mano_obra_real || 0}
-                pendingCount={kpis.extras_pendientes_count || 0}
-                pendingAmount={kpis.extras_pendientes_importe || 0}
-                formatCurrency={formatCurrency}
-            />
+            <div className="budget-reconciliation-desktop-only hidden md:block">
+                <BudgetReconciliation
+                    baseBudget={kpis.presupuesto_aceptado || 0}
+                    approvedExtras={kpis.extras_aprobados || 0}
+                    updatedContract={kpis.importe_contrato_actualizado || kpis.presupuesto_aceptado || 0}
+                    estimatedExtraCost={kpis.extras_coste_estimado || 0}
+                    actualExtraLabor={kpis.extras_mano_obra_real || 0}
+                    pendingCount={kpis.extras_pendientes_count || 0}
+                    pendingAmount={kpis.extras_pendientes_importe || 0}
+                    formatCurrency={formatCurrency}
+                />
+            </div>
 
             {/* ===================== LAYOUT PRINCIPAL ===================== */}
             {/* Izquierda: Distribución (arriba) + Información del Cliente (abajo) */}
@@ -645,40 +668,40 @@ Responde SOLO con este JSON sin texto adicional ni markdown:
             {/* ===================== INFO CLIENTE (OBRA SIN LEAD) ===================== */}
             {/* Mismo diseño que la tarjeta del lead: grid compacto de 2-3 columnas.   */}
             {/* Solo se muestra cuando la obra NO proviene de un lead.                   */}
-            {!project?.lead_id && (
+            {(
                 <div className="mt-4 md:mt-6 space-y-4 md:space-y-6">
-                    <Card>
+                    <Card className={project?.lead_id ? 'md:hidden' : ''}>
                         <CardHeader>
-                            <CardTitle className="text-lg flex items-center gap-2">
-                                <Building className="w-5 h-5" /> Información del Cliente
+                            <CardTitle className="text-base md:text-lg flex items-center gap-2">
+                                <Building className="hidden md:inline w-5 h-5" /> Información del Cliente
                             </CardTitle>
                         </CardHeader>
-                        <CardContent className="grid grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3">
-                            <div><Label className="text-xs text-muted-foreground">Cliente</Label><p className="font-medium">{displayClienteName}</p></div>
-                            <div><Label className="text-xs text-muted-foreground">Contacto</Label><p className="font-medium">{displayContactoName}</p></div>
-                            <div>
-                                <Label className="text-xs text-muted-foreground">Teléfono</Label>
+                        <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-x-6 md:gap-y-3 text-sm md:text-base">
+                            <div className={!displayClienteName || displayClienteName === '-' ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Cliente</Label><p className="font-medium break-words">{displayClienteName}</p></div>
+                            <div className={!displayContactoName || displayContactoName === '-' || displayContactoName === 'Sin contacto' ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Contacto</Label><p className="font-medium break-words">{displayContactoName}</p></div>
+                            <div className={!displayPhone || displayPhone === '-' ? 'hidden md:block' : ''}>
+                                <Label className="text-[10px] md:text-xs text-muted-foreground">Teléfono</Label>
                                 {displayPhone && displayPhone !== '-' ? (
-                                    <a href={`tel:${displayPhone}`} className="flex items-center gap-2 text-primary hover:underline"><Phone className="w-4 h-4" /> {displayPhone}</a>
+                                    <a href={`tel:${displayPhone}`} className="flex items-center gap-2 text-primary hover:underline"><Phone className="hidden md:inline w-4 h-4" /> {displayPhone}</a>
                                 ) : (
-                                    <p className="flex items-center gap-2"><Phone className="w-4 h-4 text-primary shrink-0" /> N/A</p>
+                                    <p>N/A</p>
                                 )}
                             </div>
                             {clientData?.email && (
-                                <div><Label className="text-xs text-muted-foreground">Email</Label><a href={`mailto:${clientData.email}`} className="flex items-center gap-2 text-primary hover:underline"><Mail className="w-4 h-4" /> {clientData.email}</a></div>
+                                <div><Label className="text-[10px] md:text-xs text-muted-foreground">Email</Label><a href={`mailto:${clientData.email}`} className="flex items-center gap-2 text-primary hover:underline break-all"><Mail className="hidden md:inline w-4 h-4" /> {clientData.email}</a></div>
                             )}
                             {clientData?.cif && (
-                                <div><Label className="text-xs text-muted-foreground">CIF</Label><p>{clientData.cif}</p></div>
+                                <div><Label className="text-[10px] md:text-xs text-muted-foreground">CIF</Label><p>{clientData.cif}</p></div>
                             )}
-                            <div><Label className="text-xs text-muted-foreground">Dirección</Label><p className="flex items-center gap-2"><MapPin className="w-4 h-4 text-primary shrink-0" /> {displayAddress}</p></div>
+                            <div className={!displayAddress || displayAddress === '-' ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Dirección</Label><p className="flex items-center gap-2 break-words"><MapPin className="hidden md:inline w-4 h-4 text-primary shrink-0" /> {displayAddress}</p></div>
                             {clientData?.codigo_postal && (
-                                <div><Label className="text-xs text-muted-foreground">Código Postal</Label><p>{clientData.codigo_postal}</p></div>
+                                <div><Label className="text-[10px] md:text-xs text-muted-foreground">Código Postal</Label><p>{clientData.codigo_postal}</p></div>
                             )}
                             {clientData?.municipio && (
-                                <div><Label className="text-xs text-muted-foreground">Municipio</Label><p>{clientData.municipio}</p></div>
+                                <div><Label className="text-[10px] md:text-xs text-muted-foreground">Municipio</Label><p>{clientData.municipio}</p></div>
                             )}
-                            <div><Label className="text-xs text-muted-foreground">Fecha Inicio de Obra</Label><p className="flex items-center gap-2"><Calendar className="w-4 h-4 text-primary shrink-0" /> {formattedStartDate}</p></div>
-                            <div><Label className="text-xs text-muted-foreground">Fin Estimado</Label><p className="flex items-center gap-2"><CalendarClock className="w-4 h-4 text-primary shrink-0" /> {formattedEndDate}</p></div>
+                            <div className={!projectStartDate ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Fecha Inicio de Obra</Label><p className="flex items-center gap-2"><Calendar className="hidden md:inline w-4 h-4 text-primary shrink-0" /> {formattedStartDate}</p></div>
+                            <div className={!project?.fecha_fin_estimada ? 'hidden md:block' : ''}><Label className="text-[10px] md:text-xs text-muted-foreground">Fin Estimado</Label><p className="flex items-center gap-2"><CalendarClock className="hidden md:inline w-4 h-4 text-primary shrink-0" /> {formattedEndDate}</p></div>
                         </CardContent>
                     </Card>
 

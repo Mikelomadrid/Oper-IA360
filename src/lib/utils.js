@@ -200,14 +200,13 @@ export const toMadridTime = (dateInput) => {
 };
 
 /**
- * Calculates overtime based on the 8.5 hour threshold logic.
- * Logic: 8 hours base + 30 min courtesy. Overtime counts only AFTER 8h 30m.
- * Result is total_hours - 8.5 (if positive).
+ * Calculates overtime with a 45-minute courtesy margin.
+ * Overtime counts only after the daily target plus 45 minutes.
  * @param {number} totalHours - Total worked hours in decimal
  * @returns {object} { normal: number, extra: number }
  */
 export const calculateOvertimeThreshold = (totalHours) => {
-    const threshold = 8.5; // 8h 30m
+    const threshold = 8.75; // 8h 45m
     const total = Number(totalHours) || 0;
     
     if (total <= threshold) {

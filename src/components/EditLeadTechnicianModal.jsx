@@ -10,7 +10,7 @@ import { supabase } from '@/lib/customSupabaseClient';
 import { toast } from '@/components/ui/use-toast';
 
 const STATUS_OPTIONS = [
-    'nuevo', 'contactado', 'visitado', 'presupuestado', 'rechazado', 'cancelado'
+    'nuevo', 'visitado', 'presupuestado', 'rechazado', 'cancelado'
 ];
 
 export default function EditLeadTechnicianModal({ isOpen, onClose, leadId, onLeadUpdated }) {

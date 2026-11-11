@@ -11,6 +11,7 @@ export const NotificationBadge = ({ count, children, className, variant = 'destr
     destructive: baseClasses,
     primary: "bg-primary text-primary-foreground",
     secondary: "bg-blue-600 text-white", 
+    success: "bg-green-500 text-white",
     outline: "border-2 border-background bg-muted text-muted-foreground",
   };
 

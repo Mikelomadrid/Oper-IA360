@@ -400,7 +400,7 @@ export default function LeadDocuments({ leadId, canEdit, canDelete }) {
             )}
 
             {/* List Section */}
-            <div className="bg-card rounded-md border shadow-sm overflow-hidden">
+            <div className="hidden bg-card rounded-md border shadow-sm overflow-hidden md:block">
                 <Table>
                     <TableHeader>
                         <TableRow>
@@ -494,6 +494,52 @@ export default function LeadDocuments({ leadId, canEdit, canDelete }) {
                         )}
                     </TableBody>
                 </Table>
+            </div>
+
+            <div className="space-y-2 md:hidden">
+                {loading ? (
+                    <div className="flex h-28 items-center justify-center rounded-xl border bg-card text-sm text-muted-foreground">
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Cargando documentos...
+                    </div>
+                ) : documents.length === 0 ? (
+                    <div className="flex min-h-28 flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-card px-4 text-center text-sm text-muted-foreground">
+                        <FileText className="h-7 w-7 opacity-20" />
+                        No hay documentos adjuntos en este lead.
+                    </div>
+                ) : documents.map((doc) => {
+                    const isPdf = doc.descripcion?.toLowerCase().endsWith('.pdf');
+                    const uploaderId = doc.uploaded_by || doc.usuario_id;
+                    const creator = creatorsMap[uploaderId];
+                    const creatorName = creator ? `${creator.nombre} ${creator.apellidos || ''}` : (uploaderId === user?.id ? 'Mí' : 'Desconocido');
+                    const isBroken = brokenFileIds.has(doc.id);
+
+                    return (
+                        <div key={doc.id} className={`rounded-xl border bg-card p-3 shadow-sm ${isBroken ? 'border-red-200 bg-red-50/50' : ''}`}>
+                            <div className="flex min-w-0 items-start gap-3">
+                                <div className={`shrink-0 rounded-lg p-2 ${isBroken ? 'bg-red-100 text-red-500' : 'bg-blue-50 text-blue-600'}`}>
+                                    {isBroken ? <Link2Off className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <p className={`break-words text-sm font-semibold ${isBroken ? 'text-red-600 line-through' : ''}`}>
+                                        {doc.descripcion || 'Documento sin nombre'}
+                                    </p>
+                                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                                        <Badge variant="outline" className="capitalize bg-slate-50 text-[10px]">{doc.tipo}</Badge>
+                                        <span>{new Date(doc.created_at).toLocaleDateString()}</span>
+                                    </div>
+                                    <p className="mt-1 truncate text-[10px] text-muted-foreground">
+                                        {isBroken ? 'Archivo no encontrado' : `Subido por: ${creatorName}`}
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="mt-3 flex justify-end gap-1 border-t pt-2">
+                                {!isBroken && isPdf && <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => handlePreview(doc)} title="Vista Previa"><Eye className="h-4 w-4" /></Button>}
+                                {!isBroken && <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => handleDownload(doc)} title="Descargar"><Download className="h-4 w-4" /></Button>}
+                                {(canDelete || doc.usuario_id === user?.id || doc.uploaded_by === user?.id) && <Button variant="ghost" size="icon" className="h-9 w-9 text-red-500" onClick={() => handleDelete(doc)} title="Eliminar"><Trash2 className="h-4 w-4" /></Button>}
+                            </div>
+                        </div>
+                    );
+                })}
             </div>
 
             {/* PDF Preview Modal */}

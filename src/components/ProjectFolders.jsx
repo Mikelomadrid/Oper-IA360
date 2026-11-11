@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { toast } from '@/components/ui/use-toast';
-import { Folder, FileText, Edit2, Trash2, Plus, Loader2, Upload, ArrowLeft, Home, ChevronRight, Download, Image as ImageIcon, File, Video, User, ChevronDown, Move, CornerUpRight, MoreVertical, AlertCircle } from 'lucide-react';
+import { Folder, FileText, Edit2, Trash2, Plus, Loader2, Upload, Camera, ArrowLeft, Home, ChevronRight, Download, Image as ImageIcon, File, Video, User, ChevronDown, Move, CornerUpRight, MoreVertical, AlertCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -301,6 +301,16 @@ const FolderTreeItem = ({ folder, level = 0, currentFolderId, onSelect, onToggle
     );
 };
 
+const getMadridDateFolderName = () => {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/Madrid',
+        day: '2-digit',
+        month: '2-digit',
+        year: '2-digit',
+    }).formatToParts(new Date()).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+    return `${parts.day}-${parts.month}-${parts.year}`;
+};
+
 export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo = 'docs' }) {
     // Auth
     const { sessionRole, user } = useAuth();
@@ -347,6 +357,8 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
     const [inputValue, setInputValue] = useState('');
     const [actionLoading, setActionLoading] = useState(false);
     const fileInputRef = React.useRef(null);
+    const cameraInputRef = React.useRef(null);
+    const galleryInputRef = React.useRef(null);
 
     // Gallery State
     const [previewOpen, setPreviewOpen] = useState(false);
@@ -374,7 +386,50 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
                 .order('created_at', { ascending: false });
 
             if (foldersError) throw foldersError;
-            setAllFolders(foldersData || []);
+            let resolvedFolders = foldersData || [];
+
+            // En Fotos, cada técnico entra directamente en su carpeta del día
+            // y su carpeta personal. Si faltan, se crean automáticamente.
+            if (isGalleryMode && isTechnician && currentFolderId === null && empleadoId) {
+                try {
+                    const todayFolderName = getMadridDateFolderName();
+                    let dayFolder = resolvedFolders.find((folder) =>
+                        folder.carpeta_padre_id === null && folder.nombre === todayFolderName
+                    );
+                    let employeeFolder = dayFolder && resolvedFolders.find((folder) =>
+                        folder.carpeta_padre_id === dayFolder.id && folder.created_by === empleadoId
+                    );
+
+                    if (!dayFolder) {
+                        const { data: createdDayFolder, error: createDayError } = await supabase
+                            .from('carpetas')
+                            .insert({ proyecto_id: projectId, nombre: todayFolderName, created_by: empleadoId, carpeta_padre_id: null, tipo: 'foto' })
+                            .select('*')
+                            .single();
+                        if (createDayError) throw createDayError;
+                        dayFolder = createdDayFolder;
+                        resolvedFolders = [...resolvedFolders, createdDayFolder];
+                    }
+
+                    if (!employeeFolder) {
+                        const employeeName = `${sessionRole?.nombre || ''} ${sessionRole?.apellidos || ''}`.trim() || 'Empleado';
+                        const { data: createdEmployeeFolder, error: createEmployeeError } = await supabase
+                            .from('carpetas')
+                            .insert({ proyecto_id: projectId, nombre: employeeName, created_by: empleadoId, carpeta_padre_id: dayFolder.id, tipo: 'foto' })
+                            .select('*')
+                            .single();
+                        if (createEmployeeError) throw createEmployeeError;
+                        employeeFolder = createdEmployeeFolder;
+                        resolvedFolders = [...resolvedFolders, createdEmployeeFolder];
+                    }
+
+                    setCurrentFolderId(employeeFolder.id);
+                } catch (autoFolderError) {
+                    console.warn('No se pudo abrir automáticamente la carpeta de fotos del empleado:', autoFolderError);
+                }
+            }
+
+            setAllFolders(resolvedFolders);
 
             // 2. Fetch Files (we can fetch all and filter in memory or fetch by folder)
             let fileQuery = supabase
@@ -405,7 +460,7 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
         } finally {
             setLoading(false);
         }
-    }, [projectId, currentFolderId, tipo]);
+    }, [projectId, currentFolderId, tipo, isGalleryMode, isTechnician, empleadoId, sessionRole?.nombre, sessionRole?.apellidos]);
 
     useEffect(() => {
         // Reset navigation when type changes
@@ -830,7 +885,7 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
     };
 
     return (
-        <div className="flex h-[calc(100vh-200px)] min-h-[500px] border rounded-lg bg-background shadow-sm overflow-hidden">
+        <div className="flex h-[calc(100vh-160px)] min-h-[420px] border rounded-lg bg-background shadow-sm overflow-hidden md:h-[calc(100vh-200px)] md:min-h-[500px]">
 
             {/* Sidebar Tree */}
             <div className="w-64 border-r bg-muted/10 flex flex-col hidden md:flex">
@@ -937,8 +992,20 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
                             <Plus className="w-3 h-3" /> <span className="hidden sm:inline">Carpeta</span>
                         </Button>
                         <div className="relative">
-                            <input type="file" ref={fileInputRef} className="hidden" multiple onChange={handleFileUpload} disabled={actionLoading} />
-                            <Button size="sm" onClick={() => fileInputRef.current?.click()} disabled={actionLoading} className="gap-2 h-8">
+                            <input type="file" ref={fileInputRef} className="hidden" multiple accept={isGalleryMode ? 'image/*' : undefined} onChange={handleFileUpload} disabled={actionLoading} />
+                            {isGalleryMode && (
+                                <>
+                                    <input type="file" ref={cameraInputRef} className="hidden" accept="image/*" capture="environment" onChange={handleFileUpload} disabled={actionLoading} />
+                                    <input type="file" ref={galleryInputRef} className="hidden" accept="image/*" multiple onChange={handleFileUpload} disabled={actionLoading} />
+                                    <Button type="button" size="sm" variant="outline" onClick={() => cameraInputRef.current?.click()} disabled={actionLoading} className="h-8 gap-1 sm:hidden">
+                                        <Camera className="h-3.5 w-3.5" /> Cámara
+                                    </Button>
+                                    <Button type="button" size="sm" variant="outline" onClick={() => galleryInputRef.current?.click()} disabled={actionLoading} className="h-8 gap-1 sm:hidden">
+                                        <ImageIcon className="h-3.5 w-3.5" /> Galería
+                                    </Button>
+                                </>
+                            )}
+                            <Button size="sm" onClick={() => fileInputRef.current?.click()} disabled={actionLoading} className={cn("gap-2 h-8", isGalleryMode && "hidden sm:flex")}>
                                 {actionLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
                                 <span className="hidden sm:inline">Subir</span>
                             </Button>
@@ -951,7 +1018,7 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
 
                 {/* Grid Content */}
                 <ScrollArea className="flex-1 bg-slate-50/50 dark:bg-slate-900/20">
-                    <div className="p-4 space-y-6">
+                    <div className="min-w-0 space-y-4 p-3 md:space-y-6 md:p-4">
                         {loading ? (
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
                                 {[1, 2, 3].map(i => <Skeleton key={i} className="h-24 w-full rounded-xl" />)}
@@ -965,7 +1032,7 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
                             <>
                                 {/* Folders Grid */}
                                 {currentSubfolders.length > 0 && (
-                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 md:grid-cols-4 md:gap-4 lg:grid-cols-5">
                                         {currentSubfolders.map(folder => (
                                             <Card
                                                 key={folder.id}
@@ -987,9 +1054,9 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
                                                 )}
                                                 onClick={() => handleNavigate(folder.id)}
                                             >
-                                                <CardContent className="p-4 flex flex-col items-center text-center gap-2">
-                                                    <Folder className="w-10 h-10 text-blue-500 fill-blue-500/10" />
-                                                    <span className="text-xs font-medium truncate w-full" title={folder.nombre}>
+                                                <CardContent className="flex flex-row items-center gap-3 p-3 text-left md:flex-col md:gap-2 md:p-4 md:text-center">
+                                                    <Folder className="h-8 w-8 shrink-0 text-blue-500 fill-blue-500/10 md:h-10 md:w-10" />
+                                                    <span className="min-w-0 flex-1 truncate text-sm font-medium md:w-full md:text-xs" title={folder.nombre}>
                                                         {folder.nombre}
                                                     </span>
 
@@ -1030,10 +1097,10 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
                                     <>
                                         {currentSubfolders.length > 0 && <div className="border-t my-4" />}
                                         <div className={cn(
-                                            "grid gap-4",
+                                            "grid gap-2",
                                             isGalleryMode
-                                                ? "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5"
-                                                : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5"
+                                                ? "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 md:gap-4"
+                                                : "grid-cols-1 md:grid-cols-4 lg:grid-cols-5 md:gap-4"
                                         )}>
                                             {currentFiles.map(file => (
                                                 <Card
@@ -1069,8 +1136,8 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
                                                         </div>
                                                     </div>
                                                     <CardContent className={cn(
-                                                        "p-0 flex flex-col items-center justify-center h-full w-full relative",
-                                                        !isGalleryMode && "p-4"
+                                                        "relative flex h-full w-full items-center gap-3 p-0",
+                                                        isGalleryMode ? "flex-col justify-center" : "flex-row p-3 md:flex-col md:justify-center md:p-4"
                                                     )}>
                                                         {isGalleryMode ? (
                                                             <>
@@ -1093,13 +1160,13 @@ export default function ProjectFolders({ projectId, canEdit: propCanEdit, tipo =
                                                             </>
                                                         ) : (
                                                             <>
-                                                                <div className="w-10 h-10 flex items-center justify-center bg-muted/50 rounded-lg">
+                                                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted/50">
                                                                     {getFileIcon(file.mime_type)}
                                                                 </div>
-                                                                <span className="text-xs font-medium truncate w-full mt-2" title={file.nombre}>
+                                                                <span className="min-w-0 flex-1 truncate text-sm font-medium md:mt-2 md:w-full md:flex-none md:text-xs" title={file.nombre}>
                                                                     {file.nombre}
                                                                 </span>
-                                                                <span className="text-[10px] text-muted-foreground">
+                                                                <span className="hidden text-[10px] text-muted-foreground md:block">
                                                                     {formatCreatorName(file.creator)}
                                                                 </span>
                                                             </>

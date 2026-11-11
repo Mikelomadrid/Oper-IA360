@@ -311,22 +311,11 @@ const PersonalDocuments = () => {
         <div className="p-4 md:p-8">
             <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}>
                 <h1 className="text-3xl font-bold tracking-tight">Mis Documentos</h1>
-                <p className="text-muted-foreground">Aquí puedes ver y descargar tus documentos personales como nóminas, contratos, etc.</p>
+                <p className="text-muted-foreground">Consulta y organiza tus documentos personales.</p>
             </motion.div>
             <motion.div className="mt-6 space-y-8" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
-    <div>
-        {renderContent()}
-    </div>
-
     {sessionRole?.empleadoId && (
         <div className="space-y-3">
-            <div>
-                <h2 className="text-xl font-semibold tracking-tight">Documentos NUEVO</h2>
-                <p className="text-sm text-muted-foreground">
-                    Nueva estructura de carpetas. Los documentos antiguos siguen arriba y no se borran.
-                </p>
-            </div>
-
             <EmployeeFolders empleadoId={sessionRole.empleadoId} />
         </div>
     )}

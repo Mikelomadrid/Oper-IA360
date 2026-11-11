@@ -39,13 +39,10 @@
  * - Desplegable con checkbox por cada estado + botón "Marcar todos"/"Desmarcar todos".
  * - Solo aplica en vista Lista (en Kanban las columnas ya son los estados).
  *
- * NUEVO - AVISOS DE ADMIN (bolita verde):
- * - Independiente del indicador ámbar de "lead nunca abierto" (isUnread / visto_primera_vez_at),
- *   que ya existía y se mantiene igual para todos los roles.
- * - La bolita VERDE es solo para Mikelo (admin): indica que un técnico/encargado ha añadido
- *   un comentario, cambiado el estado o subido un archivo desde la última vez que Mikelo lo vio.
- *   Se alimenta de useAvisosMikelo() (tabla notificaciones) y desaparece al abrir el lead
- *   (LeadDetail marca el aviso como leído automáticamente).
+ * AVISOS DE LEAD:
+ * - El sombreado naranja es individual por usuario: aparece si el lead tiene
+ *   actividad posterior a su última lectura.
+ * - El usuario que genera la actividad queda marcado como leído automáticamente.
  *
  * FIX (móvil) - BOTONES EDITAR/ELIMINAR EN TARJETAS KANBAN:
  * - Antes, los botones de Editar/Eliminar de cada tarjeta solo se mostraban con
@@ -83,8 +80,6 @@ import { formatDate, cn } from '@/lib/utils';
 import { FORM_STATUS_OPTIONS, getStatusLabel, estadoMap } from '@/utils/leadStatus';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSearchParams, useLocation } from 'react-router-dom';
-import { useAvisosMikelo } from '@/hooks/useAvisosMikelo';
-import AvisoBolita, { AVISO_ROW_CLASS } from '@/components/AvisoBolita';
 import { format as formatDateFns, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 
@@ -114,13 +109,10 @@ const useIsMobile = () => {
 const KANBAN_COLUMNS = ['nuevo', 'visita_agendada', 'visitado', 'presupuestado'];
 
 const Leads = ({ navigate }) => {
-  const { sessionRole } = useAuth();
+  const { sessionRole, user } = useAuth();
   const { toast } = useToast();
   const isMobile = useIsMobile();
-
-  // Avisos pendientes para Mikelo (admin): bolita verde + fila/tarjeta sombreada
-  // hasta que abra el lead con la actualización. Vacío para cualquier otro rol.
-  const { pendingLeads } = useAvisosMikelo();
+  const mobileKanbanOnly = isMobile && ['tecnico', 'encargado'].includes(sessionRole?.rol);
 
   // URL Param State Management
   const [searchParams, setSearchParams] = useSearchParams();
@@ -137,9 +129,12 @@ const Leads = ({ navigate }) => {
   const partidaFilter = searchParams.get('partida') || 'all'; // Filtro por partida
   const empleadoFilter = searchParams.get('empleado') || 'all'; // NUEVO: filtro por personal asignado (auth_user_id)
   const activeTab = searchParams.get('tab') || 'activos';
+  const effectiveActiveTab = mobileKanbanOnly ? 'activos' : activeTab;
+  const openColumnParam = searchParams.get('open') || null;
   const urlSearchTerm = searchParams.get('q') || '';
   const filterParam = searchParams.get('filter') || null;
   const viewMode = searchParams.get('view') || 'kanban'; // ACTUALIZADO: por defecto Kanban. 'lista' | 'kanban'
+  const effectiveViewMode = mobileKanbanOnly ? 'kanban' : viewMode;
 
   // Local state for search input to prevent lag/excessive URL updates
   const [localSearchTerm, setLocalSearchTerm] = useState(urlSearchTerm);
@@ -161,6 +156,23 @@ const Leads = ({ navigate }) => {
   const [draggedLeadId, setDraggedLeadId] = useState(null);
   const [dragOverColumn, setDragOverColumn] = useState(null);
   const justDraggedRef = useRef(false); // Evita que el "drop" dispare el click de la tarjeta
+
+  // En móvil el Kanban funciona como un acordeón para evitar una pantalla interminable.
+  const [openMobileKanbanColumn, setOpenMobileKanbanColumn] = useState(openColumnParam);
+
+  useEffect(() => {
+    setOpenMobileKanbanColumn(openColumnParam);
+  }, [openColumnParam]);
+
+  const setOpenKanbanColumn = (column) => {
+    setOpenMobileKanbanColumn(column);
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (column) next.set('open', column);
+      else next.delete('open');
+      return next;
+    }, { replace: true });
+  };
 
   // NUEVO: Qué mes está abierto dentro de la columna HISTORIAL del Kanban
   const [kanbanHistorialMonth, setKanbanHistorialMonth] = useState(() => {
@@ -294,6 +306,7 @@ const Leads = ({ navigate }) => {
 
       const leadIds = leadsData.map(l => l.id);
       let assignmentsMap = {};
+      let readsMap = {};
 
       if (leadIds.length > 0) {
         const { data: assignmentsData, error: assignmentsError } = await supabase
@@ -306,6 +319,18 @@ const Leads = ({ navigate }) => {
             if (!assignmentsMap[a.lead_id]) assignmentsMap[a.lead_id] = new Set();
             assignmentsMap[a.lead_id].add(a.usuario_id);
           });
+        }
+
+        if (user?.id) {
+          const { data: readsData, error: readsError } = await supabase
+            .from('lead_lecturas')
+            .select('lead_id, visto_at')
+            .eq('usuario_id', user.id)
+            .in('lead_id', leadIds);
+
+          if (!readsError && readsData) {
+            readsData.forEach(read => { readsMap[read.lead_id] = read.visto_at; });
+          }
         }
       }
 
@@ -354,6 +379,7 @@ const Leads = ({ navigate }) => {
 
         return {
           ...lead,
+          lead_read_at: readsMap[lead.id] || null,
           nombre_cliente: lead.nombre_empresa || lead.nombre_contacto,
           fecha: lead.created_at,
           assignments_count: count > 0 ? count : (lead.empleado_asignado_id ? 1 : 0),
@@ -406,7 +432,7 @@ const Leads = ({ navigate }) => {
     fetchArchivedLeads(); // NUEVO
     fetchPartidas(); // Cargar partidas al inicio
     fetchEmpleados(); // NUEVO: Cargar personal para el filtro de asignados
-  }, [sessionRole, canViewStats]);
+  }, [sessionRole, canViewStats, user?.id]);
 
   // Realtime subscription
   useEffect(() => {
@@ -475,7 +501,9 @@ const Leads = ({ navigate }) => {
   }, [baseLeads, statusFilter, selectedCategoryKey, conversionFilter, partidaFilter, empleadoFilter, filterParam, sessionRole]);
 
   const tableLeads = useMemo(() => {
-    return statsLeads.filter(l => l.archivado === false);
+    // Los leads antiguos pueden tener archivado = NULL. Solo se consideran
+    // archivados cuando el valor es true de forma explícita.
+    return statsLeads.filter(l => l.archivado !== true);
   }, [statsLeads]);
 
   // NUEVO: Leads para el Kanban.
@@ -483,7 +511,7 @@ const Leads = ({ navigate }) => {
   // filtro de estado, porque en Kanban las columnas YA son los estados.
   const kanbanLeads = useMemo(() => {
     return baseLeads.filter(l => {
-      if (l.archivado !== false) return false;
+      if (l.archivado === true) return false;
       if (!KANBAN_COLUMNS.includes(l.estado)) return false;
 
       if (selectedCategoryKey) {
@@ -609,22 +637,27 @@ const Leads = ({ navigate }) => {
     }
   };
 
-  // NUEVO: Un lead está "sin leer" si nunca se ha abierto
-  const isUnread = (lead) => !lead.visto_primera_vez_at;
+  // Un lead vuelve a estar pendiente cuando cambia después de la última lectura
+  // individual del usuario. Sin fila de lectura, se considera pendiente.
+  const isUnread = (lead) => {
+    if (!lead.lead_read_at) return true;
+    if (!lead.updated_at) return false;
+    return new Date(lead.updated_at).getTime() > new Date(lead.lead_read_at).getTime();
+  };
 
-  // NUEVO: Marcar lead como visto la primera vez que se abre
+  // Marcar el lead como leído para el usuario actual
   const marcarComoVisto = async (id) => {
+    if (!user?.id) return;
     const ahora = new Date().toISOString();
     // Optimista: quitar el resaltado al instante
     setLeads(prev => prev.map(l =>
-      l.id === id ? { ...l, visto_primera_vez_at: ahora } : l
+      l.id === id ? { ...l, lead_read_at: ahora } : l
     ));
     try {
-      await supabase
-        .from('leads')
-        .update({ visto_primera_vez_at: ahora })
-        .eq('id', id)
-        .is('visto_primera_vez_at', null);
+      const { error } = await supabase
+        .from('lead_lecturas')
+        .upsert({ lead_id: id, usuario_id: user.id, visto_at: ahora }, { onConflict: 'lead_id,usuario_id' });
+      if (error) throw error;
     } catch (e) {
       console.error('Error marcando lead como visto:', e);
     }
@@ -781,6 +814,75 @@ const Leads = ({ navigate }) => {
     return <span className="font-bold text-slate-900 leading-tight">{lead.nombre_contacto || 'Sin nombre'}</span>;
   };
 
+  const renderMobileLeadCard = (lead) => {
+    const unread = isUnread(lead);
+
+    return (
+      <div
+        key={lead.id}
+        className={cn(
+          'rounded-xl border bg-white p-3 shadow-sm transition-colors cursor-pointer',
+          unread
+            ? 'border-l-4 border-l-emerald-400 bg-emerald-50/70'
+            : 'border-slate-200 hover:bg-slate-50'
+        )}
+        onClick={() => handleLeadClick(lead.id)}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start gap-2">
+              {unread && (
+                <span className="relative mt-1 flex h-2.5 w-2.5 shrink-0" title="Lead sin leer">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                </span>
+              )}
+              <div className="min-w-0">
+                <div className="truncate">{renderLeadName(lead)}</div>
+                <p className="mt-1 flex items-center gap-1 truncate text-xs text-slate-500">
+                  <MapPin className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{lead.municipio || lead.direccion || 'Sin ubicación'}</span>
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="shrink-0">{getStatusBadge(lead.estado)}</div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-slate-100 pt-3 text-xs">
+          <div className="min-w-0">
+            <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">Categoría</span>
+            <span className="flex items-center gap-1 truncate text-slate-700">
+              <Tag className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <span className="truncate">{lead.category_label || 'Sin categoría'}</span>
+            </span>
+          </div>
+          <div className="min-w-0">
+            <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">Partida</span>
+            <span className="block truncate capitalize text-slate-700">{getPartidaLabel(lead.partida) || 'Sin partida'}</span>
+          </div>
+          <div className="min-w-0">
+            <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">Asignados</span>
+            <span className="block truncate text-slate-700">{renderAssignments(lead.assignments_count)}</span>
+          </div>
+          <div className="min-w-0">
+            <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">Fecha</span>
+            <span className="block truncate text-slate-500">{formatDate(lead.fecha)}</span>
+          </div>
+        </div>
+
+        <div className="mt-3 flex justify-end gap-1 border-t border-slate-100 pt-2" onClick={(e) => e.stopPropagation()}>
+          <Button variant="ghost" size="icon" className="h-9 w-9 text-slate-500 hover:text-blue-600" onClick={() => handleEdit(lead.id)} aria-label="Editar lead">
+            <Edit className="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-9 w-9 text-slate-500 hover:bg-red-50 hover:text-red-600" onClick={() => handleDelete(lead.id)} aria-label="Eliminar lead">
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   // Obtener label de partida para mostrar
   const getPartidaLabel = (key) => {
     const found = partidas.find(p => p.key === key);
@@ -794,7 +896,6 @@ const Leads = ({ navigate }) => {
   const renderKanbanCard = (lead) => {
     const isDragging = draggedLeadId === lead.id;
     const unread = isUnread(lead);
-    const hasAviso = pendingLeads.has(lead.id);
 
     return (
       <div
@@ -806,21 +907,18 @@ const Leads = ({ navigate }) => {
         className={cn(
           `group rounded-lg border shadow-sm p-3 cursor-grab active:cursor-grabbing
           hover:shadow-md transition-all select-none`,
-          hasAviso
-            ? 'bg-green-50 border-green-400 ring-2 ring-green-400/60 hover:border-green-500'
-            : unread
-              ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-400/60 hover:border-amber-500'
-              : 'bg-white border-slate-200 hover:border-slate-300',
+          unread
+            ? 'bg-emerald-50 border-emerald-300 ring-2 ring-emerald-300/60 hover:border-emerald-400'
+            : 'bg-white border-slate-200 hover:border-slate-300',
           isDragging && 'opacity-40 ring-2 ring-primary/40'
         )}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1 flex items-start gap-2">
-            <AvisoBolita show={hasAviso} className="mt-1" />
-            {!hasAviso && unread && (
+            {unread && (
               <span className="relative flex h-2.5 w-2.5 shrink-0 mt-1" title="Lead sin leer">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-600"></span>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
               </span>
             )}
             <div className="min-w-0 flex-1">
@@ -875,6 +973,41 @@ const Leads = ({ navigate }) => {
           </Button>
         </div>
       </div>
+    );
+  };
+
+  const renderMobileKanbanLeadRow = (lead) => {
+    const unread = isUnread(lead);
+
+    return (
+      <button
+        key={lead.id}
+        type="button"
+        onClick={() => handleKanbanCardClick(lead.id)}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-lg border px-3 py-2.5 text-left transition-colors',
+          unread
+            ? 'border-emerald-300 bg-emerald-50/80 hover:bg-emerald-100'
+            : 'border-slate-200 bg-white hover:bg-slate-50'
+        )}
+      >
+        {unread ? (
+          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" title="Lead sin leer" />
+        ) : (
+          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-slate-200" />
+        )}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-semibold text-slate-900">
+            {lead.nombre_empresa || lead.nombre_contacto || 'Sin nombre'}
+          </span>
+          <span className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-slate-500">
+            <MapPin className="h-3 w-3 shrink-0" />
+            <span className="truncate">{lead.municipio || lead.direccion || lead.category_label || 'Sin datos adicionales'}</span>
+          </span>
+        </span>
+        <span className="shrink-0">{getStatusBadge(lead.estado)}</span>
+        <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+      </button>
     );
   };
 
@@ -984,6 +1117,8 @@ const Leads = ({ navigate }) => {
     const columnLeads = kanbanGroups[status] || [];
     const style = estadoMap[status] || estadoMap.nuevo;
     const isOver = dragOverColumn === status;
+    const isOpenOnMobile = openMobileKanbanColumn === status;
+    const pendingCount = columnLeads.filter(isUnread).length;
 
     return (
       <div
@@ -991,34 +1126,46 @@ const Leads = ({ navigate }) => {
         onDragOver={(e) => handleColumnDragOver(e, status)}
         onDragLeave={(e) => handleColumnDragLeave(e, status)}
         onDrop={(e) => handleColumnDrop(e, status)}
-        className={`flex flex-col rounded-xl border transition-colors min-w-[270px] w-[270px] md:min-w-0 md:w-auto md:flex-1
+        className={`flex w-full min-w-0 flex-col rounded-xl border transition-colors md:min-w-[270px] md:w-[270px] md:flex-1
           ${isOver ? 'border-primary bg-primary/5 ring-2 ring-primary/30' : 'border-slate-200 bg-slate-100/60'}`}
       >
         {/* Cabecera de columna */}
-        <div
-          className="px-3 py-2.5 rounded-t-xl border-b flex items-center justify-between gap-2"
+        <button
+          type="button"
+          onClick={() => setOpenKanbanColumn(isOpenOnMobile ? null : status)}
+          className="w-full px-3 py-2.5 rounded-t-xl border-b flex items-center justify-between gap-2 text-left md:cursor-default"
           style={{ backgroundColor: style.bg, borderColor: style.br }}
         >
-          <span className="uppercase text-xs font-bold tracking-wide" style={{ color: style.text }}>
-            {getStatusLabel(status)}
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="uppercase text-xs font-bold tracking-wide" style={{ color: style.text }}>
+              {getStatusLabel(status)}
+            </span>
+            <ChevronRight className={`h-4 w-4 transition-transform md:hidden ${isOpenOnMobile ? 'rotate-90' : ''}`} style={{ color: style.text }} />
           </span>
-          <span
-            className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/70"
-            style={{ color: style.text }}
-          >
-            {columnLeads.length}
+          <span className="flex shrink-0 items-center gap-1.5">
+            {pendingCount > 0 && (
+              <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-green-500 px-1 text-[10px] font-bold text-white shadow-sm" title={`${pendingCount} lead${pendingCount === 1 ? '' : 's'} pendiente${pendingCount === 1 ? '' : 's'} de atención`}>
+                {pendingCount}
+              </span>
+            )}
+            <span
+              className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/70"
+              style={{ color: style.text }}
+            >
+              {columnLeads.length}
+            </span>
           </span>
-        </div>
+        </button>
 
         {/* Tarjetas */}
-        <div className="flex-1 p-2 space-y-2 overflow-y-auto max-h-[calc(100vh-340px)] min-h-[120px]">
+        <div className={`flex-1 p-2 space-y-2 overflow-y-auto max-h-[calc(100vh-340px)] min-h-[120px] ${isOpenOnMobile ? 'block' : 'hidden'} md:block`}>
           {columnLeads.length === 0 ? (
             <div className={`h-24 flex items-center justify-center rounded-lg border-2 border-dashed text-xs
               ${isOver ? 'border-primary/40 text-primary' : 'border-slate-200 text-slate-400'}`}>
               {isOver ? 'Suelta aquí' : 'Sin leads'}
             </div>
           ) : (
-            columnLeads.map(lead => renderKanbanCard(lead))
+            columnLeads.map(lead => isMobile ? renderMobileKanbanLeadRow(lead) : renderKanbanCard(lead))
           )}
         </div>
       </div>
@@ -1029,27 +1176,32 @@ const Leads = ({ navigate }) => {
   const renderLeadsHistorialColumn = () => (
     <div
       key="__historial__"
-      className="flex flex-col rounded-xl border border-slate-200 bg-slate-100/60 transition-colors min-w-[270px] w-[270px] md:min-w-0 md:w-auto md:flex-1"
+      className="flex w-full min-w-0 flex-col rounded-xl border border-slate-200 bg-slate-100/60 transition-colors md:min-w-[270px] md:w-[270px] md:flex-1"
     >
-      <div
-        className="px-3 py-2.5 rounded-t-xl border-b flex items-center justify-between gap-2"
+      <button
+        type="button"
+        onClick={() => setOpenKanbanColumn(openMobileKanbanColumn === '__historial__' ? null : '__historial__')}
+        className="w-full px-3 py-2.5 rounded-t-xl border-b flex items-center justify-between gap-2 text-left md:cursor-default"
         style={{ backgroundColor: '#d1fae5', borderColor: '#6ee7b7' }}
       >
-        <span className="uppercase text-xs font-bold tracking-wide flex items-center gap-1.5" style={{ color: '#047857' }}>
-          <Archive className="w-3.5 h-3.5" /> HISTORIAL
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="uppercase text-xs font-bold tracking-wide flex items-center gap-1.5" style={{ color: '#047857' }}>
+            <Archive className="w-3.5 h-3.5" /> HISTORIAL
+          </span>
+          <ChevronRight className={`h-4 w-4 transition-transform md:hidden ${openMobileKanbanColumn === '__historial__' ? 'rotate-90' : ''}`} style={{ color: '#047857' }} />
         </span>
         <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/70" style={{ color: '#047857' }}>
           {archivedLeads.length}
         </span>
-      </div>
-      <div className="flex-1 p-2 space-y-2 overflow-y-auto max-h-[calc(100vh-340px)] min-h-[120px]">
+      </button>
+      <div className={`flex-1 p-2 space-y-2 overflow-y-auto max-h-[calc(100vh-340px)] min-h-[120px] ${openMobileKanbanColumn === '__historial__' ? 'block' : 'hidden'} md:block`}>
         {renderLeadsHistorialContent()}
       </div>
     </div>
   );
 
   const renderKanbanBoard = () => (
-    <div className="flex gap-3 overflow-x-auto pb-4 items-stretch md:overflow-x-visible">
+    <div className="flex flex-col items-stretch gap-3 pb-4 md:flex-row md:overflow-x-auto">
       {KANBAN_COLUMNS.map(status => renderKanbanColumn(status))}
       {renderLeadsHistorialColumn()}
     </div>
@@ -1063,7 +1215,7 @@ const Leads = ({ navigate }) => {
           <h1 className="text-3xl font-bold tracking-tight text-slate-900">Leads</h1>
           <p className="text-muted-foreground mt-1">Gestiona tus clientes potenciales y oportunidades de negocio.</p>
         </div>
-        <div className="flex gap-2 w-full md:w-auto">
+        <div className={`flex gap-2 w-full md:w-auto ${mobileKanbanOnly ? 'hidden md:flex' : ''}`}>
           {canViewStats && (
             <Button
               variant={showStats ? "secondary" : "outline"}
@@ -1088,8 +1240,8 @@ const Leads = ({ navigate }) => {
         </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-        <TabsList className="w-full sm:w-auto bg-muted/50 p-1 mb-6">
+      <Tabs value={effectiveActiveTab} onValueChange={handleTabChange} className="w-full">
+        <TabsList className={`w-full sm:w-auto bg-muted/50 p-1 mb-6 ${mobileKanbanOnly ? 'hidden md:flex' : ''}`}>
           <TabsTrigger value="activos" className="flex-1 sm:flex-none">Activos</TabsTrigger>
           <TabsTrigger value="archivo" className="flex-1 sm:flex-none gap-2">
             <Archive className="w-4 h-4" /> Archivo
@@ -1135,7 +1287,7 @@ const Leads = ({ navigate }) => {
             )}
           </AnimatePresence>
 
-          <div className="flex flex-col md:flex-row gap-4 items-center">
+          <div className={`flex flex-col md:flex-row gap-4 items-center ${mobileKanbanOnly ? 'hidden md:flex' : ''}`}>
             {hasActiveFilters && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
@@ -1166,7 +1318,7 @@ const Leads = ({ navigate }) => {
                 <div className="h-8 w-px bg-slate-200 hidden md:block" />
 
                 {/* El filtro de estado solo aplica en vista lista (en Kanban las columnas son los estados) */}
-                {viewMode === 'lista' && (
+                {effectiveViewMode === 'lista' && (
                   <>
                     {/* NUEVO: Filtro de estado MULTI-SELECCIÓN con checkboxes + marcar/desmarcar todos */}
                     <Popover>
@@ -1295,7 +1447,7 @@ const Leads = ({ navigate }) => {
                     onClick={() => handleViewChange('lista')}
                     title="Vista Lista"
                     className={`flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors
-                      ${viewMode === 'lista' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}
+                      ${effectiveViewMode === 'lista' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}
                   >
                     <List className="w-4 h-4" /> Lista
                   </button>
@@ -1304,7 +1456,7 @@ const Leads = ({ navigate }) => {
                     onClick={() => handleViewChange('kanban')}
                     title="Vista Kanban"
                     className={`flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors
-                      ${viewMode === 'kanban' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}
+                      ${effectiveViewMode === 'kanban' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}
                   >
                     <LayoutGrid className="w-4 h-4" /> Kanban
                   </button>
@@ -1316,7 +1468,7 @@ const Leads = ({ navigate }) => {
           {/* ============================================================ */}
           {/* VISTA KANBAN (por defecto) */}
           {/* ============================================================ */}
-          {viewMode === 'kanban' ? (
+          {effectiveViewMode === 'kanban' ? (
             loading ? (
               <Card className="shadow-md border-slate-200">
                 <CardContent className="h-32 flex items-center justify-center text-muted-foreground">
@@ -1329,7 +1481,7 @@ const Leads = ({ navigate }) => {
           ) : (
             /* VISTA LISTA (original) */
             <Card className="shadow-md border-slate-200 overflow-hidden">
-              <div className="rounded-md">
+              <div className="hidden rounded-md md:block">
                 <Table>
                   <TableHeader className="bg-slate-50">
                     <TableRow>
@@ -1361,29 +1513,25 @@ const Leads = ({ navigate }) => {
                       </TableRow>
                     ) : (
                       tableLeads.map((lead) => {
-                        const hasAviso = pendingLeads.has(lead.id);
                         const unread = isUnread(lead);
                         return (
                         <TableRow
                           key={lead.id}
                           className={cn(
                             'transition-colors cursor-pointer group',
-                            hasAviso
-                              ? 'bg-green-100/80 hover:bg-green-100 border-l-4 border-l-green-500'
-                              : unread
-                                ? 'bg-amber-100/80 hover:bg-amber-100 border-l-4 border-l-amber-500'
-                                : 'hover:bg-slate-50'
+                            unread
+                              ? 'bg-emerald-100/80 hover:bg-emerald-100 border-l-4 border-l-emerald-400'
+                              : 'hover:bg-slate-50'
                           )}
                           onClick={() => handleLeadClick(lead.id)}
                         >
                           <TableCell className="align-top py-4">
                             <div className="flex flex-col gap-0.5">
                               <div className="flex items-center gap-2">
-                                <AvisoBolita show={hasAviso} />
-                                {!hasAviso && unread && (
+                                {unread && (
                                   <span className="relative flex h-2.5 w-2.5 shrink-0" title="Lead sin leer">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-600"></span>
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
                                   </span>
                                 )}
                                 {renderLeadName(lead)}
@@ -1442,6 +1590,21 @@ const Leads = ({ navigate }) => {
                     )}
                   </TableBody>
                 </Table>
+              </div>
+              <div className="space-y-2 bg-slate-50/60 p-2 md:hidden">
+                {loading ? (
+                  <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">Cargando...</div>
+                ) : leads.length === 0 && sessionRole?.rol === 'tecnico' ? (
+                  <div className="flex h-32 items-center justify-center px-4 text-center text-sm text-muted-foreground">
+                    No tienes leads asignados activos.
+                  </div>
+                ) : tableLeads.length === 0 ? (
+                  <div className="flex h-32 items-center justify-center px-4 text-center text-sm text-muted-foreground">
+                    No se encontraron leads activos que coincidan con los filtros.
+                  </div>
+                ) : (
+                  tableLeads.map(renderMobileLeadCard)
+                )}
               </div>
             </Card>
           )}

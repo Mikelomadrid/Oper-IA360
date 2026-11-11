@@ -79,7 +79,9 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                 .select('factura_id, importe_base')
                 .eq('obra_id', projectId)
                 .eq('destino_tipo', 'obra');
-            if (distributedAssignmentsError) throw distributedAssignmentsError;
+            if (distributedAssignmentsError) {
+                console.warn('[ProjectMaterialsView] Asignaciones de factura no disponibles:', distributedAssignmentsError.message || distributedAssignmentsError);
+            }
 
             const allocatedBaseByInvoice = new Map();
             (distributedAssignments || []).forEach((assignment) => {
@@ -131,7 +133,9 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                 .from('v_devoluciones_proveedor_resumen_factura')
                 .select('*')
                 .eq('obra_id', projectId);
-            if (returnSummariesError) throw returnSummariesError;
+            if (returnSummariesError) {
+                console.warn('[ProjectMaterialsView] Resumen de devoluciones no disponible:', returnSummariesError.message || returnSummariesError);
+            }
             const returnSummaryByInvoice = new Map((returnSummaries || []).map((summary) => [summary.factura_id, summary]));
 
             const { data: pendingReturns, error: pendingReturnsError } = await supabase
@@ -140,7 +144,9 @@ const ProjectMaterialsView = ({ projectId, canManage = false }) => {
                 .eq('obra_id', projectId)
                 .eq('estado', 'pendiente_abono')
                 .order('created_at', { ascending: false });
-            if (pendingReturnsError) throw pendingReturnsError;
+            if (pendingReturnsError) {
+                console.warn('[ProjectMaterialsView] Devoluciones pendientes no disponibles:', pendingReturnsError.message || pendingReturnsError);
+            }
             const pendingReturnByInvoice = new Map();
             (pendingReturns || []).forEach((item) => {
                 if (!pendingReturnByInvoice.has(item.factura_origen_id)) {

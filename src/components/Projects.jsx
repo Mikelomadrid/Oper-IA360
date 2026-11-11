@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import {
     Plus, Search, Loader2, Archive, ChevronsUpDown, Calendar, Construction,
     MoreVertical, Edit, Trash2, LayoutGrid, List as ListIcon, Columns, GripVertical,
-    CheckCircle2, ChevronLeft, ChevronRight
+    CheckCircle2, ChevronDown, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import ProjectForm from '@/components/ProjectForm';
@@ -67,6 +67,16 @@ const formatDate = dateString => {
 // ============================================================
 const KANBAN_COLUMNS = ['en_espera', 'activo', 'terminado', 'facturado', 'cobrado'];
 const KANBAN_DROP_COLUMNS = KANBAN_COLUMNS.filter(c => c !== 'cobrado');
+
+const useIsMobile = () => {
+    const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
+    useEffect(() => {
+        const handleResize = () => setIsMobile(window.innerWidth < 768);
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
+    return isMobile;
+};
 
 const KANBAN_STYLES = {
     activo:     { label: 'ACTIVO',       bg: '#dcfce7', text: '#15803d', br: '#86efac' },
@@ -249,6 +259,7 @@ const useDebounce = (value, delay) => {
 
 const Projects = ({ navigate }) => {
     const { sessionRole, loadingAuth } = useAuth();
+    const isMobile = useIsMobile();
     const [projects, setProjects] = useState([]);
     const [facturadoProjects, setFacturadoProjects] = useState({});
     const [loading, setLoading] = useState(true);
@@ -269,6 +280,8 @@ const Projects = ({ navigate }) => {
     const [draggedProjectId, setDraggedProjectId] = useState(null);
     const [dragOverColumn, setDragOverColumn] = useState(null);
     const justDraggedRef = useRef(false);
+    const [openMobileKanbanColumn, setOpenMobileKanbanColumn] = useState(null);
+    const effectiveViewMode = isMobile ? 'kanban' : viewMode;
 
     // Recordar qué mes del historial estaba abierto al volver (vistas grid/list)
     const [openMonth, setOpenMonth] = useState(() => {
@@ -326,9 +339,29 @@ const Projects = ({ navigate }) => {
                 );
             }
 
-            const { data: projectsData, error: projectsError } = await query;
+            let { data: projectsData, error: projectsError } = await query;
 
-            if (projectsError) throw projectsError;
+            // Compatibilidad con instalaciones antiguas: algunas bases no tienen
+            // actualizada la vista de KPIs o la vista devuelve 0 filas por RLS.
+            // En ese caso recuperamos las obras directamente desde proyectos para
+            // que el tablero no aparezca vacío después de publicar una compilación.
+            if (projectsError || !projectsData?.length) {
+                console.warn('[Projects] Fallback a tabla proyectos:', projectsError || 'vista sin filas');
+                let fallbackQuery = supabase
+                    .from('proyectos')
+                    .select('*')
+                    .order('fecha_creacion', { ascending: true });
+
+                const { data: fallbackData, error: fallbackError } = await fallbackQuery;
+                if (fallbackError) throw (projectsError || fallbackError);
+
+                projectsData = (fallbackData || []).map(project => ({
+                    ...project,
+                    proyecto_id: project.proyecto_id || project.id,
+                    margen: Number(project.presupuesto_aceptado || 0) - Number(project.costo_total || 0),
+                }));
+                projectsError = null;
+            }
 
             if (projectsData) {
                 // 1.5 Targeted fetch for labor to avoid RLS/limits issues
@@ -650,6 +683,28 @@ const Projects = ({ navigate }) => {
         navigate(`/gestion/obras/${projectId}`);
     };
 
+    const renderMobileKanbanProjectRow = (project) => (
+        <button
+            key={project.proyecto_id}
+            type="button"
+            onClick={() => handleKanbanCardClick(project.proyecto_id)}
+            className="flex w-full items-center gap-2 rounded-lg border border-border/60 bg-card px-3 py-2.5 text-left shadow-sm transition-colors hover:border-primary/30"
+        >
+            <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold text-foreground">{project.nombre_proyecto}</span>
+                <span className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-muted-foreground">
+                    <Calendar className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{formatDate(project.fecha_creacion)}</span>
+                </span>
+            </span>
+            <span className="shrink-0 text-right">
+                <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">Presupuesto</span>
+                <span className="block text-xs font-semibold text-foreground">{formatCurrency(project.presupuesto_aceptado || 0)}</span>
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </button>
+    );
+
     const renderKanbanCard = (project) => {
         const isDragging = String(draggedProjectId) === String(project.proyecto_id);
         const margin = project.margen || 0;
@@ -829,6 +884,7 @@ const Projects = ({ navigate }) => {
         const isOver = dragOverColumn === status;
         const isCobradoColumn = status === 'cobrado';
         const totalHistorial = Object.values(facturadoProjects).reduce((sum, arr) => sum + arr.length, 0);
+        const isOpenOnMobile = openMobileKanbanColumn === status;
 
         return (
             <div
@@ -836,17 +892,22 @@ const Projects = ({ navigate }) => {
                 onDragOver={isCobradoColumn ? undefined : (e) => handleColumnDragOver(e, status)}
                 onDragLeave={isCobradoColumn ? undefined : (e) => handleColumnDragLeave(e, status)}
                 onDrop={isCobradoColumn ? undefined : (e) => handleColumnDrop(e, status)}
-                className={`flex flex-col rounded-xl border transition-colors min-w-[260px] w-[260px] md:min-w-0 md:w-auto md:flex-1
+                className={`flex w-full min-w-0 flex-col rounded-xl border transition-colors md:min-w-[260px] md:w-[260px] md:flex-1
                     ${isOver ? 'border-primary bg-primary/5 ring-2 ring-primary/30' : 'border-border/60 bg-muted/40'}`}
             >
                 {/* Cabecera de columna */}
-                <div
-                    className="px-3 py-2.5 rounded-t-xl border-b flex items-center justify-between gap-2"
+                <button
+                    type="button"
+                    onClick={() => setOpenMobileKanbanColumn(isOpenOnMobile ? null : status)}
+                    className="w-full px-3 py-2.5 rounded-t-xl border-b flex items-center justify-between gap-2 text-left md:cursor-default"
                     style={{ backgroundColor: style.bg, borderColor: style.br }}
                 >
-                    <span className="uppercase text-xs font-bold tracking-wide flex items-center gap-1.5" style={{ color: style.text }}>
-                        {isCobradoColumn && <Archive className="w-3.5 h-3.5" />}
-                        {style.label}
+                    <span className="flex min-w-0 items-center gap-2">
+                        <span className="uppercase text-xs font-bold tracking-wide flex items-center gap-1.5" style={{ color: style.text }}>
+                            {isCobradoColumn && <Archive className="w-3.5 h-3.5" />}
+                            {style.label}
+                        </span>
+                        <ChevronDown className={`h-4 w-4 transition-transform md:hidden ${isOpenOnMobile ? 'rotate-180' : ''}`} style={{ color: style.text }} />
                     </span>
                     <span
                         className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/70"
@@ -854,10 +915,10 @@ const Projects = ({ navigate }) => {
                     >
                         {isCobradoColumn ? totalHistorial : columnProjects.length}
                     </span>
-                </div>
+                </button>
 
                 {/* Contenido */}
-                <div className="flex-1 p-2 space-y-2 overflow-y-auto max-h-[calc(100vh-320px)] min-h-[140px]">
+                <div className={`flex-1 p-2 space-y-2 overflow-y-auto max-h-[calc(100vh-320px)] min-h-[140px] ${isOpenOnMobile ? 'block' : 'hidden'} md:block`}>
                     {isCobradoColumn ? (
                         renderCobradoColumnContent()
                     ) : columnProjects.length === 0 ? (
@@ -866,7 +927,7 @@ const Projects = ({ navigate }) => {
                             {isOver ? 'Suelta aquí' : 'Sin obras'}
                         </div>
                     ) : (
-                        columnProjects.map(p => renderKanbanCard(p))
+                        columnProjects.map(p => isMobile ? renderMobileKanbanProjectRow(p) : renderKanbanCard(p))
                     )}
                 </div>
             </div>
@@ -874,7 +935,7 @@ const Projects = ({ navigate }) => {
     };
 
     const renderKanbanBoard = () => (
-        <div className="flex gap-3 overflow-x-auto pb-4 items-stretch md:overflow-x-visible">
+        <div className="flex flex-col items-stretch gap-3 pb-4 md:flex-row md:overflow-x-auto">
             {KANBAN_COLUMNS.map(status => renderKanbanColumn(status))}
         </div>
     );
@@ -931,8 +992,8 @@ const Projects = ({ navigate }) => {
                         className="pl-9 h-10 text-sm bg-card"
                     />
                 </div>
-                <div className="flex items-center gap-2 self-end md:self-auto">
-                    <ToggleGroup type="single" value={viewMode} onValueChange={(val) => { if (val) setViewMode(val) }} className="justify-end">
+                <div className="hidden items-center gap-2 self-end md:flex md:self-auto">
+                    <ToggleGroup type="single" value={effectiveViewMode} onValueChange={(val) => { if (val) setViewMode(val) }} className="justify-end">
                         <ToggleGroupItem value="grid" aria-label="Vista de cuadrícula">
                             <LayoutGrid className="h-4 w-4" />
                         </ToggleGroupItem>
@@ -955,15 +1016,15 @@ const Projects = ({ navigate }) => {
                     <AnimatePresence mode="wait">
                         {projects.length > 0 ? (
                             <motion.div
-                                key={viewMode}
+                                key={effectiveViewMode}
                                 initial={{ opacity: 0, y: 5 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 exit={{ opacity: 0, y: -5 }}
                                 transition={{ duration: 0.2 }}
                             >
-                                {viewMode === 'kanban' ? (
+                                {effectiveViewMode === 'kanban' ? (
                                     renderKanbanBoard()
-                                ) : viewMode === 'grid' ? (
+                                ) : effectiveViewMode === 'grid' ? (
                                     <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-6">
                                         {projects.map((project) => (
                                             <ProjectCard
@@ -1004,7 +1065,7 @@ const Projects = ({ navigate }) => {
                     {/* El Historial de Cobradas en vista Kanban vive DENTRO de la columna
                         COBRADO (renderCobradoColumnContent). En grid/list se muestra aquí
                         debajo, como antes, para no perder esa vista agrupada por mes. */}
-                    {viewMode !== 'kanban' && Object.keys(facturadoProjects).length > 0 && (
+                    {effectiveViewMode !== 'kanban' && Object.keys(facturadoProjects).length > 0 && (
                         <div className="mt-8 md:mt-12">
                             <h2 className="text-lg md:text-xl font-bold text-foreground mb-4 flex items-center gap-2 opacity-80">
                                 <Archive className="w-5 h-5" />
@@ -1041,7 +1102,7 @@ const Projects = ({ navigate }) => {
                                         </CollapsibleTrigger>
                                         <CollapsibleContent className="border-t border-border/50">
                                             <div className="p-2 md:p-4 bg-muted/10">
-                                                {viewMode === 'list' ? (
+                                                {effectiveViewMode === 'list' ? (
                                                     <ProjectList
                                                         projects={monthProjects}
                                                         onClick={(project) => {

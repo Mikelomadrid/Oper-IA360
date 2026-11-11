@@ -96,12 +96,25 @@ const getEntityRoute = (type, id) => {
   if (!id) return null;
   const t = type?.toLowerCase()?.trim();
   
-  if (t === 'lead') return `/crm/leads/${id}`;
+  if (t === 'lead' || t === 'lead_asignado' || t?.startsWith('lead_')) return `/crm/leads/${id}`;
   if (['obra', 'proyecto'].includes(t)) return `/gestion/obras/${id}`;
   if (t === 'parte' || t === 'status_change') return `/gestion/partes/detail/${id}`;
   if (t === 'aviso') return `/gestion/avisos/${id}`;
   if (t === 'tarea') return `/gestion/tareas`; 
+  if (t === 'gasto' || t === 'nuevo_gasto') return `/gestion/gastos`;
+  if (['tool_assignment', 'asignacion_herramienta'].includes(t)) return `/inventario/mis-herramientas`;
+  if (['tool_return', 'devolucion'].includes(t)) return `/inventario/solicitudes-devoluciones?id=${id}`;
   return null;
+};
+
+const isNavigableEntityType = (type) => {
+  const t = type?.toLowerCase()?.trim();
+  return Boolean(t) && (
+    t === 'lead' || t === 'lead_asignado' || t.startsWith('lead_') ||
+    ['obra', 'proyecto', 'parte', 'status_change', 'aviso', 'tarea', 'gasto',
+      'nuevo_gasto', 'tool_assignment', 'asignacion_herramienta', 'tool_return',
+      'devolucion'].includes(t)
+  );
 };
 
 // --- Component: Notification Row ---
@@ -178,14 +191,17 @@ const NotificationRow = ({
             )}>
               {titulo || 'Notificación'}
             </span>
-            <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
+            <span className={cn(
+              "text-xs whitespace-nowrap ml-2",
+              isUnread ? "font-bold text-foreground" : "text-muted-foreground"
+            )}>
               {dateStr}
             </span>
         </div>
         
         <p className={cn(
           "text-sm line-clamp-2",
-          isUnread ? "text-foreground" : "text-muted-foreground"
+          isUnread ? "font-semibold text-foreground" : "text-muted-foreground"
         )}>
           {mensaje}
         </p>
@@ -230,7 +246,7 @@ export const NotificationCenter = () => {
   const navigate = useNavigate();
   
   const [notifications, setNotifications] = useState([]);
-  const [filter, setFilter] = useState('unread'); // all (active), unread, archived
+  const [filter, setFilter] = useState('all'); // all (active), unread, archived
   const [loading, setLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [processingId, setProcessingId] = useState(null);
@@ -333,8 +349,11 @@ export const NotificationCenter = () => {
 
         let destination = notification.link;
         if (!destination && (notification.entidad_id || notification.referencia_id)) {
+            const notificationType = isNavigableEntityType(notification.tipo_entidad)
+              ? notification.tipo_entidad
+              : notification.tipo_objeto;
             destination = getEntityRoute(
-                notification.tipo_entidad || notification.tipo_objeto, 
+                notificationType,
                 notification.entidad_id || notification.referencia_id
             );
         }

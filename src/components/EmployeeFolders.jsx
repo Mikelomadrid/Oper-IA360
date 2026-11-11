@@ -96,6 +96,53 @@ const FolderTreeItem = ({ folder, level = 0, currentFolderId, onSelect, onToggle
     );
 };
 
+const MobileFileRow = ({ file, onPreview, onDownload }) => (
+    <div className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5">
+        <div className="shrink-0">{getFileIcon(file.mime_type)}</div>
+        <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium">{file.nombre}</p>
+            <p className="text-[10px] text-muted-foreground">
+                {formatBytes(file.size)}{file.created_at ? ` · ${new Date(file.created_at).toLocaleDateString()}` : ''}
+            </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onPreview(file)} title="Ver">
+                <FileText className="h-4 w-4 text-muted-foreground" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onDownload(file)} title="Descargar">
+                <Download className="h-4 w-4 text-muted-foreground" />
+            </Button>
+        </div>
+    </div>
+);
+
+const MobileFolderNode = ({ folder, allFolders, allFiles, onPreview, onDownload }) => {
+    const [open, setOpen] = useState(false);
+    const children = allFolders.filter((item) => item.carpeta_padre_id === folder.id).sort((a, b) => a.nombre.localeCompare(b.nombre));
+    const files = allFiles.filter((file) => file.carpeta_id === folder.id);
+    const hasContent = children.length > 0 || files.length > 0;
+
+    return (
+        <div className="overflow-hidden rounded-xl border bg-card">
+            <button type="button" onClick={() => setOpen((value) => !value)} className="flex w-full items-center gap-3 px-3 py-3 text-left">
+                <Folder className="h-5 w-5 shrink-0 fill-primary/10 text-primary" />
+                <span className="min-w-0 flex-1 truncate text-sm font-semibold">{folder.nombre}</span>
+                <span className="text-xs text-muted-foreground">{children.length + files.length}</span>
+                <ChevronDown className={cn('h-4 w-4 shrink-0 transition-transform', open && 'rotate-180')} />
+            </button>
+            {open && (
+                <div className="space-y-2 border-t bg-muted/20 p-2">
+                    {children.map((child) => (
+                        <MobileFolderNode key={child.id} folder={child} allFolders={allFolders} allFiles={allFiles} onPreview={onPreview} onDownload={onDownload} />
+                    ))}
+                    {files.map((file) => <MobileFileRow key={file.id} file={file} onPreview={onPreview} onDownload={onDownload} />)}
+                    {!hasContent && <p className="px-2 py-3 text-center text-xs text-muted-foreground">Carpeta vacía</p>}
+                </div>
+            )}
+        </div>
+    );
+};
+
 // ============================================================
 // COMPONENTE PRINCIPAL
 // ============================================================
@@ -116,6 +163,7 @@ export default function EmployeeFolders({ empleadoId }) {
 
     // Data State
     const [allFolders, setAllFolders] = useState([]);
+    const [allFiles, setAllFiles] = useState([]);
     const [currentFiles, setCurrentFiles] = useState([]);
     const [loading, setLoading] = useState(true);
 
@@ -148,22 +196,18 @@ export default function EmployeeFolders({ empleadoId }) {
             if (foldersError) throw foldersError;
             setAllFolders(foldersData || []);
 
-            // 2) Archivos de la carpeta actual (o de la raíz si currentFolderId es null)
-            let fileQuery = supabase
+            // 2) Todos los archivos: escritorio usa la carpeta actual y móvil muestra la jerarquía completa.
+            const fileQuery = supabase
                 .from('empleado_archivos')
                 .select('*')
                 .eq('empleado_id', empleadoId)
                 .order('created_at', { ascending: false });
 
-            if (currentFolderId) {
-                fileQuery = fileQuery.eq('carpeta_id', currentFolderId);
-            } else {
-                fileQuery = fileQuery.is('carpeta_id', null);
-            }
-
             const { data: fileData, error: fileError } = await fileQuery;
             if (fileError) throw fileError;
-            setCurrentFiles(fileData || []);
+            const files = fileData || [];
+            setAllFiles(files);
+            setCurrentFiles(files.filter((file) => currentFolderId ? file.carpeta_id === currentFolderId : !file.carpeta_id));
         } catch (error) {
             console.error('Error fetching content:', error);
             toast({
@@ -531,8 +575,21 @@ export default function EmployeeFolders({ empleadoId }) {
                     )}
                 </div>
 
-                {/* Grid Content */}
-                <ScrollArea className="flex-1 bg-slate-50/50 dark:bg-slate-900/20">
+                {/* Vista móvil: jerarquía de carpetas y archivos en acordeón */}
+                <div className="space-y-2 bg-slate-50/50 p-3 dark:bg-slate-900/20 md:hidden">
+                    {allFolders.filter((folder) => folder.carpeta_padre_id === null).sort((a, b) => a.nombre.localeCompare(b.nombre)).map((folder) => (
+                        <MobileFolderNode key={folder.id} folder={folder} allFolders={allFolders} allFiles={allFiles} onPreview={handlePreview} onDownload={handleDownload} />
+                    ))}
+                    {allFiles.filter((file) => !file.carpeta_id).map((file) => (
+                        <MobileFileRow key={file.id} file={file} onPreview={handlePreview} onDownload={handleDownload} />
+                    ))}
+                    {!allFolders.length && !allFiles.length && !loading && (
+                        <div className="py-12 text-center text-sm text-muted-foreground">No hay documentos todavía.</div>
+                    )}
+                </div>
+
+                {/* Vista escritorio */}
+                <ScrollArea className="hidden flex-1 bg-slate-50/50 dark:bg-slate-900/20 md:block">
                     <div className="p-4 space-y-6">
                         {loading ? (
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
