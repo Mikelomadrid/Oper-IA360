@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import {
     Plus, Search, Loader2, Archive, ChevronsUpDown, Calendar, Construction,
     MoreVertical, Edit, Trash2, LayoutGrid, List as ListIcon, Columns, GripVertical,
-    CheckCircle2, ChevronDown, ChevronLeft, ChevronRight
+    CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, BarChart2
 } from 'lucide-react';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import ProjectForm from '@/components/ProjectForm';
@@ -18,6 +18,7 @@ import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
 import { fetchProjectMaterialNetTotals } from '@/lib/projectMaterialCosts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -297,11 +298,49 @@ const Projects = ({ navigate }) => {
     const [deleteId, setDeleteId] = useState(null);
     const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [selectedProjectMonth, setSelectedProjectMonth] = useState(null);
 
     const debouncedSearchTerm = useDebounce(searchTerm, 350);
     // Buscando activamente: se usa para auto-expandir TODOS los meses del
     // Historial de Cobradas (antes había que abrir mes a mes a ciegas).
     const isSearching = debouncedSearchTerm.trim().length > 0;
+
+    const monthlyProjectData = useMemo(() => {
+        const now = new Date();
+        const months = Array.from({ length: 12 }, (_, index) => {
+            const date = new Date(now.getFullYear(), now.getMonth() - (11 - index), 1);
+            const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            const monthLabel = date.toLocaleDateString('es-ES', { month: 'short' }).replace('.', '');
+
+            return {
+                key,
+                month: monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1),
+                tooltipLabel: date.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }),
+                value: 0,
+            };
+        });
+
+        const projectsByMonth = new Map(months.map(month => [month.key, []]));
+        const allProjects = [...projects, ...Object.values(facturadoProjects).flat()];
+
+        allProjects.forEach(project => {
+            const date = new Date(project.fecha_creacion);
+            if (Number.isNaN(date.getTime())) return;
+
+            const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            if (projectsByMonth.has(key)) projectsByMonth.get(key).push(project);
+        });
+
+        return months.map(month => {
+            const monthProjects = projectsByMonth.get(month.key) || [];
+            return { ...month, value: monthProjects.length, projects: monthProjects };
+        });
+    }, [projects, facturadoProjects]);
+
+    const handleMonthlyProjectClick = (entry) => {
+        const month = entry?.payload || entry;
+        if (month?.key) setSelectedProjectMonth(month);
+    };
 
     const groupFacturadoProjects = (projects) => {
         return projects.reduce((acc, project) => {
@@ -992,6 +1031,38 @@ const Projects = ({ navigate }) => {
                         className="pl-9 h-10 text-sm bg-card"
                     />
                 </div>
+                <div className="hidden md:flex flex-1 min-w-0 h-32 items-center gap-5 rounded-xl border border-slate-200 bg-card px-5 py-3 shadow-sm">
+                    <div className="flex items-center gap-2 shrink-0">
+                        <div className="p-3 rounded-lg bg-violet-500/10 text-violet-600">
+                            <BarChart2 className="h-5 w-5" />
+                        </div>
+                        <div>
+                            <p className="text-xs font-bold uppercase tracking-wider text-violet-600">Obras creadas</p>
+                            <p className="text-xs text-muted-foreground">Últimos 12 meses</p>
+                        </div>
+                    </div>
+                    <div className="h-28 flex-1 min-w-0">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={monthlyProjectData} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
+                                <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.5} />
+                                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
+                                <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} width={30} />
+                                <Tooltip
+                                    formatter={(value) => [value, 'Obras']}
+                                    labelFormatter={(_, payload) => payload?.[0]?.payload?.tooltipLabel || ''}
+                                />
+                                <Bar
+                                    dataKey="value"
+                                    fill="#8b5cf6"
+                                    radius={[4, 4, 0, 0]}
+                                    barSize={20}
+                                    cursor="pointer"
+                                    onClick={handleMonthlyProjectClick}
+                                />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
                 <div className="hidden items-center gap-2 self-end md:flex md:self-auto">
                     <ToggleGroup type="single" value={effectiveViewMode} onValueChange={(val) => { if (val) setViewMode(val) }} className="justify-end">
                         <ToggleGroupItem value="grid" aria-label="Vista de cuadrícula">
@@ -1154,6 +1225,38 @@ const Projects = ({ navigate }) => {
                             onSave={handleFormSuccess}
                             onCancel={() => setIsFormOpen(false)}
                         />
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog
+                open={Boolean(selectedProjectMonth)}
+                onOpenChange={(open) => { if (!open) setSelectedProjectMonth(null); }}
+            >
+                <DialogContent className="sm:max-w-[680px]">
+                    <DialogHeader>
+                        <DialogTitle>
+                            Obras creadas en {selectedProjectMonth?.tooltipLabel}
+                        </DialogTitle>
+                        <DialogDescription>
+                            {selectedProjectMonth?.projects?.length || 0} obras registradas en ese mes.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="max-h-[60vh] overflow-y-auto space-y-2 pr-1">
+                        {(selectedProjectMonth?.projects || []).map((project) => (
+                            <div key={project.proyecto_id || project.id} className="grid grid-cols-[minmax(0,1fr)_110px_150px] items-center gap-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-3 text-sm">
+                                <span className="font-medium truncate" title={project.nombre_proyecto}>
+                                    {project.nombre_proyecto || 'Obra sin nombre'}
+                                </span>
+                                <span className="text-xs text-muted-foreground">
+                                    {formatDate(project.fecha_creacion)}
+                                </span>
+                                <span className="text-right font-medium">
+                                    {formatCurrency(Number(project.presupuesto_aceptado || 0))}
+                                    <span className="block text-[10px] font-normal text-muted-foreground">sin IVA</span>
+                                </span>
+                            </div>
+                        ))}
                     </div>
                 </DialogContent>
             </Dialog>

@@ -16,8 +16,7 @@ const COLORS_STATUS = {
 
 const COLORS_CONVERSION = {
   'Ganado': STATUS_COLORS.aceptado,      // emerald-500
-  'Perdido': STATUS_COLORS.rechazado,    // red-500
-  'En Progreso': STATUS_COLORS.nuevo     // blue-500
+  'Perdido': STATUS_COLORS.rechazado     // red-500
 };
 
 const COLORS_CATEGORY = [
@@ -163,15 +162,47 @@ const LeadsStatistics = ({
       return Math.max(200, calculated);
   }, [categoryChartData.length]);
 
+  const monthlyLeadData = useMemo(() => {
+    const now = new Date();
+    const months = Array.from({ length: 12 }, (_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - (11 - index), 1);
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      const monthLabel = date.toLocaleDateString('es-ES', { month: 'short' }).replace('.', '');
+
+      return {
+        key,
+        month: monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1),
+        tooltipLabel: date.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }),
+        value: 0
+      };
+    });
+
+    const counts = new Map(months.map(month => [month.key, 0]));
+    leads.forEach(lead => {
+      const createdAt = lead.created_at || lead.fecha;
+      if (!createdAt) return;
+
+      const date = new Date(createdAt);
+      if (Number.isNaN(date.getTime())) return;
+
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      if (counts.has(key)) counts.set(key, counts.get(key) + 1);
+    });
+
+    return months.map(month => ({ ...month, value: counts.get(month.key) || 0 }));
+  }, [leads]);
+
   const kpiData = useMemo(() => {
     const kpiSet = filteredLeads; 
     const total = kpiSet.length;
     const convertedCount = kpiSet.filter(l => ['aceptado'].includes(l.estado)).length;
-    const conversionRate = total > 0 ? ((convertedCount / total) * 100).toFixed(1) : 0;
+    const lostCount = kpiSet.filter(l => ['rechazado', 'cancelado', 'anulado'].includes(l.estado)).length;
+    const closedTotal = convertedCount + lostCount;
+    const conversionRate = closedTotal > 0 ? ((convertedCount / closedTotal) * 100).toFixed(1) : 0;
 
     const activeLabels = [];
     if (filters.status && filters.status !== 'all') activeLabels.push(`Estado: ${normalizeText(filters.status)}`);
-    if (currentCategoryKey) activeLabels.push(`Categoría: ${currentCategoryLabel}`); 
+    if (currentCategoryKey) activeLabels.push(`Procedencia: ${currentCategoryLabel}`);
     if (filters.conversion) activeLabels.push(`Fase: ${filters.conversion}`);
     if (filters.search) activeLabels.push(`Busq: "${filters.search}"`);
 
@@ -221,7 +252,6 @@ const LeadsStatistics = ({
     // Contadores para el funnel
     let converted = 0;
     let lost = 0;
-    let inProgress = 0;
 
     activeDataset.forEach(l => {
       const s = l.estado;
@@ -229,35 +259,15 @@ const LeadsStatistics = ({
 
       if (['aceptado'].includes(s)) converted++;
       else if (['rechazado', 'cancelado', 'anulado'].includes(s)) lost++;
-      else inProgress++;
     });
 
-    // --- LÓGICA MODIFICADA PARA EL FUNNEL ---
-    // Si hay una categoría seleccionada, mostrar solo Ganado vs Perdido (leads cerrados)
-    // para reflejar el % de éxito real sin incluir los que están en progreso
-    let conversionData;
-    let contextConversionRate;
-
-    if (currentCategoryKey) {
-      // Vista filtrada por categoría: solo leads cerrados (Ganado + Perdido)
-      const closedTotal = converted + lost;
-      contextConversionRate = closedTotal > 0 ? ((converted / closedTotal) * 100).toFixed(1) : 0;
-      
-      conversionData = [
-        { name: 'Ganado', value: converted, color: COLORS_CONVERSION['Ganado'], percent: closedTotal > 0 ? converted / closedTotal : 0 },
-        { name: 'Perdido', value: lost, color: COLORS_CONVERSION['Perdido'], percent: closedTotal > 0 ? lost / closedTotal : 0 }
-      ].filter(d => d.value > 0);
-    } else {
-      // Vista general: incluir todos (Ganado + En Progreso + Perdido)
-      const funnelTotal = converted + inProgress + lost;
-      contextConversionRate = funnelTotal > 0 ? ((converted / funnelTotal) * 100).toFixed(1) : 0;
-      
-      conversionData = [
-        { name: 'Ganado', value: converted, color: COLORS_CONVERSION['Ganado'], percent: funnelTotal > 0 ? converted / funnelTotal : 0 },
-        { name: 'En Progreso', value: inProgress, color: COLORS_CONVERSION['En Progreso'], percent: funnelTotal > 0 ? inProgress / funnelTotal : 0 },
-        { name: 'Perdido', value: lost, color: COLORS_CONVERSION['Perdido'], percent: funnelTotal > 0 ? lost / funnelTotal : 0 }
-      ].filter(d => d.value > 0);
-    }
+    // El funnel solo compara leads cerrados: Ganado frente a Perdido.
+    const closedTotal = converted + lost;
+    const contextConversionRate = closedTotal > 0 ? ((converted / closedTotal) * 100).toFixed(1) : 0;
+    const conversionData = [
+      { name: 'Ganado', value: converted, color: COLORS_CONVERSION['Ganado'], percent: closedTotal > 0 ? converted / closedTotal : 0 },
+      { name: 'Perdido', value: lost, color: COLORS_CONVERSION['Perdido'], percent: closedTotal > 0 ? lost / closedTotal : 0 }
+    ].filter(d => d.value > 0);
 
     return {
       statusData,
@@ -329,7 +339,7 @@ const LeadsStatistics = ({
               <div className="absolute right-0 top-0 w-24 h-24 bg-emerald-500/5 rounded-full -mr-6 -mt-6 blur-2xl"></div>
               <div className="flex flex-col justify-between h-full z-10">
                 <div>
-                  <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1">Conversión</p>
+                  <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-1">Conversión cerrados</p>
                   <p className="text-3xl font-black text-slate-800 dark:text-white tabular-nums">{kpiData.conversionRate}%</p>
                 </div>
                 {kpiData.filterLabel && (
@@ -344,6 +354,36 @@ const LeadsStatistics = ({
               </div>
               <div className="p-3 bg-emerald-500/10 rounded-xl text-emerald-600 dark:text-emerald-400 absolute top-5 right-5">
                 <TrendingUp className="h-6 w-6" />
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        <motion.div whileHover={{ y: -4 }} className="h-full md:col-span-2">
+          <Card className="bg-gradient-to-br from-violet-50 to-white dark:from-violet-950/30 dark:to-slate-900 border-violet-100 dark:border-violet-900/50 shadow-sm overflow-hidden h-full">
+            <CardContent className="p-4 h-full">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="p-2 bg-violet-500/10 rounded-xl text-violet-600 dark:text-violet-400">
+                  <BarChart2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-violet-600 dark:text-violet-400 uppercase tracking-widest">Leads generados</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Últimos 12 meses</p>
+                </div>
+              </div>
+              <div className="h-[92px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={monthlyLeadData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                    <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.5} />
+                    <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} />
+                    <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} width={28} />
+                    <Tooltip
+                      formatter={(value) => [value, 'Leads']}
+                      labelFormatter={(_, payload) => payload?.[0]?.payload?.tooltipLabel || ''}
+                    />
+                    <Bar dataKey="value" fill="#8b5cf6" radius={[4, 4, 0, 0]} barSize={18} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </CardContent>
           </Card>
@@ -387,11 +427,23 @@ const LeadsStatistics = ({
 
         <div className="md:col-span-2 lg:col-span-1 w-full" style={{ height: chartHeight }}>
           <Card className="h-full shadow-sm hover:shadow-md transition-all duration-300 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col">
-            <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
-               <div className="p-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-blue-600 dark:text-blue-400">
-                 <BarChart2 className="w-5 h-5" />
+            <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+               <div className="flex items-center gap-2">
+                 <div className="p-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-blue-600 dark:text-blue-400">
+                   <BarChart2 className="w-5 h-5" />
+                 </div>
+                 <h3 className="font-semibold text-slate-700 dark:text-slate-200">Procedencia de Leads</h3>
                </div>
-               <h3 className="font-semibold text-slate-700 dark:text-slate-200">Categoría de Leads</h3>
+               {currentCategoryKey && onCategoryClick && (
+                 <Button
+                   variant="ghost"
+                   size="sm"
+                   className="h-8 px-2 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                   onClick={() => onCategoryClick(currentCategoryKey)}
+                 >
+                   Ver todas
+                 </Button>
+               )}
             </div>
             <div className="flex-1 p-4 min-h-0"> 
                <ResponsiveContainer width="100%" height="100%">
