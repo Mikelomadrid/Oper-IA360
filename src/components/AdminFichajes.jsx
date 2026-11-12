@@ -97,7 +97,8 @@ const AdminFichajes = () => {
     // 'obra' | 'nave'
     proyecto_id: '',
     hora_entrada: '',
-    hora_salida: ''
+    hora_salida: '',
+    pausas: []
   };
   const [formData, setFormData] = useState(initialFormData);
 
@@ -395,9 +396,8 @@ const AdminFichajes = () => {
     });
     setIsModalOpen(true);
   };
-  const openEditModal = record => {
+  const openEditModal = async record => {
     if (isReadOnly) return;
-    setModalMode('edit');
     const formatForInput = dateStr => {
       if (!dateStr) return '';
       if (dateStr.endsWith('Z')) {
@@ -406,16 +406,33 @@ const AdminFichajes = () => {
       }
       return dateStr.slice(0, 16);
     };
-    setFormData({
-      id: record.id,
-      empleado_id: record.empleado_id,
-      tipo_destino: record.proyecto_id ? 'obra' : 'nave',
-      // Logic updated: if project_id exists -> obra
-      proyecto_id: record.proyecto_id || '',
-      hora_entrada: formatForInput(record.hora_entrada),
-      hora_salida: formatForInput(record.hora_salida)
-    });
-    setIsModalOpen(true);
+    try {
+      const { data: pausasData, error: pausasError } = await supabase
+        .from('pausas')
+        .select('id, hora_inicio_pausa, hora_fin_pausa')
+        .eq('fichaje_id', record.id)
+        .order('hora_inicio_pausa', { ascending: true });
+
+      if (pausasError) throw pausasError;
+
+      setModalMode('edit');
+      setFormData({
+        id: record.id,
+        empleado_id: record.empleado_id,
+        tipo_destino: record.proyecto_id ? 'obra' : 'nave',
+        proyecto_id: record.proyecto_id || '',
+        hora_entrada: formatForInput(record.hora_entrada),
+        hora_salida: formatForInput(record.hora_salida),
+        pausas: (pausasData || []).map(pausa => ({
+          id: pausa.id,
+          inicio: formatForInput(pausa.hora_inicio_pausa),
+          fin: formatForInput(pausa.hora_fin_pausa)
+        }))
+      });
+      setIsModalOpen(true);
+    } catch (error) {
+      toast({ variant: 'destructive', title: 'No se pudieron cargar las pausas', description: error.message });
+    }
   };
   const handleRowClick = fichaje => {
     setSelectedFichajeId(fichaje.id);
@@ -447,16 +464,29 @@ const AdminFichajes = () => {
       });
       return;
     }
+    if (formData.pausas.some(pausa => !pausa.inicio || !pausa.fin)) {
+      toast({
+        variant: "destructive",
+        title: "Pausa incompleta",
+        description: "Cada parada debe tener fecha y hora de parada y de reanudación."
+      });
+      return;
+    }
     setActionLoading(true);
     try {
       const entryDateISO = new Date(formData.hora_entrada).toISOString();
       const exitDateISO = formData.hora_salida ? new Date(formData.hora_salida).toISOString() : null;
+      const pauses = formData.pausas.map(pausa => ({
+        start: new Date(pausa.inicio).toISOString(),
+        end: new Date(pausa.fin).toISOString()
+      }));
       const commonParams = {
         p_empleado_id: formData.empleado_id,
         p_proyecto_id: formData.tipo_destino === 'obra' ? formData.proyecto_id : null,
         p_centro_coste_interno_id: formData.tipo_destino === 'nave' ? 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' : null,
         p_hora_entrada: entryDateISO,
-        p_hora_salida: exitDateISO
+        p_hora_salida: exitDateISO,
+        p_pausas: pauses
       };
       if (modalMode === 'create') {
         const {
@@ -475,7 +505,7 @@ const AdminFichajes = () => {
       } else {
         const {
           error
-        } = await supabase.rpc('admin_update_fichaje_full', {
+        } = await supabase.rpc('admin_update_fichaje_full_with_pausas', {
           ...commonParams,
           p_fichaje_id: formData.id
         });
@@ -949,6 +979,75 @@ const AdminFichajes = () => {
                   hora_salida: e.target.value
                 })} />
               </div>
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/60 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label className="text-amber-800 font-semibold">Paradas y reanudaciones</Label>
+                  <p className="text-xs text-amber-700/80 mt-1">Corrige las pausas intermedias de este fichaje.</p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1 border-amber-300 bg-white"
+                  onClick={() => setFormData(prev => ({
+                    ...prev,
+                    pausas: [...prev.pausas, { inicio: '', fin: '' }]
+                  }))}
+                >
+                  <Plus className="w-3.5 h-3.5" /> Añadir parada
+                </Button>
+              </div>
+
+              {formData.pausas.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No hay pausas registradas.</p>
+              ) : (
+                <div className="space-y-3">
+                  {formData.pausas.map((pausa, index) => (
+                    <div key={pausa.id || `pausa-${index}`} className="grid grid-cols-[1fr_1fr_auto] gap-3 items-end rounded-md border border-amber-200 bg-white p-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs text-amber-800">Fecha y hora de parada</Label>
+                        <Input
+                          type="datetime-local"
+                          value={pausa.inicio}
+                          onChange={e => setFormData(prev => ({
+                            ...prev,
+                            pausas: prev.pausas.map((item, itemIndex) => itemIndex === index ? { ...item, inicio: e.target.value } : item)
+                          }))}
+                          className="rounded-lg"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-amber-800">Fecha y hora de reanudación</Label>
+                        <Input
+                          type="datetime-local"
+                          value={pausa.fin}
+                          onChange={e => setFormData(prev => ({
+                            ...prev,
+                            pausas: prev.pausas.map((item, itemIndex) => itemIndex === index ? { ...item, fin: e.target.value } : item)
+                          }))}
+                          className="rounded-lg"
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-10 w-10 text-red-500 hover:bg-red-50 hover:text-red-700"
+                        title="Eliminar parada"
+                        onClick={() => setFormData(prev => ({
+                          ...prev,
+                          pausas: prev.pausas.filter((_, itemIndex) => itemIndex !== index)
+                        }))}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
           </div>
